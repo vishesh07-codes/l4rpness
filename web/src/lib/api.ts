@@ -262,10 +262,22 @@ export const api = {
     }),
   listMessages: (id: number) => req<Message[]>(`/api/campaigns/${id}/messages`),
   listGenerators: (id: number) => req<GeneratorInfo[]>(`/api/campaigns/${id}/generators`),
-  getGeneratorMessages: (generatorId: number, after?: number) =>
-    req<GeneratorMessage[]>(
-      `/api/generators/${generatorId}/messages${after ? `?after=${after}` : ""}`
-    ),
+  getGeneratorMessages: async (
+    generatorId: number,
+    options: { limit?: number; after?: number; before?: number } = {}
+  ): Promise<{ messages: GeneratorMessage[]; hasMore: boolean }> => {
+    const params = new URLSearchParams()
+    if (options.limit) params.set("limit", String(options.limit))
+    if (options.after) params.set("after", String(options.after))
+    if (options.before) params.set("before", String(options.before))
+    const query = params.toString()
+    const res = await fetch(`/api/generators/${generatorId}/messages${query ? `?${query}` : ""}`)
+    if (!res.ok) throw new Error(await errorText(res))
+    return {
+      messages: (await res.json()) as GeneratorMessage[],
+      hasMore: res.headers.get("x-has-more") === "1",
+    }
+  },
   listHypotheses: (id: number) => req<Hypothesis[]>(`/api/campaigns/${id}/hypotheses`),
   listMessagesPage: async (
     id: number,

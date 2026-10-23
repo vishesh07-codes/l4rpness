@@ -368,7 +368,19 @@ def list_generators(campaign_id: int):
 
 
 @router.get("/generators/{generator_id}/messages")
-def generator_messages(generator_id: int, after: int = 0, limit: int = 0):
+def generator_messages(
+    generator_id: int,
+    response: Response,
+    after: int = 0,
+    before: int = 0,
+    limit: int = 0,
+):
+    """Worker transcript, oldest first.
+
+    ``limit`` returns the newest window (still ascending, bounded to 500),
+    ``before`` returns a page above that id, ``after`` everything newer. The
+    ``X-Has-More`` header says whether older rows exist outside the window.
+    """
     limit = max(0, min(limit, 500))
     with db.db() as conn:
         generator_row = conn.execute(
@@ -382,11 +394,26 @@ def generator_messages(generator_id: int, after: int = 0, limit: int = 0):
         if after:
             sql += " AND id > ?"
             params.append(after)
-        sql += " ORDER BY id ASC"
+        if before:
+            sql += " AND id < ?"
+            params.append(before)
         if limit:
-            sql += " LIMIT ?"
-            params.append(limit)
-        rows = conn.execute(sql, params).fetchall()
+            rows = conn.execute(f"{sql} ORDER BY id DESC LIMIT ?", [*params, limit]).fetchall()
+            rows = rows[::-1]
+        else:
+            rows = conn.execute(f"{sql} ORDER BY id", params).fetchall()
+
+        has_more = False
+        if limit and rows:
+            has_more = (
+                conn.execute(
+                    "SELECT 1 FROM generator_messages WHERE generator_id = ? AND id < ? LIMIT 1",
+                    (generator_id, rows[0]["id"]),
+                ).fetchone()
+                is not None
+            )
+
+    response.headers["X-Has-More"] = "1" if has_more else "0"
 
     messages = []
     for row in rows:
@@ -431,11 +458,16 @@ def list_messages(
     """List messages, oldest first.
 
     ``limit`` returns the newest window (the last N, still ascending),
-    ``after`` returns everything newer than that id, and ``before`` returns a
-    page above that id. The ``X-Has-More`` header says whether older rows
-    exist. Without params the whole history is returned, oldest first.
+    ``after`` returns everything newer than that id (capped at 500 when no
+    explicit limit is given), and ``before`` returns a page above that id. The
+    ``X-Has-More`` header says whether older rows exist. Without params the
+    whole history is returned, oldest first.
     """
     limit = max(0, min(limit, 500))
+    if after and not limit:
+        # a live client catching up must never pull an unbounded tail of a
+        # long campaign into one response; the newest window is enough
+        limit = 500
     with db.db() as conn:
         load_campaign(conn, campaign_id)
 

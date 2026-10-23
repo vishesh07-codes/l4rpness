@@ -40,6 +40,10 @@ export interface AgentCodeLineProps {
 
 const LIGHT_THEME = "github-light-high-contrast";
 const DARK_THEME = "github-dark-high-contrast";
+// highlighting a huge blob produces hundreds of thousands of token spans, so
+// past this size the code is rendered as plain text instead
+const HIGHLIGHT_MAX_CHARS = 40_000;
+const TOKEN_CACHE_MAX = 200;
 let agentCodeHighlighter: Promise<Highlighter> | null = null;
 const tokenCache = new Map<string, AgentCodeTokenLines>();
 
@@ -65,8 +69,9 @@ export function useAgentCodeTokens(
   code: string,
   language: AgentCodeLanguage,
 ) {
-  const key = tokenCacheKey(code, language);
-  const cached = tokenCache.get(key);
+  const highlightable = code.length <= HIGHLIGHT_MAX_CHARS;
+  const key = highlightable ? tokenCacheKey(code, language) : "";
+  const cached = highlightable ? tokenCache.get(key) : undefined;
   const [result, setResult] = useState<{
     key: string;
     code: string;
@@ -75,6 +80,7 @@ export function useAgentCodeTokens(
   } | null>(cached ? { key, code, language, lines: cached } : null);
 
   useEffect(() => {
+    if (!highlightable) return;
     const current = tokenCache.get(key);
     if (current) {
       setResult({ key, code, language, lines: current });
@@ -99,15 +105,20 @@ export function useAgentCodeTokens(
             light: token.variants.light?.color,
             dark: token.variants.dark?.color,
           })),
-      );
+        );
+      if (tokenCache.size >= TOKEN_CACHE_MAX && !tokenCache.has(key)) {
+        const oldest = tokenCache.keys().next().value;
+        if (oldest !== undefined) tokenCache.delete(oldest);
+      }
       tokenCache.set(key, lines);
       setResult({ key, code, language, lines });
     });
     return () => {
       cancelled = true;
     };
-  }, [code, key, language]);
+  }, [code, highlightable, key, language]);
 
+  if (!highlightable) return null;
   if (result?.key === key) return result.lines;
   if (result?.language === language && code.startsWith(result.code)) {
     return result.lines;

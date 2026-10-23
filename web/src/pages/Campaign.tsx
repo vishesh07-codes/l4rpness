@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ClipboardEvent } from "react"
+import { memo, useEffect, useMemo, useRef, useState, type ClipboardEvent } from "react"
 import { toast } from "sonner"
 import { useNavigate, useParams } from "react-router-dom"
 import {
@@ -64,8 +64,49 @@ type LiveReply = { parts: Part[]; pendingTool: string | null }
 // a window, not the whole history: the transcript can hold thousands of rows
 // and each one carries markdown and tool cards that are expensive to render
 const PAGE_SIZE = 60
+const CATCH_UP_LIMIT = 300
+const GENERATOR_PAGE = 40
+const HYPOTHESIS_PAGE = 60
 const PREVIEW_TITLE = 56
 const PREVIEW_DESCRIPTION = 88
+
+function sameGenerators(a: GeneratorInfo[], b: GeneratorInfo[]) {
+  return (
+    a.length === b.length &&
+    a.every((item, index) => {
+      const next = b[index]
+      return (
+        item.id === next.id &&
+        item.status === next.status &&
+        item.hypothesis_count === next.hypothesis_count &&
+        item.last_snippet === next.last_snippet &&
+        item.updated_at === next.updated_at
+      )
+    })
+  )
+}
+
+function sameHypotheses(a: Hypothesis[], b: Hypothesis[]) {
+  return (
+    a.length === b.length &&
+    a.every((item, index) => {
+      const next = b[index]
+      return (
+        item.id === next.id &&
+        item.status === next.status &&
+        item.result === next.result &&
+        item.updated_at === next.updated_at
+      )
+    })
+  )
+}
+
+function mergeGeneratorMessages(prev: GeneratorMessage[], incoming: GeneratorMessage[]) {
+  if (incoming.length === 0) return prev
+  const byId = new Map(prev.map((message) => [message.id, message]))
+  for (const message of incoming) byId.set(message.id, message)
+  return [...byId.values()].sort((a, b) => a.id - b.id)
+}
 
 function mergeMessages(prev: Message[], incoming: Message[]): Message[] {
   if (incoming.length === 0) return prev
@@ -143,10 +184,16 @@ export function Campaign() {
   const [generators, setGenerators] = useState<GeneratorInfo[]>([])
   const [selectedGenerator, setSelectedGenerator] = useState<number | null>(null)
   const [generatorMessages, setGeneratorMessages] = useState<GeneratorMessage[]>([])
+  const [generatorHasEarlier, setGeneratorHasEarlier] = useState(false)
+  const [generatorWindowSize, setGeneratorWindowSize] = useState(GENERATOR_PAGE)
   const [hypotheses, setHypotheses] = useState<Hypothesis[]>([])
+  const [hypothesesShown, setHypothesesShown] = useState(HYPOTHESIS_PAGE)
   const initialIds = useRef<Set<number> | null>(null)
   const lastIdRef = useRef(0)
   const selectedGeneratorRef = useRef<number | null>(null)
+  const generatorLoadRef = useRef(0)
+  const lastGeneratorsLoad = useRef(0)
+  const lastHypothesesLoad = useRef(0)
   const tabRef = useRef<"supervisor" | "generators" | "hypotheses">("supervisor")
   const viewportRef = useRef<HTMLElement | null>(null)
   const fileInput = useRef<HTMLInputElement>(null)
@@ -173,6 +220,7 @@ export function Campaign() {
         setGenerators(gens)
         setHypotheses(hypos)
         setSelectedGenerator((prev) => prev ?? (gens[0]?.id ?? null))
+        setHypothesesShown(HYPOTHESIS_PAGE)
         initialIds.current = new Set(page.messages.map((message) => message.id))
       })
       .catch((e: Error) => setError(e.message))
@@ -194,8 +242,19 @@ export function Campaign() {
         // final version once the chain ended
         await api.listMessagesPage(campaignId, {
           after: Math.max(1, lastIdRef.current - 3),
+          limit: CATCH_UP_LIMIT,
         })
       : await api.listMessagesPage(campaignId, { limit: PAGE_SIZE })
+    if (page.messages.length >= CATCH_UP_LIMIT) {
+      // too much was missed to merge piecemeal; the tail is all the window shows
+      const tail = await api.listMessagesPage(campaignId, { limit: PAGE_SIZE })
+      setMessages(tail.messages)
+      setHasEarlier(tail.hasMore)
+      lastIdRef.current = tail.messages.length
+        ? tail.messages[tail.messages.length - 1].id
+        : 0
+      return
+    }
     if (page.messages.length === 0) return
     lastIdRef.current = Math.max(
       lastIdRef.current,
@@ -229,17 +288,27 @@ export function Campaign() {
     }
   }
 
-  async function loadGenerators() {
+  // generator events arrive for every worker step; refetching the lists on
+  // each one is wasteful, so they are throttled and skip no-op state updates
+  async function loadGenerators(force = false) {
+    const now = Date.now()
+    if (!force && now - lastGeneratorsLoad.current < 1500) return
+    lastGeneratorsLoad.current = now
     try {
-      setGenerators(await api.listGenerators(campaignId))
+      const fresh = await api.listGenerators(campaignId)
+      setGenerators((prev) => (sameGenerators(prev, fresh) ? prev : fresh))
     } catch {
       // the next refresh retries
     }
   }
 
-  async function loadHypotheses() {
+  async function loadHypotheses(force = false) {
+    const now = Date.now()
+    if (!force && now - lastHypothesesLoad.current < 1500) return
+    lastHypothesesLoad.current = now
     try {
-      setHypotheses(await api.listHypotheses(campaignId))
+      const fresh = await api.listHypotheses(campaignId)
+      setHypotheses((prev) => (sameHypotheses(prev, fresh) ? prev : fresh))
     } catch {
       // the next refresh retries
     }
@@ -249,23 +318,50 @@ export function Campaign() {
     setSelectedGenerator(generatorId)
     selectedGeneratorRef.current = generatorId
     setGeneratorMessages([])
+    setGeneratorHasEarlier(false)
+    setGeneratorWindowSize(GENERATOR_PAGE)
+    const loadId = ++generatorLoadRef.current
     try {
-      setGeneratorMessages(await api.getGeneratorMessages(generatorId))
+      const page = await api.getGeneratorMessages(generatorId, { limit: GENERATOR_PAGE })
+      if (generatorLoadRef.current !== loadId) return
+      setGeneratorMessages(page.messages)
+      setGeneratorHasEarlier(page.hasMore)
     } catch {
       // leave it empty; the next refresh retries
     }
   }
 
+  function loadEarlierGenerator() {
+    if (generatorMessages.length > generatorWindowSize) {
+      setGeneratorWindowSize((size) => size + GENERATOR_PAGE * 2)
+      return
+    }
+    const generatorId = selectedGeneratorRef.current
+    if (!generatorHasEarlier || generatorId === null || generatorMessages.length === 0) return
+    const loadId = generatorLoadRef.current
+    void api
+      .getGeneratorMessages(generatorId, {
+        before: generatorMessages[0].id,
+        limit: GENERATOR_PAGE,
+      })
+      .then((page) => {
+        if (generatorLoadRef.current !== loadId) return
+        if (page.messages.length > 0) {
+          setGeneratorMessages((prev) => mergeGeneratorMessages(prev, page.messages))
+          setGeneratorWindowSize((size) => size + page.messages.length)
+        }
+        setGeneratorHasEarlier(page.hasMore)
+      })
+      .catch(() => {
+        // retry on the next click
+      })
+  }
+
   useEffect(() => {
     if (tab !== "generators") return
-    void loadGenerators()
+    void loadGenerators(true)
     const selected = selectedGeneratorRef.current
-    if (selected !== null) {
-      void api
-        .getGeneratorMessages(selected)
-        .then(setGeneratorMessages)
-        .catch(() => {})
-    }
+    if (selected !== null) void openGenerator(selected)
   }, [tab, campaignId])
 
   // backstop for missed stream events while the worker tabs are open
@@ -325,9 +421,64 @@ export function Campaign() {
         return { ...base, parts: [...base.parts, { type: kind, text }] }
       })
 
+    // tokens and tool output chunks arrive many times per second; coalescing
+    // them into one state update per frame keeps a long command from
+    // re-rendering the transcript on every chunk
+    let textBuffer: { kind: "thinking" | "content"; text: string } | null = null
+    let outputBuffer: Map<string, string> | null = null
+    let frame = 0
+
+    const flush = () => {
+      frame = 0
+      const text = textBuffer
+      textBuffer = null
+      if (text) append(text.kind, text.text)
+      const outputs = outputBuffer
+      outputBuffer = null
+      if (outputs) {
+        setStream((s) =>
+          s
+            ? {
+                ...s,
+                parts: s.parts.map((part) =>
+                  part.type === "tool" && outputs.has(part.id)
+                    ? { ...part, output: `${part.output ?? ""}${outputs.get(part.id)}` }
+                    : part
+                ),
+              }
+            : s
+        )
+      }
+    }
+
+    const flushNow = () => {
+      if (frame) {
+        cancelAnimationFrame(frame)
+        frame = 0
+      }
+      flush()
+    }
+
+    const queueText = (kind: "thinking" | "content", text: string) => {
+      if (textBuffer && textBuffer.kind !== kind) flushNow()
+      if (textBuffer) textBuffer.text += text
+      else textBuffer = { kind, text }
+      if (!frame) frame = requestAnimationFrame(flush)
+    }
+
+    const queueOutput = (id: string, chunk: string) => {
+      if (!outputBuffer) outputBuffer = new Map()
+      outputBuffer.set(id, (outputBuffer.get(id) ?? "") + chunk)
+      if (!frame) frame = requestAnimationFrame(flush)
+    }
+
     const on = (event: string, handler: (data: any) => void) => {
       source.addEventListener(event, (e) => {
         try {
+          // the batched events must not flush each other, or batching is lost
+          if (event !== "thinking" && event !== "content" && event !== "tool_output") {
+            flushNow()
+          }
           handler(JSON.parse((e as MessageEvent).data))
         } catch {
           // malformed frame; the next one will resync
@@ -340,8 +491,8 @@ export function Campaign() {
       if (d.usage) setLiveUsage(d.usage)
       void refresh()
     })
-    on("thinking", (d) => append("thinking", d.text))
-    on("content", (d) => append("content", d.text))
+    on("thinking", (d) => queueText("thinking", d.text))
+    on("content", (d) => queueText("content", d.text))
     on("usage", (d) => setLiveUsage({ in: d.in, out: d.out, ctx: d.ctx }))
     on("notice", (d) =>
       setStream((s) => {
@@ -374,20 +525,7 @@ export function Campaign() {
         }
       })
     )
-    on("tool_output", (d) =>
-      setStream((s) =>
-        s
-          ? {
-              ...s,
-              parts: s.parts.map((part) =>
-                part.type === "tool" && part.id === d.id
-                  ? { ...part, output: `${part.output ?? ""}${d.chunk}` }
-                  : part
-              ),
-            }
-          : s
-      )
-    )
+    on("tool_output", (d) => queueOutput(d.id, d.chunk))
     on("tool_result", (d) =>
       setStream((s) =>
         s
@@ -407,9 +545,11 @@ export function Campaign() {
       if (d.message) void loadHypotheses()
       if (d.message && selectedGeneratorRef.current === d.generator_id) {
         const message = d.message as GeneratorMessage
-        setGeneratorMessages((prev) =>
-          prev.some((m) => m.id === message.id) ? prev : [...prev, message]
-        )
+        if (tabRef.current === "generators") {
+          setGeneratorMessages((prev) =>
+            prev.some((m) => m.id === message.id) ? prev : [...prev, message]
+          )
+        }
       }
     })
     on("chain_end", () => {
@@ -430,7 +570,10 @@ export function Campaign() {
       await refresh()
     })
 
-    return () => source.close()
+    return () => {
+      flushNow()
+      source.close()
+    }
   }, [campaign?.running, campaignId])
 
   // only re-scan the tail of the history when it changes, not every message
@@ -450,6 +593,17 @@ export function Campaign() {
   const visibleMessages = useMemo(
     () => (windowSize >= messages.length ? messages : messages.slice(-windowSize)),
     [messages, windowSize]
+  )
+  const visibleGeneratorMessages = useMemo(
+    () =>
+      generatorWindowSize >= generatorMessages.length
+        ? generatorMessages
+        : generatorMessages.slice(-generatorWindowSize),
+    [generatorMessages, generatorWindowSize]
+  )
+  const shownHypotheses = useMemo(
+    () => hypotheses.slice(0, hypothesesShown),
+    [hypotheses, hypothesesShown]
   )
   const railPreviews = useMemo(
     () =>
@@ -931,7 +1085,18 @@ export function Campaign() {
               <LoadingState label="Loading worker" />
             ) : (
               <div className="flex flex-col gap-3">
-                {generatorMessages.map((message) => (
+                {(generatorHasEarlier || generatorMessages.length > generatorWindowSize) && (
+                  <div className="flex justify-center">
+                    <button
+                      type="button"
+                      onClick={loadEarlierGenerator}
+                      className="rounded-full border border-line bg-surface px-3 py-1 text-[12px] text-ink-2 outline-none transition-colors hover:bg-hover hover:text-ink focus-visible:ring-2 focus-visible:ring-ring/60"
+                    >
+                      Load earlier output
+                    </button>
+                  </div>
+                )}
+                {visibleGeneratorMessages.map((message) => (
                   <div key={message.id} className="border-l-2 border-line pl-3">
                     <AssistantMessage parts={message.parts} />
                   </div>
@@ -949,43 +1114,24 @@ export function Campaign() {
               No hypotheses yet. They appear here as the generators file them.
             </p>
           ) : (
-            <ul className="flex flex-col gap-2">
-              {hypotheses.map((hypothesis) => (
-                <li
-                  key={hypothesis.id}
-                  className="rounded-[12px] bg-surface px-3.5 py-3 shadow-hairline"
-                >
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="font-mono text-[11px] text-ink-3">#{hypothesis.id}</span>
-                    <StatusBadge status={hypothesis.status} />
-                    {hypothesis.vuln_class && (
-                      <span className="rounded-full border border-line px-1.5 font-mono text-[10px] text-ink-3">
-                        {hypothesis.vuln_class}
-                      </span>
-                    )}
-                    {hypothesis.generator_id != null && (
-                      <span className="text-[11px] text-ink-3">
-                        worker #{hypothesis.generator_id}
-                      </span>
-                    )}
-                  </div>
-                  <p className="mt-1.5 text-[13px] font-medium">{hypothesis.title}</p>
-                  {hypothesis.angle && (
-                    <p className="mt-0.5 text-[12px] text-ink-2">{hypothesis.angle}</p>
-                  )}
-                  {hypothesis.rationale && (
-                    <p className="mt-1 text-[12px] leading-relaxed text-ink-3">
-                      {hypothesis.rationale}
-                    </p>
-                  )}
-                  {hypothesis.result && (
-                    <p className="mt-1.5 text-[12px] text-ink-2">
-                      result: {hypothesis.result}
-                    </p>
-                  )}
-                </li>
-              ))}
-            </ul>
+            <>
+              <ul className="flex flex-col gap-2">
+                {shownHypotheses.map((hypothesis) => (
+                  <HypothesisCard key={hypothesis.id} hypothesis={hypothesis} />
+                ))}
+              </ul>
+              {hypotheses.length > shownHypotheses.length && (
+                <div className="mt-2 flex justify-center">
+                  <button
+                    type="button"
+                    onClick={() => setHypothesesShown((count) => count + HYPOTHESIS_PAGE)}
+                    className="rounded-full border border-line bg-surface px-3 py-1 text-[12px] text-ink-2 outline-none transition-colors hover:bg-hover hover:text-ink focus-visible:ring-2 focus-visible:ring-ring/60"
+                  >
+                    Show {hypotheses.length - shownHypotheses.length} more
+                  </button>
+                </div>
+              )}
+            </>
           )}
         </div>
       )}
@@ -1006,6 +1152,15 @@ export function Campaign() {
 // assistant rows are checkpointed while a run streams, so a row's parts can
 // change after it was first fetched — clear the cache on every refetch.
 const partsCache = new Map<number, Part[]>()
+const PARTS_CACHE_MAX = 240
+
+function cacheParts(id: number, parts: Part[]) {
+  if (partsCache.size >= PARTS_CACHE_MAX && !partsCache.has(id)) {
+    const oldest = partsCache.keys().next().value
+    if (oldest !== undefined) partsCache.delete(oldest)
+  }
+  partsCache.set(id, parts)
+}
 
 function partsOf(message: Message): Part[] {
   const cached = partsCache.get(message.id)
@@ -1027,7 +1182,7 @@ function partsOf(message: Message): Part[] {
     if (message.content) parts.push({ type: "content", text: message.content })
   }
 
-  partsCache.set(message.id, parts)
+  cacheParts(message.id, parts)
   return parts
 }
 
@@ -1039,6 +1194,42 @@ function callsOf(message: Message): ToolCall[] {
     return []
   }
 }
+
+const HypothesisCard = memo(
+  function HypothesisCard({ hypothesis }: { hypothesis: Hypothesis }) {
+    return (
+      <li className="rounded-[12px] bg-surface px-3.5 py-3 shadow-hairline">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="font-mono text-[11px] text-ink-3">#{hypothesis.id}</span>
+          <StatusBadge status={hypothesis.status} />
+          {hypothesis.vuln_class && (
+            <span className="rounded-full border border-line px-1.5 font-mono text-[10px] text-ink-3">
+              {hypothesis.vuln_class}
+            </span>
+          )}
+          {hypothesis.generator_id != null && (
+            <span className="text-[11px] text-ink-3">worker #{hypothesis.generator_id}</span>
+          )}
+        </div>
+        <p className="mt-1.5 text-[13px] font-medium">{hypothesis.title}</p>
+        {hypothesis.angle && (
+          <p className="mt-0.5 text-[12px] text-ink-2">{hypothesis.angle}</p>
+        )}
+        {hypothesis.rationale && (
+          <p className="mt-1 text-[12px] leading-relaxed text-ink-3">{hypothesis.rationale}</p>
+        )}
+        {hypothesis.result && (
+          <p className="mt-1.5 text-[12px] text-ink-2">result: {hypothesis.result}</p>
+        )}
+      </li>
+    )
+  },
+  (prev, next) =>
+    prev.hypothesis.id === next.hypothesis.id &&
+    prev.hypothesis.status === next.hypothesis.status &&
+    prev.hypothesis.result === next.hypothesis.result &&
+    prev.hypothesis.updated_at === next.hypothesis.updated_at
+)
 
 function EmptyState({
   configured,

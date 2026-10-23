@@ -859,6 +859,27 @@ def test_generator_and_hypothesis_endpoints(client):
     messages = client.get(f"/api/generators/{generator_id}/messages").json()
     assert messages[0]["parts"][0]["text"] == "hi"
 
+    with db.db() as conn:
+        for i in range(3):
+            conn.execute(
+                "INSERT INTO generator_messages (generator_id, content, parts) VALUES (?, ?, ?)",
+                (generator_id, f"g{i}", "[]"),
+            )
+
+    res = client.get(f"/api/generators/{generator_id}/messages?limit=2")
+    assert res.headers.get("x-has-more") == "1"
+    tail = res.json()
+    assert [m["content"] for m in tail] == ["g1", "g2"]
+
+    res = client.get(
+        f"/api/generators/{generator_id}/messages?before={tail[0]['id']}&limit=2"
+    )
+    assert res.headers.get("x-has-more") == "0"
+    assert [m["content"] for m in res.json()] == ["hi", "g0"]
+
+    res = client.get(f"/api/generators/{generator_id}/messages?after={tail[-1]['id']}")
+    assert res.json() == []
+
     hypotheses = client.get(f"/api/campaigns/{campaign['id']}/hypotheses").json()
     assert hypotheses[0]["title"] == "T1"
     assert hypotheses[0]["generator_id"] == generator_id

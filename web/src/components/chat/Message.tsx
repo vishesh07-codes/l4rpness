@@ -1,4 +1,4 @@
-import { memo, type ReactNode } from "react"
+import { memo, useState, type ReactNode } from "react"
 
 import { ThinkingShimmer } from "@/components/agents/loading-states/thinking-shimmer"
 import { MessageBubble, MessageBubbleContent } from "@/components/agents/message-bubble"
@@ -8,6 +8,13 @@ import { StreamText } from "@/components/atoms/StreamText"
 import { AttachmentChip } from "@/components/Attachment"
 import { Markdown } from "@/components/Markdown"
 import { api, type LocalFile, type MessageAttachment, type Part } from "@/lib/api"
+
+// tool outputs can reach tens of thousands of characters and a single turn can
+// hold over a thousand steps; both are capped so the DOM stays small
+const TOOL_PREVIEW_CHARS = 8_000
+const TOOL_EXPANDED_CHARS = 60_000
+const PARTS_WINDOW = 60
+const PARTS_CHUNK = 120
 
 export function MessageRow({
   role,
@@ -110,6 +117,12 @@ function toolLabel(part: ToolPart) {
 function ToolBlock({ part }: { part: ToolPart }) {
   // output streams in while the tool runs, so ok — not output — marks the end
   const status = part.ok == null ? "running" : part.ok ? "success" : "error"
+  const output = part.output ?? ""
+  const [expanded, setExpanded] = useState(false)
+  const cap = expanded ? TOOL_EXPANDED_CHARS : TOOL_PREVIEW_CHARS
+  const shown = output.length > cap ? output.slice(0, cap) : output
+  const hidden = output.length - shown.length
+
   return (
     <ToolResult
       tool={part.name}
@@ -117,12 +130,26 @@ function ToolBlock({ part }: { part: ToolPart }) {
       status={status}
       kind={part.name === "bash" ? "terminal" : "custom"}
       meta={part.ms != null ? `${part.ms}ms` : undefined}
-      copyText={part.output ?? undefined}
+      copyText={output || undefined}
       collapseOnComplete
     >
       <ToolResultOutput language={part.name === "bash" ? "bash" : "text"}>
-        {part.output ?? "running…"}
+        {shown || "running…"}
       </ToolResultOutput>
+      {hidden > 0 && (
+        <div className="mt-1.5 text-[11px] text-muted-foreground">
+          <button
+            type="button"
+            onClick={() => setExpanded((value) => !value)}
+            className="underline underline-offset-2 outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60"
+          >
+            {expanded
+              ? "Show less"
+              : `Show ${hidden.toLocaleString()} more characters`}
+          </button>
+          {expanded && <span className="ml-2">display capped, copy has the full output</span>}
+        </div>
+      )}
     </ToolResult>
   )
 }
@@ -134,6 +161,12 @@ export const AssistantMessage = memo(function AssistantMessage({
   parts: Part[]
   live?: boolean
 }) {
+  // one long autonomous turn keeps appending tool steps to the same message;
+  // rendering thousands of them at once freezes the tab, so show a tail window
+  const [windowSize, setWindowSize] = useState(PARTS_WINDOW)
+  const from = Math.max(0, parts.length - windowSize)
+  const visible = from > 0 ? parts.slice(from) : parts
+
   if (parts.length === 0) {
     return (
       <div className="w-full">
@@ -156,7 +189,19 @@ export const AssistantMessage = memo(function AssistantMessage({
 
   return (
     <div className="group/response flex w-full flex-col gap-3">
-      {parts.map((part, index) => {
+      {from > 0 && (
+        <div className="flex">
+          <button
+            type="button"
+            onClick={() => setWindowSize((size) => size + PARTS_CHUNK)}
+            className="rounded-full border border-line bg-surface px-3 py-1 text-[11px] text-ink-2 outline-none transition-colors hover:bg-hover hover:text-ink focus-visible:ring-2 focus-visible:ring-ring/60"
+          >
+            Show {from.toLocaleString()} earlier steps
+          </button>
+        </div>
+      )}
+      {visible.map((part, offset) => {
+        const index = from + offset
         if (part.type === "thinking") {
           const streaming = live && index === lastThinkingIndex
           return (
