@@ -9,6 +9,7 @@ campaign stream so the supervisor and the dashboard can watch them work.
 import asyncio
 import json
 import logging
+import time
 from typing import Any, cast
 
 from . import agent, config, db, tools
@@ -20,6 +21,39 @@ GENERATORS: dict[int, dict[int, asyncio.Task]] = {}
 PROMPT_FILE = config.ROOT / "prompts" / "hypothesis_generator.md"
 
 OUTPUT_CHARS = 4000
+
+# A generator's entire job is filing hypotheses. If it has been thinking this
+# long without filing one it is studying, or testing, instead — which is the
+# supervisor's job. Say so, and let the operator see how many are stuck.
+NUDGE_SECONDS = 300
+NUDGE = (
+    "Notice: you have been working for five minutes without filing a single hypothesis. "
+    "Stop studying and stop testing — you are not here to exploit anything, to verify "
+    "anything, or to write proof-of-concepts. File the hypotheses you can already justify "
+    "right now with hypothesis_generate (four or more), then call generator_done. bash is "
+    "for reading and inspecting only: anything that probes, fuzzes or attacks the target "
+    "belongs to the supervisor and its hunters, not to you."
+)
+
+
+def _notice(campaign_id: int, text: str) -> None:
+    from . import routes
+
+    routes.push_event(campaign_id, "notice", {"text": text})
+
+
+def _unfiled_count(campaign_id: int) -> int:
+    """Running generators that have not filed a hypothesis yet."""
+    with db.db() as conn:
+        row = conn.execute(
+            """
+            SELECT count(*) AS c FROM generators g
+            WHERE g.campaign_id = ? AND g.status = 'running'
+              AND NOT EXISTS (SELECT 1 FROM hypotheses h WHERE h.generator_id = g.id)
+            """,
+            (campaign_id,),
+        ).fetchone()
+    return row["c"] if row else 0
 
 
 def running_count(campaign_id: int) -> int:
@@ -165,8 +199,26 @@ async def _run(campaign_id: int, generator_id: int, focus: str) -> None:
             },
         ]
         idle = 0
+        started = time.monotonic()
+        nudged = False
 
         while True:
+            if not nudged and not filed and time.monotonic() - started > NUDGE_SECONDS:
+                nudged = True
+                stalled = _unfiled_count(campaign_id)
+                messages.append({"role": "user", "content": NUDGE})
+                _notice(
+                    campaign_id,
+                    f"generator #{generator_id} ({focus or 'general'}) has filed nothing in "
+                    f"{NUDGE_SECONDS // 60} minutes; {stalled} running generator(s) are in the "
+                    "same state — told it to file hypotheses instead of testing",
+                )
+                log.warning(
+                    "generator #%d: no hypotheses after %.0fs, nudged",
+                    generator_id,
+                    time.monotonic() - started,
+                )
+
             response = await client.chat.completions.create(
                 model=bare_model,
                 messages=cast(Any, messages),

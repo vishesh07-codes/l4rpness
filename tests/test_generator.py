@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from app import agent, config, db, generator, supervisor, tools
+from app import agent, config, db, generator, routes, supervisor, tools
 
 
 @pytest.fixture(autouse=True)
@@ -210,3 +210,38 @@ def test_backlog_line():
     line = supervisor._backlog_line(1)
     assert "1 new" in line
     assert "hypothesis_list" in line
+
+
+def test_a_generator_that_files_nothing_is_nudged(monkeypatch):
+    """Its job is filing, not testing: five minutes with nothing filed gets it
+    told so, and the operator gets a count of how many are stuck."""
+    monkeypatch.setattr(generator, "NUDGE_SECONDS", 0)
+    monkeypatch.setattr(
+        routes, "push_event", lambda cid, name, data: notices.append((name, data.get("text", "")))
+    )
+    notices: list = []
+    seen: list[list[str]] = []
+
+    with db.db() as conn:
+        conn.execute("INSERT INTO generators (id, campaign_id, focus) VALUES (5, 1, 'auth')")
+
+    async def create(**kwargs):
+        seen.append([m["content"] for m in kwargs["messages"] if m["role"] == "user"])
+        if len(seen) == 1:
+            # looks at the target, files nothing
+            return _response(_msg([_call("c1", "read_file", {"path": "notes.md"})]))
+        return _response(_msg([_call("c2", "generator_done", {"status": "done", "summary": "none"})]))
+
+    client = MagicMock()
+    client.chat.completions.create = create
+    monkeypatch.setattr("app.agent._client", lambda provider: client)
+
+    asyncio.run(generator._run(1, 5, "auth"))
+
+    assert generator.NUDGE in seen[0], "the nudge must ride the very next request"
+    assert notices and "1 running generator(s)" in notices[0][1]
+    assert notices[0][0] == "notice"
+
+
+def _msg(calls):
+    return SimpleNamespace(content="", reasoning_content="", tool_calls=calls)
