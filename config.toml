@@ -3,7 +3,7 @@ host = "0.0.0.0"
 port = 4517
 
 [llm]
-provider = "9router"
+provider = "localhost-9"
 model = "ag/gemini-3.8-flash-high"
 effort = "high"
 efforts = ["low", "high", "max"]
@@ -58,3 +58,8 @@ compact_keep_messages = 8
 [hypotheses]
 # how many hypothesis generators may run at the same time per campaign
 max_generators = 5
+
+[llm.providers.localhost-9]
+base_url = "http://host.docker.internal:20128/v1"
+api_key_env = "LOCALHOST_9_API_KEY"
+thinking = true
