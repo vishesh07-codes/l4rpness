@@ -1,0 +1,26 @@
+[Unit]
+Description=l4rpness kernel-pentest VM control plane
+# The container talks to this over a unix socket; without it, campaigns with the
+# kernel VM enabled log "control plane unavailable" and their VM tools fail.
+After=local-fs.target
+
+[Service]
+Type=simple
+# Runs as you, never as root. A guest that escapes QEMU has to land in an
+# unprivileged account, and the harness must not be able to reach the images,
+# the console logs or the QEMU process by any other route.
+ExecStart=__REPO__/.venv/bin/python __REPO__/vm/vmctl.py serve
+WorkingDirectory=__REPO__/vm
+Restart=on-failure
+RestartSec=5
+# process, not mixed/control-group: a restart of this service must NOT take the
+# guests with it. They are meant to outlive it and be adopted on the way back
+# (see reconcile), which is the whole point of the keyfiles. Use 'vmctl.py
+# stop-all' for a deliberate teardown.
+KillMode=process
+TimeoutStopSec=30
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

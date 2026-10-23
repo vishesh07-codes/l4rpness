@@ -114,9 +114,41 @@ Root is kept contained by the container boundary. `compose.yaml` pins `user: "0:
     uv venv && uv pip install -r requirements.txt -r requirements-dev.txt
     L4RP_RELOAD=1 .venv/bin/python -m app
 
-    cd web && npm install && npm run dev
+    cd web && bun install && bun run dev
 
 The Vite dev server proxies /api to port 4517.
+
+## Kernel-pentest VM (optional)
+
+A campaign can be given its own Linux VM for kernel work — LPE, and QEMU escape
+attempts. It boots **this machine's own kernel** (`vmlinuz` + `/lib/modules`), so
+`uname -r` inside the guest is the same kernel you are running: a bug proven
+there is a bug here. Root is locked by default, so escalation has to be a real
+exploit rather than a `su`.
+
+The hypervisor runs on the host, never in the container. The container gets one
+unix socket and nothing else — no images, no console files, no guest IP — so a
+guest that escapes QEMU lands in an unprivileged host account instead of the
+harness.
+
+    vm/build-base.sh              # once: builds vm/base/base.qcow2
+    .venv/bin/python vm/vmctl.py serve    # keep this running
+
+Then tick **Kernel pentest** when creating a campaign. `vmctl doctor` prints the
+host prerequisites, and `vmctl doctor --boot-check` boots the base once and
+reads the kernel back to confirm parity.
+
+Things worth knowing:
+
+- The guest has no network and no compiler. Compile PoCs in the container
+  (`gcc -static`) and push them in, or write the source in the guest and run it
+  with `sh`.
+- Panics are expected. The VM restarts itself with the same disk, and the
+  serial console — which is what `vm_console` reads — is where the oops shows
+  up. `dmesg` inside the guest is restricted exactly as it is on the host.
+- Hunters share one VM, and one filesystem, with no separation inside it.
+- Rebuilding the base needs every campaign's VM stopped first: a running clone
+  holds a read lock on it.
 
 ## Tests
 
@@ -135,3 +167,39 @@ The Vite dev server proxies /api to port 4517.
 - [x] skills (SKILL.md, loaded on demand, Skills page)
 - [x] browser tool (Playwright MCP server inside the container), MCP servers
 - [ ] the boring 24/7 parts: watchdog, resume after crash, log rotation
+
+The control plane has to be running for any of this to work — without it,
+kernel campaigns log "VM control plane unavailable" and their VM tools fail
+(promptly, with that message, rather than hanging). Installing it as a user
+service keeps it up without a terminal:
+
+    vm/install-service.sh            # install, enable, start
+    vm/install-service.sh status
+    journalctl --user -u l4rpness-vm
+
+The supervisor retries the VM on later chains, so a control plane that comes up
+after a campaign started heals itself.
+
+### Surviving a crash or a rebuild
+
+The VM runs on the host, so the container's lifecycle barely touches it:
+
+- **Container crash / rebuild** — the guest keeps running with its RAM and disk
+  intact; the container reconnects to the socket and carries on. Nothing on the
+  container's filesystem holds VM state, and the migration that adds the VM
+  columns runs on startup, so existing campaigns are unaffected.
+- **Control plane restart or crash** — guests are *adopted*, not killed: they are
+  found by pid from their keyfile in `vm/state/`, the console reconnects, and the
+  password and flag are read back from the keyfile. The unit uses `KillMode=process`
+  precisely so a restart does not take the guests with it.
+- **Host reboot** — the guests are gone. Their disk, and the password and flag
+  they were configured with, survive in the keyfile; they are marked `interrupted`
+  (as opposed to `stopped`, which means someone stopped them on purpose) and the
+  watchdog brings them back, honouring the memory and slot budget. A guest over
+  budget is held and retried rather than lost.
+- Campaigns that retry a missing control plane: the supervisor re-checks on each
+  chain, so a control plane that comes up late heals without a restart.
+
+Only `vm/run/` is mounted into the container, and only the socket is ever in it —
+images, keyfiles, seeds and console buffers stay on the host, so a rebuild cannot
+reach them.

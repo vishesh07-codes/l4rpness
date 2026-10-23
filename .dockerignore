@@ -8,3 +8,16 @@ __pycache__
 tests
 web/node_modules
 web/dist
+.playwright-mcp
+
+# Kernel-pentest VM runtime. None of this is a build input — nothing under vm/
+# is COPYed into any stage — but it is where the base image (200MB), the
+# per-campaign clones, the keyfiles (which hold root passwords) and the flag
+# seeds live, plus the control sockets. The sockets are why a classic-builder
+# run logs "archive/tar: sockets not supported". Keep the scripts; exclude the
+# runtime.
+vm/base
+vm/images
+vm/state
+vm/serial
+vm/run

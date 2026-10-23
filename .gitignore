@@ -7,3 +7,13 @@ __pycache__/
 web/node_modules/
 web/dist/
 .playwright-mcp/
+
+# kernel-pentest VM: the base image, per-campaign clones, state and the control
+# socket are host artefacts. vm/run/ itself is tracked so the compose bind mount
+# has a user-owned source directory.
+vm/base/
+vm/images/
+vm/state/
+vm/serial/
+vm/run/*
+!vm/run/.gitkeep

@@ -44,7 +44,11 @@ services:
         required: false
     volumes:
       - l4rpness-data:/app/data
-      # the Settings UI reads this for change detection and writes runtime
+      # Kernel-pentest VM control socket. Only this directory is mounted, and
+      # only the socket is ever in it: the guest images, the keyfiles and the
+      # serial consoles stay on the host. vm/vmctl.py must be running there for
+      # the VM tools to answer.
+      - ./vm/run:/app/vm/run      # the Settings UI reads this for change detection and writes runtime
       # knobs through it; add the :ro suffix to make it read-only
       - ./config.toml:/app/config.toml
       # the Settings UI reads this for change detection and rewrites keys
