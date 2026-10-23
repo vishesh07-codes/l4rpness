@@ -325,6 +325,16 @@ export const AssistantMessage = memo(function AssistantMessage({
     -1,
   );
   const lastPartIndex = parts.length - 1;
+  const thinkingParts = visible.flatMap((part, offset) =>
+    part.type === "thinking"
+      ? [{ part, index: from + offset }]
+      : [],
+  );
+  const responseParts = visible.flatMap((part, offset) =>
+    part.type === "thinking"
+      ? []
+      : [{ part, index: from + offset }],
+  );
 
   return (
     <div className="group/response flex w-full flex-col gap-3">
@@ -339,21 +349,20 @@ export const AssistantMessage = memo(function AssistantMessage({
           </button>
         </div>
       )}
-      {visible.map((part, offset) => {
-        const index = from + offset;
-        if (part.type === "thinking") {
-          const streaming =
-            live && index === lastThinkingIndex && index === lastPartIndex;
-          return (
-            <ReasoningBlock
-              key={`thinking-${index}`}
-              text={part.text}
-              live={streaming}
-              collapsible={collapseReasoning}
-              label={index === firstThinkingIndex || streaming}
-            />
-          );
-        }
+      {thinkingParts.map(({ part, index }) => {
+        const streaming =
+          live && index === lastThinkingIndex && index === lastPartIndex;
+        return (
+          <ReasoningBlock
+            key={`thinking-${index}`}
+            text={part.text}
+            live={streaming}
+            collapsible={collapseReasoning}
+            label={index === firstThinkingIndex || streaming}
+          />
+        );
+      })}
+      {responseParts.map(({ part, index }) => {
         if (part.type === "notice") {
           return (
             <div

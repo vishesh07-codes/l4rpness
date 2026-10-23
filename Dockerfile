@@ -5,8 +5,19 @@ RUN npm ci
 COPY web/ ./
 RUN npm run build
 
+# uv is a static binary (no python, no pip) — copy it in so the build never has
+# to download a resolver. It installs the exact same wheels pip would, but
+# fetches many in parallel, which is what defeats the per-connection throttle
+# some ISPs apply to files.pythonhosted.org (70 MB semgrep wheel: 16 min with
+# pip, seconds with uv).
+FROM ghcr.io/astral-sh/uv:latest AS uv
+
 FROM python:3.13-slim
+COPY --from=uv /uv /uvx /usr/local/bin/
 ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 PIP_BREAK_SYSTEM_PACKAGES=1 PIP_ROOT_USER_ACTION=ignore
+# uv reads these; --system targets the image's python (no venv in the container).
+ENV UV_SYSTEM_PYTHON=1 UV_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ \
+    UV_EXTRA_INDEX_URL=https://pypi.org/simple/ UV_INDEX_STRATEGY=unsafe-best-match
 WORKDIR /app
 
 # Some ISPs (Jio/India among them) throttle the IPv4 route to the Fastly edge
@@ -39,9 +50,9 @@ RUN apt-get update && \
     visudo -cf /etc/sudoers.d/app
 COPY requirements.txt .
 # pip's default index (files.pythonhosted.org) sits on the same Fastly edge that
-# gets throttled on some ISPs (~70 KB/s here vs ~4 MB/s from a mirror). Point
-# pip at a mirror that peers well, and cache the config in the image so
-# runtime `pip install` (agents do this) benefits too.
+# gets throttled on some ISPs (~70 KB/s here vs ~4 MB/s from a mirror). uv reads
+# UV_INDEX_URL (set above) and pulls wheels in parallel. /etc/pip.conf stays for
+# runtime `pip install` (agents do this) so those keep working too.
 RUN printf '%s\n' \
       '[global]' \
       'index-url = https://mirrors.aliyun.com/pypi/simple/' \
@@ -49,7 +60,7 @@ RUN printf '%s\n' \
       'timeout = 60' \
       'retries = 5' \
       > /etc/pip.conf && \
-    pip install -r requirements.txt
+    uv pip install -r requirements.txt
 
 ARG TOOLSET=custom
 COPY tools.txt /tmp/tools.txt
@@ -64,7 +75,7 @@ RUN if [ "$TOOLSET" = "custom" ]; then \
 
 RUN if [ "$TOOLSET" = "custom" ]; then \
       echo "installing mcp tool binaries" && \
-      pip install semgrep pip-audit && \
+      uv pip install semgrep pip-audit && \
       apt-get update && \
       apt-get install -y --no-install-recommends nodejs npm && \
       rm -rf /var/lib/apt/lists/* && \

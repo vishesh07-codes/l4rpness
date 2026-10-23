@@ -6,6 +6,7 @@ import logging
 import os
 import re
 import signal
+import shlex
 import time
 from itertools import islice
 from pathlib import Path
@@ -445,16 +446,28 @@ async def bash(args: dict, work: Path, stop=None, on_output=None) -> tuple[str, 
     # Cost-saving nudge, not a security boundary: bash starts in the campaign
     # work directory, and absolute-path I/O outside it is otherwise allowed.
     # This only catches the common cd/pushd-away spelling mistakes.
-    if re.search(
-        r"(?:^|[;&|\n(]\s*)(?:cd|pushd)\s+(?:--\s+)?(?:/|~|\.\.?(?:/|\s|$))",
+    for match in re.finditer(
+        r"(?:^|[;&|\n(]\s*)(?:cd|pushd)\s+(?:--\s+)?(?P<target>\"[^\"]*\"|'[^']*'|[^\s;&|()]+)",
         cmd,
     ):
-        return (
-            f"error: bash starts in the campaign work directory ({work}); "
-            "prefer relative paths (this check is advisory — absolute-path "
-            "tool I/O outside the work dir is not blocked)",
-            False,
-        )
+        target = match.group("target")
+        try:
+            target = shlex.split(target)[0]
+        except (ValueError, IndexError):
+            pass
+        current_dir = target in {".", "./"}
+        if not current_dir:
+            try:
+                current_dir = Path(target).expanduser().resolve() == work.resolve()
+            except (OSError, RuntimeError):
+                current_dir = False
+        if not current_dir:
+            return (
+                f"error: bash starts in the campaign work directory ({work}); "
+                "prefer relative paths (this check is advisory — absolute-path "
+                "tool I/O outside the work dir is not blocked)",
+                False,
+            )
 
     try:
         timeout = max(1, min(int(args["timeout"]), config.BASH_TIMEOUT))

@@ -52,6 +52,21 @@ def test_bash_rejects_workspace_escape_commands(work, command):
     assert "advisory" in out
 
 
+@pytest.mark.parametrize("command", ["cd . && pwd", "cd ./ && pwd"])
+def test_bash_allows_staying_in_workspace(work, command):
+    out, ok, _ = asyncio.run(tools.execute("bash", {"cmd": command}, 1))
+    assert ok
+    assert str(work / "1") in out
+
+
+def test_bash_allows_absolute_workspace_path(work):
+    out, ok, _ = asyncio.run(
+        tools.execute("bash", {"cmd": f"cd '{work / '1'}' && pwd"}, 1)
+    )
+    assert ok
+    assert str(work / "1") in out
+
+
 def test_bash_reports_campaign_work_dir(work):
     out, ok, _ = asyncio.run(tools.execute("bash", {"cmd": "pwd"}, 1))
     assert ok
