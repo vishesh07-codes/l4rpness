@@ -11,8 +11,9 @@ up by the next chain.
 import asyncio
 import json
 import logging
+import random
 
-from . import agent, config, db, uploads
+from . import agent, config, db, generator, tools, uploads
 
 log = logging.getLogger("l4rpness")
 
@@ -339,6 +340,48 @@ async def compact_campaign(campaign_id: int) -> int:
     return len(fold)
 
 
+def _backlog_line(campaign_id: int) -> str:
+    """Compact status so the supervisor knows what the backlog and the
+    hypothesis workers are doing, without pulling full transcripts in."""
+    with db.db() as conn:
+        counts = {
+            row["status"]: row["c"]
+            for row in conn.execute(
+                "SELECT status, count(*) AS c FROM hypotheses WHERE campaign_id = ? GROUP BY status",
+                (campaign_id,),
+            ).fetchall()
+        }
+        gens = conn.execute(
+            "SELECT id, focus FROM generators WHERE campaign_id = ? AND status = 'running'",
+            (campaign_id,),
+        ).fetchall()
+        spotlight = None
+        if gens:
+            pick = random.choice(gens)
+            message = conn.execute(
+                "SELECT content, parts FROM generator_messages WHERE generator_id = ? ORDER BY id DESC LIMIT 1",
+                (pick["id"],),
+            ).fetchone()
+            if message is not None:
+                spotlight = (
+                    f"GEN #{pick['id']} ({pick['focus'] or 'general'}): "
+                    f"{tools._message_snippet(message)}"
+                )
+
+    running = len(gens)
+    if not counts and not running:
+        return ""
+
+    parts = [f"{counts.get(name, 0)} {name}" for name in ("new", "working", "done", "dead")]
+    line = "HYPOTHESES: " + ", ".join(parts)
+    if running:
+        line += f" | generators running: {running}"
+    line += " (call hypothesis_list for the backlog, generator_status for a worker)"
+    if spotlight:
+        line += "\n" + spotlight
+    return line
+
+
 async def _sleep(stop: asyncio.Event, seconds: float) -> None:
     try:
         await asyncio.wait_for(stop.wait(), timeout=seconds)
@@ -353,6 +396,9 @@ async def _loop(campaign_id: int) -> None:
     run = routes.RUNNING.get(campaign_id)
     if run is None:
         return
+
+    # tasks do not survive a restart; close their rows out
+    generator.reconcile(campaign_id)
 
     stop: asyncio.Event = run["stop"]
     backoff = config.SUPERVISOR_BACKOFF
@@ -395,12 +441,14 @@ async def _loop(campaign_id: int) -> None:
             history = _history(campaign_id)
             touched = any(message.get("role") == "assistant" for message in history)
             if touched:
-                history.append({"role": "user", "content": CONTINUE_PROMPT})
+                prompt = CONTINUE_PROMPT
             else:
-                history.append({
-                    "role": "user",
-                    "content": BEGIN_PROMPT.format(target=campaign["target"].strip()),
-                })
+                prompt = BEGIN_PROMPT.format(target=campaign["target"].strip())
+
+            backlog = _backlog_line(campaign_id)
+            if backlog:
+                prompt += "\n\n" + backlog
+            history.append({"role": "user", "content": prompt})
 
             run["parts"] = []
             run["pending"] = None
@@ -416,6 +464,7 @@ async def _loop(campaign_id: int) -> None:
                     (),
                     store_user=False,
                     keep=True,
+                    tool_kind="supervisor",
                 )
             except asyncio.CancelledError:
                 raise
@@ -440,6 +489,8 @@ async def _loop(campaign_id: int) -> None:
         cancelled = True
         log.info("supervisor loop cancelled for campaign %d", campaign_id)
     finally:
+        # stop the hypothesis generators before the loop disappears
+        await generator.stop_campaign(campaign_id)
         # close the live SSE before the run disappears so watchers fall back to
         # the saved transcript
         routes.close_run(campaign_id)

@@ -54,3 +54,7 @@ error_backoff_seconds = 30
 # verbatim (0 disables compaction)
 compact_at_tokens = 950000
 compact_keep_messages = 8
+
+[hypotheses]
+# how many hypothesis generators may run at the same time per campaign
+max_generators = 5

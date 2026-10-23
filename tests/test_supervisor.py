@@ -34,7 +34,7 @@ def test_start_refuses_without_key(monkeypatch):
 def test_loop_runs_chains_then_stop(monkeypatch):
     chains: list[dict] = []
 
-    async def fake_run(campaign_id, campaign, attachments, history, content, run, files=(), store_user=True, keep=False):
+    async def fake_run(campaign_id, campaign, attachments, history, content, run, files=(), store_user=True, keep=False, tool_kind=None):
         chains.append({"history": history, "store_user": store_user, "keep": keep})
         with db.db() as conn:
             conn.execute(
@@ -77,7 +77,7 @@ def test_loop_runs_chains_then_stop(monkeypatch):
 def test_start_cancels_a_pending_stop(monkeypatch):
     chains: list[int] = []
 
-    async def fake_run(campaign_id, campaign, attachments, history, content, run, files=(), store_user=True, keep=False):
+    async def fake_run(campaign_id, campaign, attachments, history, content, run, files=(), store_user=True, keep=False, tool_kind=None):
         chains.append(1)
         await asyncio.sleep(0.05)
         return {"ok": True, "stopped": False, "empty": False, "error": ""}
@@ -108,7 +108,7 @@ def test_start_cancels_a_pending_stop(monkeypatch):
 def test_start_after_full_stop_starts_a_fresh_loop(monkeypatch):
     chains: list[int] = []
 
-    async def fake_run(campaign_id, campaign, attachments, history, content, run, files=(), store_user=True, keep=False):
+    async def fake_run(campaign_id, campaign, attachments, history, content, run, files=(), store_user=True, keep=False, tool_kind=None):
         chains.append(1)
         return {"ok": True, "stopped": False, "empty": False, "error": ""}
 
@@ -148,7 +148,7 @@ def test_start_after_full_stop_starts_a_fresh_loop(monkeypatch):
 def test_steer_lands_in_the_next_chain(monkeypatch):
     chains: list[list[dict]] = []
 
-    async def fake_run(campaign_id, campaign, attachments, history, content, run, files=(), store_user=True, keep=False):
+    async def fake_run(campaign_id, campaign, attachments, history, content, run, files=(), store_user=True, keep=False, tool_kind=None):
         chains.append(history)
         if len(chains) == 1:
             # what the /steer endpoint does while a chain is running

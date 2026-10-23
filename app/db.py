@@ -58,9 +58,43 @@ CREATE TABLE IF NOT EXISTS message_attachments (
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS generators (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    campaign_id INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+    focus TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'running',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS generator_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    generator_id INTEGER NOT NULL REFERENCES generators(id) ON DELETE CASCADE,
+    content TEXT NOT NULL DEFAULT '',
+    parts TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS hypotheses (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    campaign_id INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+    generator_id INTEGER REFERENCES generators(id) ON DELETE SET NULL,
+    title TEXT NOT NULL,
+    angle TEXT NOT NULL DEFAULT '',
+    vuln_class TEXT NOT NULL DEFAULT '',
+    rationale TEXT NOT NULL DEFAULT '',
+    result TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'new',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_messages_campaign ON messages(campaign_id, id);
 CREATE INDEX IF NOT EXISTS idx_attachments_campaign ON attachments(campaign_id, field);
 CREATE INDEX IF NOT EXISTS idx_message_attachments ON message_attachments(message_id, id);
+CREATE INDEX IF NOT EXISTS idx_hypotheses_campaign ON hypotheses(campaign_id, status);
+CREATE INDEX IF NOT EXISTS idx_generators_campaign ON generators(campaign_id, status);
+CREATE INDEX IF NOT EXISTS idx_generator_messages ON generator_messages(generator_id, id);
 """
 
 
@@ -102,6 +136,8 @@ def migrate(conn):
         conn.execute("ALTER TABLE campaigns ADD COLUMN memory_summary TEXT NOT NULL DEFAULT ''")
     if "compacted_until" not in _columns(conn, "campaigns"):
         conn.execute("ALTER TABLE campaigns ADD COLUMN compacted_until INTEGER NOT NULL DEFAULT 0")
+    if "generator_id" not in _columns(conn, "hypotheses"):
+        conn.execute("ALTER TABLE hypotheses ADD COLUMN generator_id INTEGER REFERENCES generators(id) ON DELETE SET NULL")
     if "reasoning" not in _columns(conn, "messages"):
         conn.execute("ALTER TABLE messages ADD COLUMN reasoning TEXT NOT NULL DEFAULT ''")
     if "tool_calls" not in _columns(conn, "messages"):

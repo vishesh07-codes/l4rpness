@@ -105,7 +105,7 @@ def _parse_args(raw: str) -> tuple[dict, str]:
             return {}, str(first)
 
 
-async def _step(client, campaign, messages, calls: list) -> AsyncIterator[tuple[str, Any]]:
+async def _step(client, campaign, messages, calls: list, tool_kind: str | None = None) -> AsyncIterator[tuple[str, Any]]:
     provider, model = split_model(campaign["model"])
     conf = config.PROVIDERS.get(provider, {})
 
@@ -117,7 +117,7 @@ async def _step(client, campaign, messages, calls: list) -> AsyncIterator[tuple[
     request: dict = dict(
         model=model,
         messages=cast(Any, messages),
-        tools=cast(Any, tools.SCHEMAS + mcp.schemas()),
+        tools=cast(Any, tools.schemas_for(tool_kind)),
         stream=True,
         temperature=config.TEMPERATURE,
         **extra,
@@ -184,7 +184,7 @@ async def _step(client, campaign, messages, calls: list) -> AsyncIterator[tuple[
         }
 
 
-async def run(campaign, attachment_rows, history, campaign_id, stop=None, on_tool_output=None) -> AsyncIterator[tuple[str, Any]]:
+async def run(campaign, attachment_rows, history, campaign_id, stop=None, on_tool_output=None, tool_kind=None) -> AsyncIterator[tuple[str, Any]]:
     provider, _ = split_model(campaign["model"])
     client = _client(provider)
     messages: list[dict] = [{"role": "system", "content": build_prompt(campaign, attachment_rows)}]
@@ -209,7 +209,12 @@ async def run(campaign, attachment_rows, history, campaign_id, stop=None, on_too
         thinking: list[str] = []
         content: list[str] = []
 
-        async for kind, data in _step(client, campaign, messages, calls):
+        step = (
+            _step(client, campaign, messages, calls)
+            if tool_kind is None
+            else _step(client, campaign, messages, calls, tool_kind)
+        )
+        async for kind, data in step:
             if stop is not None and stop.is_set():
                 yield "stopped", None
                 return
@@ -257,9 +262,19 @@ async def run(campaign, attachment_rows, history, campaign_id, stop=None, on_too
                     if on_tool_output is not None:
                         on_tool_output(call_id, chunk)
 
-                output, ok, ms = await tools.execute(
-                    call["name"], call["args"], campaign_id, stop, on_output=stream_chunk
-                )
+                if tool_kind is None:
+                    output, ok, ms = await tools.execute(
+                        call["name"], call["args"], campaign_id, stop, on_output=stream_chunk
+                    )
+                else:
+                    output, ok, ms = await tools.execute(
+                        call["name"],
+                        call["args"],
+                        campaign_id,
+                        stop,
+                        on_output=stream_chunk,
+                        allow=tools.allowed_for(tool_kind),
+                    )
             yield "tool_result", {"id": call["id"], "name": call["name"], "output": output, "ok": ok, "ms": ms}
             messages.append({"role": "tool", "tool_call_id": call["id"], "content": output})
 

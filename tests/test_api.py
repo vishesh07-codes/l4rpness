@@ -830,6 +830,40 @@ def test_messages_pagination(client):
     assert len(client.get(f"/api/campaigns/{campaign['id']}/messages").json()) == 6
 
 
+def test_generator_and_hypothesis_endpoints(client):
+    campaign = create(client)
+    with db.db() as conn:
+        cur = conn.execute(
+            "INSERT INTO generators (campaign_id, focus, status) VALUES (?, 'auth', 'done')",
+            (campaign["id"],),
+        )
+        generator_id = cur.lastrowid
+        assert generator_id is not None
+        conn.execute(
+            "INSERT INTO generator_messages (generator_id, content, parts) VALUES (?, 'hi', ?)",
+            (generator_id, json.dumps([{"type": "content", "text": "hi"}])),
+        )
+        conn.execute(
+            """
+            INSERT INTO hypotheses (campaign_id, generator_id, title, angle, vuln_class, rationale, status)
+            VALUES (?, ?, 'T1', 'a', 'xss', 'r', 'new')
+            """,
+            (campaign["id"], generator_id),
+        )
+
+    generators = client.get(f"/api/campaigns/{campaign['id']}/generators").json()
+    assert generators[0]["focus"] == "auth"
+    assert generators[0]["hypothesis_count"] == 1
+    assert generators[0]["last_snippet"] == "hi"
+
+    messages = client.get(f"/api/generators/{generator_id}/messages").json()
+    assert messages[0]["parts"][0]["text"] == "hi"
+
+    hypotheses = client.get(f"/api/campaigns/{campaign['id']}/hypotheses").json()
+    assert hypotheses[0]["title"] == "T1"
+    assert hypotheses[0]["generator_id"] == generator_id
+
+
 def test_usage_is_tracked_and_streamed(client, monkeypatch):
     async def fake_run(campaign, attachments, history, campaign_id, stop=None, on_tool_output=None):
         yield "usage", {"prompt_tokens": 1200, "completion_tokens": 300}

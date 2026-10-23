@@ -1,6 +1,7 @@
 import asyncio
 import codecs
 import contextlib
+import json
 import os
 import re
 import signal
@@ -8,9 +9,9 @@ import time
 from itertools import islice
 from pathlib import Path
 
-from . import config, mcp, skills
+from . import config, db, mcp, skills
 
-SCHEMAS = [
+CORE_SCHEMAS = [
     {
         "type": "function",
         "function": {
@@ -121,6 +122,138 @@ SCHEMAS = [
         },
     },
 ]
+
+SCHEMAS = CORE_SCHEMAS  # legacy alias; per-agent sets come from schemas_for()
+
+SUPERVISOR_SCHEMAS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "spawn_hypothesis_generator",
+            "description": (
+                "Start a background hypothesis generator for this campaign. It studies "
+                "the target and files concrete, testable attack hypotheses that you can "
+                "read with hypothesis_list. Spawn several with different focus areas."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "focus": {
+                        "type": "string",
+                        "description": "What this generator should look at, e.g. 'auth and sessions' or 'file uploads and parsers'.",
+                    },
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "hypothesis_list",
+            "description": "List filed hypotheses with status, angle, class and result. Use it to pick the next thing to work on.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "status": {
+                        "type": "string",
+                        "enum": ["", "new", "working", "done", "dead"],
+                        "description": "Optional status filter; empty lists everything.",
+                    },
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "hypothesis_update",
+            "description": "Update a hypothesis status and optionally record a one-line result.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "hypothesis_id": {"type": "integer"},
+                    "status": {"type": "string", "enum": ["new", "working", "done", "dead"]},
+                    "result": {"type": "string", "description": "One-line outcome, e.g. 'confirmed XSS in search' or 'no sink reachable'."},
+                },
+                "required": ["hypothesis_id", "status"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "generator_status",
+            "description": (
+                "Read the hypothesis workers (generators): what they are doing right now "
+                "and their recent chat history. Without an id it lists every generator for "
+                "the campaign."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "generator_id": {"type": "integer", "description": "Optional: one generator to inspect in detail."},
+                    "limit": {"type": "integer", "description": "How many of its latest messages to return (default 6, max 30)."},
+                },
+            },
+        },
+    },
+]
+
+GENERATOR_SCHEMAS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "hypothesis_generate",
+            "description": "File one concrete, testable attack hypothesis. Call it once per hypothesis.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string", "description": "Short specific title."},
+                    "angle": {"type": "string", "description": "The exact attack idea."},
+                    "vuln_class": {"type": "string", "description": "e.g. sqli, xss, idor, auth_bypass, ssrf, rce, race, logic."},
+                    "rationale": {"type": "string", "description": "Why this should work: what you observed and how the input reaches the sink."},
+                },
+                "required": ["title", "angle", "vuln_class", "rationale"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "generator_done",
+            "description": "Finish this generator run. Call it once you filed all hypotheses.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "status": {"type": "string", "enum": ["done", "blocked"]},
+                    "summary": {"type": "string", "description": "How many hypotheses were filed and what areas they cover."},
+                },
+                "required": ["status", "summary"],
+            },
+        },
+    },
+]
+
+CORE_TOOLS = {"bash", "skill", "read_file", "write_file", "write_todos"}
+SUPERVISOR_TOOLS = {"spawn_hypothesis_generator", "hypothesis_list", "hypothesis_update", "generator_status"}
+GENERATOR_TOOLS = {"hypothesis_generate", "generator_done"}
+
+
+def schemas_for(kind: str | None = None) -> list[dict]:
+    schemas = list(CORE_SCHEMAS)
+    if kind == "supervisor":
+        schemas += SUPERVISOR_SCHEMAS
+    elif kind == "generator":
+        schemas += GENERATOR_SCHEMAS
+    return schemas + mcp.schemas()
+
+
+def allowed_for(kind: str | None = None) -> set[str] | None:
+    if kind == "supervisor":
+        return CORE_TOOLS | SUPERVISOR_TOOLS
+    if kind == "generator":
+        return CORE_TOOLS | GENERATOR_TOOLS
+    return None
 
 
 def _work_dir(campaign_id: int) -> Path:
@@ -393,6 +526,224 @@ async def skill(args: dict, work: Path, stop=None) -> tuple[str, bool]:
     return header + loaded["body"], True
 
 
+async def spawn_hypothesis_generator(args: dict, campaign_id: int, stop=None) -> tuple[str, bool]:
+    from . import generator
+
+    focus = str(args.get("focus", "")).strip()
+    gen_id = generator.spawn(campaign_id, focus)
+    if gen_id == 0:
+        return f"error: already at the limit of {config.MAX_GENERATORS} running generators", False
+    return (
+        f"generator #{gen_id} started (focus: {focus or 'general'}). "
+        "Read its hypotheses later with hypothesis_list."
+    ), True
+
+
+async def hypothesis_generate(
+    args: dict, campaign_id: int, stop=None, generator_id: int | None = None
+) -> tuple[str, bool]:
+    title = str(args.get("title", "")).strip()
+    if not title:
+        return "error: title is required", False
+    angle = str(args.get("angle", "")).strip()
+    vuln_class = str(args.get("vuln_class", "")).strip()
+    rationale = str(args.get("rationale", "")).strip()
+
+    with db.db() as conn:
+        existing = conn.execute(
+            "SELECT id FROM hypotheses WHERE campaign_id = ? AND lower(title) = lower(?)",
+            (campaign_id, title),
+        ).fetchone()
+        if existing:
+            return f"hypothesis #{existing['id']} already exists (duplicate title), skipped", True
+        cur = conn.execute(
+            """
+            INSERT INTO hypotheses (campaign_id, generator_id, title, angle, vuln_class, rationale)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (campaign_id, generator_id, title[:200], angle[:500], vuln_class[:60], rationale[:4000]),
+        )
+        hypothesis_id = cur.lastrowid
+    return f"hypothesis #{hypothesis_id} filed: {title}", True
+
+
+async def hypothesis_list(args: dict, campaign_id: int, stop=None) -> tuple[str, bool]:
+    status = str(args.get("status", "")).strip()
+    with db.db() as conn:
+        counts = {
+            row["status"]: row["c"]
+            for row in conn.execute(
+                "SELECT status, count(*) AS c FROM hypotheses WHERE campaign_id = ? GROUP BY status",
+                (campaign_id,),
+            ).fetchall()
+        }
+        sql = "SELECT * FROM hypotheses WHERE campaign_id = ?"
+        params: list = [campaign_id]
+        if status:
+            sql += " AND status = ?"
+            params.append(status)
+        rows = conn.execute(sql + " ORDER BY id DESC LIMIT 30", params).fetchall()
+
+    summary = ", ".join(f"{counts.get(name, 0)} {name}" for name in ("new", "working", "done", "dead"))
+    if not rows:
+        return f"hypotheses: {summary} (nothing to show)", True
+
+    lines = []
+    for row in rows:
+        line = f"#{row['id']} [{row['status']}] {row['title']} | {row['angle']} | {row['vuln_class']}"
+        if row["result"]:
+            line += f" | result: {row['result'][:160]}"
+        lines.append(line[:400])
+    return f"hypotheses: {summary}\n" + "\n".join(lines), True
+
+
+async def hypothesis_update(args: dict, campaign_id: int, stop=None) -> tuple[str, bool]:
+    try:
+        hypothesis_id = int(args.get("hypothesis_id") or 0)
+    except (TypeError, ValueError):
+        hypothesis_id = 0
+    status = str(args.get("status", "")).strip()
+    if status not in ("new", "working", "done", "dead"):
+        return "error: status must be new, working, done or dead", False
+    result = str(args.get("result", "")).strip()
+
+    with db.db() as conn:
+        row = conn.execute(
+            "SELECT id FROM hypotheses WHERE id = ? AND campaign_id = ?",
+            (hypothesis_id, campaign_id),
+        ).fetchone()
+        if row is None:
+            return f"error: hypothesis #{hypothesis_id} not found", False
+        if result:
+            conn.execute(
+                "UPDATE hypotheses SET status = ?, result = ?, updated_at = datetime('now') WHERE id = ?",
+                (status, result[:1000], hypothesis_id),
+            )
+        else:
+            conn.execute(
+                "UPDATE hypotheses SET status = ?, updated_at = datetime('now') WHERE id = ?",
+                (status, hypothesis_id),
+            )
+    suffix = f" ({result[:160]})" if result else ""
+    return f"hypothesis #{hypothesis_id} -> {status}{suffix}", True
+
+
+def _generator_parts(row) -> list:
+    try:
+        return json.loads(row["parts"] or "[]")
+    except json.JSONDecodeError:
+        return []
+
+
+def _message_snippet(row) -> str:
+    text = str(row["content"] or "")
+    for part in reversed(_generator_parts(row)):
+        if part.get("type") == "tool":
+            text = f"{part.get('name')}: {part.get('output') or ''}"
+            break
+        if part.get("type") == "content" and part.get("text"):
+            text = part["text"]
+            break
+    return text.replace("\n", " ").strip()[:160]
+
+
+def _format_generator_message(row) -> list[str]:
+    lines = []
+    for part in _generator_parts(row):
+        kind = part.get("type")
+        if kind == "thinking" and part.get("text"):
+            lines.append(f"  [thinking] {str(part['text'])[:200]}")
+        elif kind == "content" and part.get("text"):
+            lines.append(f"  [say] {str(part['text'])[:300]}")
+        elif kind == "tool":
+            args = json.dumps(part.get("args") or {})[:120]
+            output = str(part.get("output") or "")[:300]
+            lines.append(f"  [tool] {part.get('name')} {args} -> {output}")
+    if not lines and row["content"]:
+        lines.append(f"  {str(row['content'])[:300]}")
+    return lines
+
+
+async def generator_status(args: dict, campaign_id: int, stop=None) -> tuple[str, bool]:
+    try:
+        generator_id = int(args.get("generator_id") or 0)
+    except (TypeError, ValueError):
+        generator_id = 0
+    try:
+        limit = max(1, min(int(args.get("limit") or 6), 30))
+    except (TypeError, ValueError):
+        limit = 6
+
+    with db.db() as conn:
+        if generator_id:
+            gen = conn.execute(
+                "SELECT * FROM generators WHERE id = ? AND campaign_id = ?",
+                (generator_id, campaign_id),
+            ).fetchone()
+            if gen is None:
+                return f"error: generator #{generator_id} not found", False
+            rows = conn.execute(
+                "SELECT * FROM generator_messages WHERE generator_id = ? ORDER BY id DESC LIMIT ?",
+                (generator_id, limit),
+            ).fetchall()
+            filed = conn.execute(
+                "SELECT id, title, status, vuln_class FROM hypotheses WHERE generator_id = ? ORDER BY id",
+                (generator_id,),
+            ).fetchall()
+
+            lines = [f"generator #{gen['id']} [{gen['status']}] focus: {gen['focus'] or 'general'}, {gen['updated_at']}"]
+            for row in reversed(rows):
+                lines.extend(_format_generator_message(row))
+            if filed:
+                lines.append("filed hypotheses:")
+                lines.extend(
+                    f"  #{h['id']} [{h['status']}] {h['title']} ({h['vuln_class']})" for h in filed
+                )
+            return "\n".join(lines)[:12000], True
+
+        rows = conn.execute(
+            """
+            SELECT g.*,
+                   (SELECT count(*) FROM hypotheses h WHERE h.generator_id = g.id) AS hypothesis_count,
+                   (SELECT id FROM generator_messages m WHERE m.generator_id = g.id ORDER BY id DESC LIMIT 1) AS last_message_id
+            FROM generators g
+            WHERE g.campaign_id = ?
+            ORDER BY g.id DESC
+            LIMIT 10
+            """,
+            (campaign_id,),
+        ).fetchall()
+        if not rows:
+            return "no generators have run for this campaign yet", True
+
+        lines = []
+        for gen in rows:
+            snippet = ""
+            if gen["last_message_id"]:
+                last = conn.execute(
+                    "SELECT content, parts FROM generator_messages WHERE id = ?",
+                    (gen["last_message_id"],),
+                ).fetchone()
+                if last is not None:
+                    snippet = _message_snippet(last)
+            line = (
+                f"#{gen['id']} [{gen['status']}] focus: {gen['focus'] or 'general'}"
+                f" | hypotheses: {gen['hypothesis_count']}"
+            )
+            if snippet:
+                line += f" | last: {snippet}"
+            lines.append(line)
+        return "generators:\n" + "\n".join(lines), True
+
+
+CAMPAIGN_HANDLERS = {
+    "spawn_hypothesis_generator": spawn_hypothesis_generator,
+    "hypothesis_generate": hypothesis_generate,
+    "hypothesis_list": hypothesis_list,
+    "hypothesis_update": hypothesis_update,
+    "generator_status": generator_status,
+}
+
 HANDLERS = {
     "bash": bash,
     "skill": skill,
@@ -402,14 +753,34 @@ HANDLERS = {
 }
 
 
-async def execute(name: str, args: dict, campaign_id: int, stop=None, on_output=None) -> tuple[str, bool, int]:
+async def execute(
+    name: str,
+    args: dict,
+    campaign_id: int,
+    stop=None,
+    on_output=None,
+    allow: set[str] | None = None,
+) -> tuple[str, bool, int]:
     work = _work_dir(campaign_id)
+
+    # per-agent permission layer: a run may only call the tools it was given
+    if allow is not None and name not in allow and not mcp.is_tool(name):
+        return f"error: tool {name} is not available in this context", False, 0
 
     if mcp.is_tool(name):
         started = time.monotonic()
         text, ok = await mcp.call(name, args or {})
         ms = int((time.monotonic() - started) * 1000)
         return _clip(work, text, name), ok, ms
+
+    if name in CAMPAIGN_HANDLERS:
+        started = time.monotonic()
+        try:
+            text, ok = await CAMPAIGN_HANDLERS[name](args or {}, campaign_id, stop)
+        except Exception as exc:
+            text, ok = f"error: {exc}", False
+        ms = int((time.monotonic() - started) * 1000)
+        return text, ok, ms
 
     handler = HANDLERS.get(name)
     if handler is None:

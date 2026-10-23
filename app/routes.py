@@ -8,7 +8,7 @@ from fastapi import APIRouter, File, Form, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
-from . import agent, config, db, mcp, skills, supervisor, uploads
+from . import agent, config, db, mcp, skills, supervisor, tools, uploads
 
 log = logging.getLogger("l4rpness")
 router = APIRouter(prefix="/api")
@@ -337,6 +337,85 @@ async def resume_campaign(campaign_id: int):
     return {"status": "running", "campaign_id": campaign_id}
 
 
+@router.get("/campaigns/{campaign_id}/generators")
+def list_generators(campaign_id: int):
+    with db.db() as conn:
+        load_campaign(conn, campaign_id)
+        rows = conn.execute(
+            """
+            SELECT g.*,
+                   (SELECT count(*) FROM hypotheses h WHERE h.generator_id = g.id) AS hypothesis_count,
+                   (SELECT id FROM generator_messages m WHERE m.generator_id = g.id ORDER BY id DESC LIMIT 1) AS last_message_id
+            FROM generators g
+            WHERE g.campaign_id = ?
+            ORDER BY g.id DESC
+            """,
+            (campaign_id,),
+        ).fetchall()
+
+        entries = []
+        for row in rows:
+            entry = row_dict(row)
+            last = None
+            if row["last_message_id"]:
+                last = conn.execute(
+                    "SELECT content, parts FROM generator_messages WHERE id = ?",
+                    (row["last_message_id"],),
+                ).fetchone()
+            entry["last_snippet"] = tools._message_snippet(last) if last is not None else ""
+            entries.append(entry)
+    return entries
+
+
+@router.get("/generators/{generator_id}/messages")
+def generator_messages(generator_id: int, after: int = 0, limit: int = 0):
+    limit = max(0, min(limit, 500))
+    with db.db() as conn:
+        generator_row = conn.execute(
+            "SELECT * FROM generators WHERE id = ?", (generator_id,)
+        ).fetchone()
+        if generator_row is None:
+            raise HTTPException(404, "generator not found")
+
+        sql = "SELECT * FROM generator_messages WHERE generator_id = ?"
+        params: list = [generator_id]
+        if after:
+            sql += " AND id > ?"
+            params.append(after)
+        sql += " ORDER BY id ASC"
+        if limit:
+            sql += " LIMIT ?"
+            params.append(limit)
+        rows = conn.execute(sql, params).fetchall()
+
+    messages = []
+    for row in rows:
+        try:
+            parts = json.loads(row["parts"] or "[]")
+        except json.JSONDecodeError:
+            parts = []
+        messages.append({**row_dict(row), "parts": parts})
+    return messages
+
+
+@router.get("/campaigns/{campaign_id}/hypotheses")
+def list_hypotheses(campaign_id: int):
+    with db.db() as conn:
+        load_campaign(conn, campaign_id)
+        rows = conn.execute(
+            """
+            SELECT * FROM hypotheses
+            WHERE campaign_id = ?
+            ORDER BY CASE status
+                WHEN 'new' THEN 0 WHEN 'working' THEN 1 WHEN 'review' THEN 2 ELSE 3
+            END, id DESC
+            LIMIT 200
+            """,
+            (campaign_id,),
+        ).fetchall()
+    return [row_dict(row) for row in rows]
+
+
 class MessageIn(BaseModel):
     content: str
 
@@ -433,7 +512,7 @@ def _campaign_usage(campaign_id: int) -> dict:
     return {"in": row["usage_in"], "out": row["usage_out"], "ctx": row["last_prompt_tokens"]}
 
 
-async def _run(campaign_id, campaign, attachments, history, content, run, files=(), store_user=True, keep=False):
+async def _run(campaign_id, campaign, attachments, history, content, run, files=(), store_user=True, keep=False, tool_kind=None):
     """The agent turn, detached from any client so closing the tab does not kill it.
 
     The user message and an assistant placeholder are written before the model
@@ -552,9 +631,20 @@ async def _run(campaign_id, campaign, attachments, history, content, run, files=
         stored = False
 
     try:
-        async for kind, data in agent.run(
-            campaign, attachments, history, campaign_id, stop, on_tool_output=on_tool_output
-        ):
+        stream = (
+            agent.run(campaign, attachments, history, campaign_id, stop, on_tool_output=on_tool_output)
+            if tool_kind is None
+            else agent.run(
+                campaign,
+                attachments,
+                history,
+                campaign_id,
+                stop,
+                on_tool_output=on_tool_output,
+                tool_kind=tool_kind,
+            )
+        )
+        async for kind, data in stream:
             if kind == "thinking":
                 thinking.append(data)
                 add_text("thinking", data)
