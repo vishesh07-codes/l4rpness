@@ -52,12 +52,13 @@ def build_prompt(campaign, attachment_rows) -> str:
     )
 
 
-async def _step(client, campaign, messages, calls: list) -> AsyncIterator[tuple[str, Any]]:
+async def _step(client, campaign, messages, calls: list, usage: dict) -> AsyncIterator[tuple[str, Any]]:
     response = await client.chat.completions.create(
         model=campaign["model"],
         messages=cast(Any, messages),
         tools=cast(Any, tools.SCHEMAS),
         stream=True,
+        stream_options={"include_usage": True},
         temperature=config.TEMPERATURE,
         reasoning_effort=cast(Any, campaign["effort"] or config.DEFAULT_EFFORT),
         extra_body={"thinking": {"type": "enabled"}},
@@ -66,6 +67,18 @@ async def _step(client, campaign, messages, calls: list) -> AsyncIterator[tuple[
     assembled: dict[int, dict] = {}
     announced: set[int] = set()
     async for chunk in response:
+        # the final usage chunk carries no choices, so read it before skipping
+        reported = getattr(chunk, "usage", None)
+        if reported is not None:
+            usage["input_tokens"] += int(getattr(reported, "prompt_tokens", 0) or 0)
+            usage["output_tokens"] += int(getattr(reported, "completion_tokens", 0) or 0)
+            details = getattr(reported, "prompt_tokens_details", None)
+            cached = getattr(details, "cached_tokens", None) if details else None
+            if cached is None:
+                cached = getattr(reported, "prompt_cache_hit_tokens", 0)
+            usage["cached_tokens"] += int(cached or 0)
+            usage["requests"] += 1
+
         if not chunk.choices:
             continue
         delta = chunk.choices[0].delta
@@ -96,13 +109,15 @@ async def _step(client, campaign, messages, calls: list) -> AsyncIterator[tuple[
         calls.append({**entry, "args": args})
 
 
-async def run(campaign, attachment_rows, history, campaign_id, stop=None) -> AsyncIterator[tuple[str, Any]]:
+async def run(campaign, attachment_rows, history, campaign_id, stop=None, usage=None) -> AsyncIterator[tuple[str, Any]]:
     client = _client()
     messages: list[dict] = [{"role": "system", "content": build_prompt(campaign, attachment_rows)}]
     messages += [{"role": m["role"], "content": m["content"]} for m in history]
 
     calls: list[dict] = []
     steps = 0
+    if usage is None:
+        usage = {"input_tokens": 0, "cached_tokens": 0, "output_tokens": 0, "requests": 0}
 
     while True:
         if stop is not None and stop.is_set():
@@ -113,7 +128,7 @@ async def run(campaign, attachment_rows, history, campaign_id, stop=None) -> Asy
         thinking: list[str] = []
         content: list[str] = []
 
-        async for kind, data in _step(client, campaign, messages, calls):
+        async for kind, data in _step(client, campaign, messages, calls, usage):
             if stop is not None and stop.is_set():
                 yield "stopped", None
                 return

@@ -26,3 +26,10 @@ bash_output_bytes = 10485760
 output_chars = 20000
 read_max_lines = 2000
 http_timeout = 30
+
+[pricing]
+# USD per 1M tokens, used only to show billed spend on the usage page.
+# Leave at 0 to report token usage with no dollar amount.
+input = 0.0
+cached_input = 0.0
+output = 0.0

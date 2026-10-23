@@ -26,6 +26,11 @@ CREATE TABLE IF NOT EXISTS messages (
     reasoning TEXT NOT NULL DEFAULT '',
     tool_calls TEXT NOT NULL DEFAULT '[]',
     parts TEXT NOT NULL DEFAULT '[]',
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    cached_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    requests INTEGER NOT NULL DEFAULT 0,
+    cost_usd REAL NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -77,6 +82,16 @@ def migrate(conn):
         conn.execute("ALTER TABLE messages ADD COLUMN tool_calls TEXT NOT NULL DEFAULT '[]'")
     if "parts" not in _columns(conn, "messages"):
         conn.execute("ALTER TABLE messages ADD COLUMN parts TEXT NOT NULL DEFAULT '[]'")
+    if "input_tokens" not in _columns(conn, "messages"):
+        conn.execute("ALTER TABLE messages ADD COLUMN input_tokens INTEGER NOT NULL DEFAULT 0")
+    if "cached_tokens" not in _columns(conn, "messages"):
+        conn.execute("ALTER TABLE messages ADD COLUMN cached_tokens INTEGER NOT NULL DEFAULT 0")
+    if "output_tokens" not in _columns(conn, "messages"):
+        conn.execute("ALTER TABLE messages ADD COLUMN output_tokens INTEGER NOT NULL DEFAULT 0")
+    if "requests" not in _columns(conn, "messages"):
+        conn.execute("ALTER TABLE messages ADD COLUMN requests INTEGER NOT NULL DEFAULT 0")
+    if "cost_usd" not in _columns(conn, "messages"):
+        conn.execute("ALTER TABLE messages ADD COLUMN cost_usd REAL NOT NULL DEFAULT 0")
 
 
 def init():

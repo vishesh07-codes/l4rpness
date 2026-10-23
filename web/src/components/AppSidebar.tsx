@@ -1,15 +1,18 @@
-import { LayoutGrid } from "lucide-react"
+import { BarChart3, LayoutGrid } from "lucide-react"
 import { Link, useLocation } from "react-router-dom"
 
 import { cn } from "@/lib/utils"
 
-const nav = [{ to: "/", label: "Dashboard", icon: LayoutGrid }]
+const nav = [
+  { to: "/", label: "Dashboard", icon: LayoutGrid },
+  { to: "/usage", label: "Usage", icon: BarChart3 },
+]
 
 export function AppSidebar() {
   const { pathname } = useLocation()
 
   return (
-    <aside className="app-sidebar fixed inset-y-0 left-0 z-10 flex w-56 flex-col border-r border-neutral-300 bg-muted dark:border-neutral-700 dark:bg-black/70">
+    <aside className="app-sidebar fixed inset-y-0 left-0 z-10 flex w-56 flex-col border-r border-sidebar-border bg-sidebar">
       <div className="flex h-14 items-center px-5 text-sm font-semibold tracking-tight">
         l4rpness
       </div>
@@ -25,7 +28,7 @@ export function AppSidebar() {
                 active && "bg-accent text-foreground"
               )}
             >
-              <Icon className="size-4" />
+              <Icon className="size-4" strokeWidth={1.5} />
               {label}
             </Link>
           )

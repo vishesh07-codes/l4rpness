@@ -111,7 +111,7 @@ def test_prompt_includes_attachment_text(client):
 
 
 def test_chat_streams_and_stores_messages(client, monkeypatch):
-    async def fake_run(campaign, attachments, history, campaign_id, stop=None):
+    async def fake_run(campaign, attachments, history, campaign_id, stop=None, usage=None):
         yield "thinking", "weighing it"
         yield "content", "ack: " + history[-1]["content"]
 
@@ -132,7 +132,7 @@ def test_chat_streams_and_stores_messages(client, monkeypatch):
 
 
 def test_chat_failure_keeps_partial_reply(client, monkeypatch):
-    async def broken_run(campaign, attachments, history, campaign_id, stop=None):
+    async def broken_run(campaign, attachments, history, campaign_id, stop=None, usage=None):
         yield "content", "partial"
         raise RuntimeError("boom")
 
@@ -149,7 +149,7 @@ def test_chat_failure_keeps_partial_reply(client, monkeypatch):
 
 
 def test_chat_failure_before_output_keeps_user_message(client, monkeypatch):
-    async def instant_failure(campaign, attachments, history, campaign_id, stop=None):
+    async def instant_failure(campaign, attachments, history, campaign_id, stop=None, usage=None):
         raise RuntimeError("boom")
         yield
 
@@ -167,7 +167,7 @@ def test_chat_failure_before_output_keeps_user_message(client, monkeypatch):
 def test_tool_loop_logs_calls(client, monkeypatch):
     state = {"steps": 0}
 
-    async def fake_step(http, campaign, messages, calls):
+    async def fake_step(http, campaign, messages, calls, usage=None):
         state["steps"] += 1
         if state["steps"] > 1:
             yield "content", "done"
@@ -200,7 +200,7 @@ def test_tool_loop_logs_calls(client, monkeypatch):
 
 
 def test_tool_step_cap(client, monkeypatch):
-    async def always_calls(http, campaign, messages, calls):
+    async def always_calls(http, campaign, messages, calls, usage=None):
         calls.append({"id": "c1", "name": "bash", "arguments": "{}", "args": {}})
         yield "content", "step"
 
@@ -220,7 +220,7 @@ def test_tool_step_cap(client, monkeypatch):
 
 
 def test_delete_campaign(client, monkeypatch):
-    async def fake_run(campaign, attachments, history, campaign_id, stop=None):
+    async def fake_run(campaign, attachments, history, campaign_id, stop=None, usage=None):
         yield "content", "ok"
 
     monkeypatch.setattr(agent, "run", fake_run)
@@ -294,7 +294,7 @@ def test_live_snapshot(client):
 
 
 def test_stopped_run_stores_partial(client, monkeypatch):
-    async def stopped_run(campaign, attachments, history, campaign_id, stop=None):
+    async def stopped_run(campaign, attachments, history, campaign_id, stop=None, usage=None):
         yield "content", "half"
         yield "stopped", None
 
@@ -313,7 +313,7 @@ def test_stopped_run_stores_partial(client, monkeypatch):
 def test_agent_run_honours_stop(monkeypatch):
     stop = asyncio.Event()
 
-    async def fake_step(http, campaign, messages, calls):
+    async def fake_step(http, campaign, messages, calls, usage=None):
         yield "content", "partial"
         stop.set()
 
@@ -339,3 +339,24 @@ def test_agent_run_honours_stop(monkeypatch):
     events = asyncio.run(collect())
     assert events[-1] == ("stopped", None)
     assert ("content", "partial") in events
+def test_usage_endpoint_reports_tokens(client, monkeypatch):
+    async def fake_run(campaign, attachments, history, campaign_id, stop=None, usage=None):
+        if usage is not None:
+            usage.update(input_tokens=100, cached_tokens=40, output_tokens=20, requests=1)
+        yield "content", "ok"
+
+    monkeypatch.setattr(agent, "run", fake_run)
+    campaign = create(client)
+    client.post(f"/api/campaigns/{campaign['id']}/messages", json={"content": "hi"})
+
+    messages = client.get(f"/api/campaigns/{campaign['id']}/messages").json()
+    assert messages[1]["input_tokens"] == 100
+    assert messages[1]["cached_tokens"] == 40
+
+    rows = client.get("/api/usage?days=7").json()
+    assert len(rows) == 1
+    assert rows[0]["provider"] == "deepseek"
+    assert rows[0]["inputTokens"] == 100
+    assert rows[0]["cachedInputTokens"] == 40
+    assert rows[0]["outputTokens"] == 20
+    assert rows[0]["requests"] == 1
