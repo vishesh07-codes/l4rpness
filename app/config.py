@@ -41,7 +41,11 @@ DEFAULTS = {
         "total_char_cap": 120_000,
     },
     "tools": {
-        "max_steps": 50,
+        "max_steps": 300,
+        # tail of the step budget reserved for reporting: once this many steps
+        # remain, only the reporting tools are offered so a worker can always
+        # write its evidence and close out instead of dying mid-exploit.
+        "report_reserve_steps": 20,
         "bash_timeout": 120,
         "bash_output_bytes": 10 * 1024 * 1024,
         "output_chars": 20_000,
@@ -55,6 +59,17 @@ DEFAULTS = {
     },
     "hypotheses": {
         "max_generators": 5,
+        # hunter workers: how many may run at once, and how many hypotheses one
+        # worker is handed per dispatch.
+        "max_workers": 5,
+        "max_hypotheses_per_worker": 3,
+    },
+    "vm": {
+        # Kernel-pentest VM. The hypervisor lives on the host (vm/vmctl.py);
+        # this is only the socket the container is allowed to talk to.
+        "sock": "/app/vm/run/vm.sock",
+        "call_timeout": 30,
+        "exec_timeout": 120,
     },
 }
 
@@ -234,8 +249,9 @@ def refresh_runtime() -> None:
     global BASE_URL, THINKING, API_KEY, CONFIGURED
     global DEFAULT_MODEL, DEFAULT_EFFORT, EFFORTS, REQUEST_TIMEOUT, TEMPERATURE
     global SUPERVISOR_BACKOFF, COMPACT_AT_TOKENS, COMPACT_KEEP_MESSAGES
-    global MAX_GENERATORS
-    global MAX_TOOL_STEPS, BASH_TIMEOUT, BASH_OUTPUT_BYTES
+    global MAX_GENERATORS, MAX_WORKERS, MAX_HYPOTHESES_PER_WORKER
+    global VM_SOCK, VM_CALL_TIMEOUT, VM_EXEC_TIMEOUT
+    global MAX_TOOL_STEPS, REPORT_RESERVE_STEPS, BASH_TIMEOUT, BASH_OUTPUT_BYTES
     global TOOL_OUTPUT_CHARS, READ_MAX_LINES, HTTP_TIMEOUT
     global MAX_UPLOAD_BYTES, MAX_FILES_PER_FIELD, FILE_CHAR_CAP, TOTAL_CHAR_CAP
 
@@ -255,7 +271,13 @@ def refresh_runtime() -> None:
     COMPACT_AT_TOKENS = SETTINGS["supervisor"]["compact_at_tokens"]
     COMPACT_KEEP_MESSAGES = SETTINGS["supervisor"]["compact_keep_messages"]
     MAX_GENERATORS = SETTINGS["hypotheses"]["max_generators"]
+    MAX_WORKERS = SETTINGS["hypotheses"]["max_workers"]
+    MAX_HYPOTHESES_PER_WORKER = SETTINGS["hypotheses"]["max_hypotheses_per_worker"]
+    VM_SOCK = SETTINGS["vm"]["sock"]
+    VM_CALL_TIMEOUT = SETTINGS["vm"]["call_timeout"]
+    VM_EXEC_TIMEOUT = SETTINGS["vm"]["exec_timeout"]
     MAX_TOOL_STEPS = SETTINGS["tools"]["max_steps"]
+    REPORT_RESERVE_STEPS = SETTINGS["tools"]["report_reserve_steps"]
     BASH_TIMEOUT = SETTINGS["tools"]["bash_timeout"]
     BASH_OUTPUT_BYTES = SETTINGS["tools"]["bash_output_bytes"]
     TOOL_OUTPUT_CHARS = SETTINGS["tools"]["output_chars"]
@@ -355,8 +377,15 @@ SUPERVISOR_BACKOFF = SETTINGS["supervisor"]["error_backoff_seconds"]
 COMPACT_AT_TOKENS = SETTINGS["supervisor"]["compact_at_tokens"]
 COMPACT_KEEP_MESSAGES = SETTINGS["supervisor"]["compact_keep_messages"]
 MAX_GENERATORS = SETTINGS["hypotheses"]["max_generators"]
+MAX_WORKERS = SETTINGS["hypotheses"]["max_workers"]
+MAX_HYPOTHESES_PER_WORKER = SETTINGS["hypotheses"]["max_hypotheses_per_worker"]
+
+VM_SOCK = SETTINGS["vm"]["sock"]
+VM_CALL_TIMEOUT = SETTINGS["vm"]["call_timeout"]
+VM_EXEC_TIMEOUT = SETTINGS["vm"]["exec_timeout"]
 
 MAX_TOOL_STEPS = SETTINGS["tools"]["max_steps"]
+REPORT_RESERVE_STEPS = SETTINGS["tools"]["report_reserve_steps"]
 BASH_TIMEOUT = SETTINGS["tools"]["bash_timeout"]
 BASH_OUTPUT_BYTES = SETTINGS["tools"]["bash_output_bytes"]
 TOOL_OUTPUT_CHARS = SETTINGS["tools"]["output_chars"]

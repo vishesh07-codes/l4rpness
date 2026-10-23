@@ -23,9 +23,12 @@ thinking = false
 # Context-window pins, keyed by model as shown in the picker (the bare id
 # after the provider prefix works too, e.g. "ds/deepseek-v4-flash" for
 # "localhost-9/ds/deepseek-v4-flash"). A pin wins over the provider listing,
-# so use it to set a window the listing reports wrong or not at all — the
-# 9router ones report their own live via /v1/models; DeepSeek's /v1/models is
-# id-only, so deepseek-* come from https://api-docs.deepseek.com/quick_start/pricing
+# so use it to set a window the listing reports wrong or not at all. The
+# gateway ids (ds/*) never appear in a listing when that gateway is down, so
+# they must be pinned or every campaign on them silently runs on the 128k
+# fallback. DeepSeek's /v1/models does report context_window (1048576 for
+# deepseek-flash/-v4-pro) and the listing is read when the provider is up;
+# pins below follow https://api-docs.deepseek.com/quick_start/pricing
 # ("CONTEXT LENGTH 1M"). Models with neither a pin nor a reported window fall
 # back to 128k. Used for the auto compaction trigger and the in-chain budget.
 [llm.limits]
@@ -33,6 +36,9 @@ thinking = false
 "deepseek-v4-pro" = 1000000
 "deepseek-chat" = 1000000
 "deepseek-reasoner" = 1000000
+# localhost-9 gateway ids (what campaigns actually run on)
+"ds/deepseek-v4-flash" = 1000000
+"ds/deepseek-v4-pro" = 1000000
 
 [storage]
 data_dir = "data"
@@ -51,7 +57,8 @@ file_char_cap = 50000
 total_char_cap = 120000
 
 [tools]
-max_steps = 50 # per-chain tool steps; the supervisor rolls into the next chain after
+max_steps = 300 # per-chain tool steps; the supervisor rolls into the next chain after
+report_reserve_steps = 20 # tail of the budget where only the reporting tools are offered
 bash_timeout = 120
 bash_output_bytes = 10485760
 output_chars = 20000
@@ -74,6 +81,19 @@ compact_keep_messages = 8
 [hypotheses]
 # how many hypothesis generators may run at the same time per campaign
 max_generators = 5
+# how many hunter workers may run at the same time per campaign
+max_workers = 5
+# hypotheses handed to one hunter worker per dispatch
+max_hypotheses_per_worker = 3
+
+[vm]
+# Kernel-pentest VM: a QEMU guest running the host's own kernel, for LPE and
+# QEMU-escape work. The hypervisor runs on the host (vm/vmctl.py, started by
+# you, not by the container) and the only thing the container gets is this
+# socket. Enable per campaign with the "kernel pentest" checkbox.
+sock = "/app/vm/run/vm.sock"
+call_timeout = 30
+exec_timeout = 120
 
 [llm.providers.localhost-9]
 base_url = "http://host.docker.internal:20128/v1"

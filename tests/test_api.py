@@ -7,7 +7,7 @@ os.environ["DEEPSEEK_API_KEY"] = "test-key"
 import pytest
 from fastapi.testclient import TestClient
 
-from app import agent, config, db, routes, supervisor, tools
+from app import agent, config, db, routes, supervisor, tools, vm
 from app.main import app
 
 
@@ -181,7 +181,7 @@ def test_invalid_tool_arguments_reported_not_executed(client, monkeypatch):
         })
         yield "content", "calling"
 
-    async def fake_execute(name, args, campaign_id, stop=None, on_output=None):
+    async def fake_execute(name, args, campaign_id, stop=None, on_output=None, **kwargs):
         state["executed"] += 1
         return "should not run", True, 1
 
@@ -260,7 +260,7 @@ def test_tool_loop_logs_calls(client, monkeypatch):
         calls.append({"id": "c1", "name": "bash", "arguments": '{"cmd": "echo hi"}', "args": {"cmd": "echo hi"}})
         yield "content", "running"
 
-    async def fake_execute(name, args, campaign_id, stop=None, on_output=None):
+    async def fake_execute(name, args, campaign_id, stop=None, on_output=None, **kwargs):
         return "hi\n[exit code 0]", True, 7
 
     monkeypatch.setattr(agent, "_step", fake_step)
@@ -291,7 +291,7 @@ def test_tool_step_cap(client, monkeypatch):
         calls.append({"id": "c1", "name": "bash", "arguments": "{}", "args": {}})
         yield "content", "step"
 
-    async def fake_execute(name, args, campaign_id, stop=None, on_output=None):
+    async def fake_execute(name, args, campaign_id, stop=None, on_output=None, **kwargs):
         return "ok", True, 1
 
     monkeypatch.setattr(agent, "_step", always_calls)
@@ -925,6 +925,120 @@ def test_generator_and_hypothesis_endpoints(client):
     hypotheses = client.get(f"/api/campaigns/{campaign['id']}/hypotheses").json()
     assert hypotheses[0]["title"] == "T1"
     assert hypotheses[0]["generator_id"] == generator_id
+
+
+def test_workers_and_hunts_api(client):
+    campaign = create(client)
+    cid = campaign["id"]
+    with db.db() as conn:
+        cur = conn.execute(
+            "INSERT INTO workers (campaign_id, title, note, status) VALUES (?, 'SQLi in search', 'go deep', 'done')",
+            (cid,),
+        )
+        worker_id = cur.lastrowid
+        assert worker_id is not None
+        conn.execute(
+            "INSERT INTO worker_messages (worker_id, role, content, parts) VALUES (?, 'assistant', 'hi', ?)",
+            (worker_id, json.dumps([{"type": "content", "text": "hi"}])),
+        )
+        hyp = conn.execute(
+            "INSERT INTO hypotheses (campaign_id, worker_id, title, angle, vuln_class, rationale, status) "
+            "VALUES (?, ?, 'T1', 'a', 'sqli', 'r', 'review')",
+            (cid, worker_id),
+        )
+        conn.execute(
+            """
+            INSERT INTO hunts (campaign_id, worker_id, hypothesis_id, verdict, severity,
+                               impact, poc_path, repro, evidence)
+            VALUES (?, ?, ?, 'confirmed', 'high', 'dump the users table', 'hunters/1/poc/run.sh', 'run it', 'HTTP 200')
+            """,
+            (cid, worker_id, hyp.lastrowid),
+        )
+
+    workers = client.get(f"/api/campaigns/{cid}/workers").json()
+    assert workers[0]["title"] == "SQLi in search"
+    assert workers[0]["note"] == "go deep"
+    assert workers[0]["hypothesis_count"] == 1
+    assert workers[0]["result_count"] == 1
+    assert workers[0]["last_snippet"] == "hi"
+
+    messages = client.get(f"/api/workers/{worker_id}/messages").json()
+    assert messages[0]["parts"][0]["text"] == "hi"
+    assert client.get("/api/workers/99999/messages").status_code == 404
+
+    hunts = client.get(f"/api/campaigns/{cid}/hunts").json()
+    assert hunts[0]["verdict"] == "confirmed"
+    assert hunts[0]["poc_path"] == "hunters/1/poc/run.sh"
+
+
+def test_create_campaign_kernel_vm_flags(client, monkeypatch):
+    plain = create(client, target="plain.example")
+    assert plain["kernel_enabled"] == 0 and plain["kernel_root_access"] == 0
+    assert client.get(f"/api/campaigns/{plain['id']}/vm").json() == {"enabled": False}
+
+    res = client.post(
+        "/api/campaigns",
+        data={
+            "target": "kernel.example",
+            "model": "deepseek-chat",
+            "kernel": "true",
+            "kernel_root_access": "true",
+        },
+    )
+    assert res.status_code == 201, res.text
+    body = res.json()
+    assert body["kernel_enabled"] == 1 and body["kernel_root_access"] == 1
+
+    # the sub-options are meaningless without the VM, and must not be stored
+    res = client.post(
+        "/api/campaigns",
+        data={
+            "target": "nope.example",
+            "model": "deepseek-chat",
+            "kernel_root_access": "true",
+            "kernel_flag": "true",
+        },
+    )
+    assert res.json()["kernel_root_access"] == 0
+    assert res.json()["kernel_root_flag"] == 0
+
+    res = client.post(
+        "/api/campaigns",
+        data={"target": "flag.example", "model": "deepseek-chat", "kernel": "true", "kernel_flag": "true"},
+    )
+    body = res.json()
+    assert body["kernel_enabled"] == 1 and body["kernel_root_flag"] == 1
+    assert body["kernel_root_access"] == 0
+
+
+def test_campaign_vm_endpoint_reports_the_control_plane(client, monkeypatch):
+    from app import vmctl
+
+    async def down(*args, **kwargs):
+        raise vmctl.Unavailable("no socket")
+
+    monkeypatch.setattr(vmctl, "call", down)
+
+    campaign = create(client, target="kernel.example")
+    with db.db() as conn:
+        conn.execute("UPDATE campaigns SET kernel_enabled = 1 WHERE id = ?", (campaign["id"],))
+
+    body = client.get(f"/api/campaigns/{campaign['id']}/vm").json()
+    assert body["enabled"] is True
+    assert body["state"] == "unavailable"
+    assert "no socket" in body["error"]
+
+
+def test_delete_campaign_tears_the_vm_down(client, monkeypatch):
+    destroyed = []
+
+    async def fake_destroy(campaign_id):
+        destroyed.append(campaign_id)
+
+    monkeypatch.setattr(vm, "destroy", fake_destroy)
+    campaign = create(client, target="kernel.example")
+    assert client.delete(f"/api/campaigns/{campaign['id']}").status_code == 200
+    assert destroyed == [campaign["id"]]
 
 
 def test_usage_is_tracked_and_streamed(client, monkeypatch):

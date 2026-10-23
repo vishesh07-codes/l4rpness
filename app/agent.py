@@ -7,7 +7,7 @@ from collections.abc import AsyncIterator
 from string import Template
 from typing import Any, cast
 
-from openai import AsyncOpenAI, BadRequestError
+from openai import APIConnectionError, APITimeoutError, AsyncOpenAI, BadRequestError
 from openai.types.chat import ChatCompletionMessageParam
 
 from . import config, mcp, skills, tools, uploads
@@ -106,24 +106,32 @@ async def models() -> list[str]:
 def _limit_from_entry(entry) -> int | None:
     """Context window off a provider's model listing, any shape.
 
-    9router exposes capabilities.contextWindow (falling back to top-level
-    context_length); OpenAI-style listings carry neither. Anything
-    unrecognized yields None so limit plumbing never breaks model listing.
+    9router exposes capabilities.contextWindow; DeepSeek's /v1/models carries a
+    top-level context_window; OpenAI-style listings carry context_length or
+    nothing. Anything unrecognized yields None so limit plumbing never breaks
+    model listing.
     """
+
+    def positive_int(value) -> int | None:
+        # bools are ints in Python: a True window is junk, not a 1-token model
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+            return None
+        return int(value)
+
+    def field(name):
+        return entry.get(name) if isinstance(entry, dict) else getattr(entry, name, None)
+
     try:
-        caps = entry.get("capabilities") if isinstance(entry, dict) else getattr(entry, "capabilities", None)
-        window = caps.get("contextWindow") if isinstance(caps, dict) else getattr(caps, "contextWindow", None)
-        if isinstance(window, bool):
-            window = None
-        if isinstance(window, (int, float)) and window > 0:
-            return int(window)
-        length = (
-            entry.get("context_length") if isinstance(entry, dict) else getattr(entry, "context_length", None)
-        )
-        if isinstance(length, bool):
-            length = None
-        if isinstance(length, (int, float)) and length > 0:
-            return int(length)
+        caps = field("capabilities")
+        candidates = [
+            caps.get("contextWindow") if isinstance(caps, dict) else getattr(caps, "contextWindow", None),
+            field("context_window"),
+            field("context_length"),
+        ]
+        for candidate in candidates:
+            limit = positive_int(candidate)
+            if limit is not None:
+                return limit
     except Exception:
         log.warning("unreadable model limit entry: %r", type(entry))
     return None
@@ -297,6 +305,16 @@ class ContextTooLargeError(Exception):
     """The provider rejected the request as exceeding the model window."""
 
 
+def summarizer_unreachable(exc: BaseException) -> bool:
+    """True when a call never reached the provider (transport failure).
+
+    A dead/timeout endpoint is not a verdict on the request: callers must retry
+    it rather than treat it as a bad fold, a bad prompt, or no progress. Kept
+    here so the SDK's error surface stays in one module.
+    """
+    return isinstance(exc, (APIConnectionError, APITimeoutError))
+
+
 def _looks_like_context_error(exc: Exception) -> bool:
     # Substring matching over "ClassName: message" only — provider SDKs differ
     # in shape, so this is a heuristic, not a complete classifier (see the
@@ -366,10 +384,47 @@ def estimate_messages_tokens(messages: list[dict]) -> int:
     return max(chars // EST_CHARS_PER_TOKEN, 1)
 
 
-def measured_schema_tokens(tool_kind: str | None, campaign) -> int:
+# Tail of the step budget: once this many steps remain the only tools left are
+# the ones that persist evidence and end the run, so a run can always close
+# out with what it found instead of dying mid-exploit.
+_REPORT_DONE_TOOL = {
+    "supervisor": "complete_engagement (goal mode only) or simply end your turn",
+    "generator": "generator_done",
+    "hunter": "hunter_done",
+}
+
+
+def _report_phase(tool_kind: str | None, steps: int) -> bool:
+    """True once only the reporting tools should be offered.
+
+    Only kinds that actually have a reporting set qualify (a plain chat turn
+    must not lose its tools), and the reserve can never eat the whole budget.
+    """
+    if tool_kind is None or not tools.REPORTING_TOOLS.get(tool_kind):
+        return False
+    limit = config.MAX_TOOL_STEPS
+    if limit <= 0:
+        return False
+    reserve = min(config.REPORT_RESERVE_STEPS, max(0, limit - 1))
+    if reserve <= 0:
+        return False
+    return steps >= limit - reserve
+
+
+def _report_nudge(tool_kind: str | None, remaining: int) -> str:
+    done = _REPORT_DONE_TOOL.get(tool_kind or "", "end your turn")
+    return (
+        f"Step budget nearly exhausted: {remaining} tool step(s) left. Stop all "
+        "exploration and testing NOW. If you found something, write the evidence "
+        "and a runnable PoC to disk with write_file, file your result, then finish "
+        f"by calling {done}. Do not start new work."
+    )
+
+
+def measured_schema_tokens(tool_kind: str | None, campaign, phase: str | None = None) -> int:
     """Serialized tool schemas for this run, in tokens (same heuristic)."""
     try:
-        schemas = tools.schemas_for(tool_kind, _campaign_mode(campaign))
+        schemas = tools.schemas_for(tool_kind, campaign, phase)
         return max(len(json.dumps(schemas)) // EST_CHARS_PER_TOKEN, 0)
     except Exception:
         return 0
@@ -400,7 +455,7 @@ def _prune_in_memory(messages: list[dict], keep_newest: int = 8) -> bool:
     return pruned
 
 
-async def _step(client, campaign, messages, calls: list, tool_kind: str | None = None) -> AsyncIterator[tuple[str, Any]]:
+async def _step(client, campaign, messages, calls: list, tool_kind: str | None = None, phase: str | None = None) -> AsyncIterator[tuple[str, Any]]:
     provider, model = split_model(campaign["model"])
     conf = config.PROVIDERS.get(provider, {})
 
@@ -419,7 +474,7 @@ async def _step(client, campaign, messages, calls: list, tool_kind: str | None =
     request: dict = dict(
         model=model,
         messages=cast(Any, messages),
-        tools=cast(Any, tools.schemas_for(tool_kind, _campaign_mode(campaign))),
+        tools=cast(Any, tools.schemas_for(tool_kind, campaign, phase)),
         stream=True,
         temperature=config.TEMPERATURE,
         **extra,
@@ -497,10 +552,13 @@ async def _step(client, campaign, messages, calls: list, tool_kind: str | None =
         }
 
 
-async def run(campaign, attachment_rows, history, campaign_id, stop=None, on_tool_output=None, tool_kind=None, include_attachments: bool = True) -> AsyncIterator[tuple[str, Any]]:
+async def run(campaign, attachment_rows, history, campaign_id, stop=None, on_tool_output=None, tool_kind=None, include_attachments: bool = True, work=None, scope: str = "", extra_system: str = "", worker_id: int | None = None) -> AsyncIterator[tuple[str, Any]]:
     provider, _ = split_model(campaign["model"])
     client = _client(provider)
-    messages: list[dict] = [{"role": "system", "content": build_prompt(campaign, attachment_rows, include_attachments=include_attachments, tool_kind=tool_kind)}]
+    system = build_prompt(campaign, attachment_rows, include_attachments=include_attachments, tool_kind=tool_kind)
+    if extra_system:
+        system += "\n\n---\n\n" + extra_system
+    messages: list[dict] = [{"role": "system", "content": system}]
     for message in history:
         # chat history is role/content; the supervisor replays tool calls too
         entry = {
@@ -512,11 +570,20 @@ async def run(campaign, attachment_rows, history, campaign_id, stop=None, on_too
 
     calls: list[dict] = []
     steps = 0
+    nudged = False
 
     while True:
         if stop is not None and stop.is_set():
             yield "stopped", None
             return
+
+        # Tail of the step budget: everything except the reporting tools is
+        # withdrawn so the run spends its last steps writing evidence and
+        # closing out, never starting work it cannot finish. Applied once as a
+        # nudge, then enforced through the schema set and the allow-list.
+        report_phase = _report_phase(tool_kind, steps)
+        phase = "report" if report_phase else None
+        allow = tools.allowed_for(tool_kind, campaign, phase) if tool_kind is not None else None
 
         # Hard in-chain budget: tool results accumulate verbatim in `messages`
         # and compaction only runs between chains. Estimate the pending
@@ -531,10 +598,10 @@ async def run(campaign, attachment_rows, history, campaign_id, stop=None, on_too
             usable = usable_context(campaign["model"])
         except Exception:
             usable = FALLBACK_LIMIT - COMPACT_RESERVE
-        schemas = measured_schema_tokens(tool_kind, campaign)
+        schemas = measured_schema_tokens(tool_kind, campaign, phase)
         if estimate_messages_tokens(messages) + schemas >= usable - SAFETY_MARGIN_TOKENS:
             _prune_in_memory(messages)
-            schemas = measured_schema_tokens(tool_kind, campaign)
+            schemas = measured_schema_tokens(tool_kind, campaign, phase)
             if estimate_messages_tokens(messages) + schemas >= usable - SAFETY_MARGIN_TOKENS:
                 yield (
                     "truncated",
@@ -543,6 +610,13 @@ async def run(campaign, attachment_rows, history, campaign_id, stop=None, on_too
                 )
                 return
 
+        if report_phase and not nudged:
+            nudged = True
+            messages.append({
+                "role": "user",
+                "content": _report_nudge(tool_kind, max(config.MAX_TOOL_STEPS - steps, 0)),
+            })
+
         calls.clear()
         thinking: list[str] = []
         content: list[str] = []
@@ -550,7 +624,7 @@ async def run(campaign, attachment_rows, history, campaign_id, stop=None, on_too
         step = (
             _step(client, campaign, messages, calls)
             if tool_kind is None
-            else _step(client, campaign, messages, calls, tool_kind)
+            else _step(client, campaign, messages, calls, tool_kind, phase)
         )
         async for kind, data in step:
             if stop is not None and stop.is_set():
@@ -602,7 +676,8 @@ async def run(campaign, attachment_rows, history, campaign_id, stop=None, on_too
 
                 if tool_kind is None:
                     output, ok, ms = await tools.execute(
-                        call["name"], call["args"], campaign_id, stop, on_output=stream_chunk
+                        call["name"], call["args"], campaign_id, stop,
+                        on_output=stream_chunk, work=work, scope=scope, worker_id=worker_id,
                     )
                 else:
                     output, ok, ms = await tools.execute(
@@ -611,7 +686,10 @@ async def run(campaign, attachment_rows, history, campaign_id, stop=None, on_too
                         campaign_id,
                         stop,
                         on_output=stream_chunk,
-                        allow=tools.allowed_for(tool_kind, _campaign_mode(campaign)),
+                        allow=allow,
+                        work=work,
+                        scope=scope,
+                        worker_id=worker_id,
                     )
             yield "tool_result", {"id": call["id"], "name": call["name"], "output": output, "ok": ok, "ms": ms}
             messages.append({"role": "tool", "tool_call_id": call["id"], "content": output})

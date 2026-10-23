@@ -133,6 +133,27 @@ def test_limit_from_entry_shapes():
     assert agent._limit_from_entry({"capabilities": {"contextWindow": True}}) is None
 
 
+def test_limit_from_entry_reads_deepseek_context_window():
+    """DeepSeek's live /v1/models carries a top-level context_window (and no
+    capabilities/context_length). Ignoring it silently pinned every
+    deepseek-* campaign to the 128k fallback even when the listing was up."""
+    entry = {
+        "id": "deepseek-flash",
+        "object": "model",
+        "owned_by": "deepseek",
+        "name": "DeepSeek-V4.1-Flash",
+        "context_window": 1048576,
+        "max_output_tokens": 393216,
+    }
+    assert agent._limit_from_entry(entry) == 1048576
+    # an explicit capabilities window still wins over the flat field
+    assert agent._limit_from_entry({**entry, "capabilities": {"contextWindow": 65536}}) == 65536
+    # bools and junk never become a window
+    assert agent._limit_from_entry({"context_window": True}) is None
+    assert agent._limit_from_entry({"context_window": 0}) is None
+    assert agent._limit_from_entry({"context_window": "1048576"}) is None
+
+
 def test_usable_and_trigger_math(monkeypatch):
     monkeypatch.setattr(config, "LIMITS", {"big": 1_000_000})
     assert agent.usable_context("p/big") == 980_000
@@ -318,9 +339,9 @@ def test_spill_restore_rejects_arbitrary_campaign_files():
     work = config.WORK_DIR / "6"
     (work / "tmp").mkdir(parents=True)
     (work / "FINDINGS.md").write_text("SECRET-CREDS")
-    out = supervisor._restore_spilled_output(6, "x full output saved to FINDINGS.md]")
+    out = supervisor._restore_spilled_output(work, "x full output saved to FINDINGS.md]")
     assert "SECRET-CREDS" not in out
-    out = supervisor._restore_spilled_output(6, "x full output saved to notes/secret.md]")
+    out = supervisor._restore_spilled_output(work, "x full output saved to notes/secret.md]")
     assert out == "x full output saved to notes/secret.md]"
 
 
@@ -329,7 +350,7 @@ def test_spill_restore_bounded_read_per_file():
     (work / "tmp").mkdir(parents=True)
     (work / "tmp" / "big.txt").write_text("Y" * 200_000)
     out = supervisor._restore_spilled_output(
-        7, "head [output truncated: 1, full output saved to tmp/big.txt.]"
+        work, "head [output truncated: 1, full output saved to tmp/big.txt.]"
     )
     assert len(out) <= supervisor.RESTORE_MAX_CHARS + 500
     assert "full output saved to tmp/big.txt" in out

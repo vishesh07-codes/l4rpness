@@ -76,18 +76,58 @@ CREATE TABLE IF NOT EXISTS generator_messages (
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS workers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    campaign_id INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+    title TEXT NOT NULL DEFAULT '',
+    note TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'running',
+    last_prompt_tokens INTEGER NOT NULL DEFAULT 0,
+    memory_summary TEXT NOT NULL DEFAULT '',
+    compacted_until INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS hypotheses (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     campaign_id INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
     generator_id INTEGER REFERENCES generators(id) ON DELETE SET NULL,
+    worker_id INTEGER REFERENCES workers(id) ON DELETE SET NULL,
     title TEXT NOT NULL,
     angle TEXT NOT NULL DEFAULT '',
     vuln_class TEXT NOT NULL DEFAULT '',
     rationale TEXT NOT NULL DEFAULT '',
     result TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT 'new',
+    attempts INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS worker_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    worker_id INTEGER NOT NULL REFERENCES workers(id) ON DELETE CASCADE,
+    role TEXT NOT NULL DEFAULT 'assistant',
+    content TEXT NOT NULL DEFAULT '',
+    reasoning TEXT NOT NULL DEFAULT '',
+    tool_calls TEXT NOT NULL DEFAULT '[]',
+    parts TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS hunts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    campaign_id INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+    worker_id INTEGER NOT NULL REFERENCES workers(id) ON DELETE CASCADE,
+    hypothesis_id INTEGER REFERENCES hypotheses(id) ON DELETE SET NULL,
+    verdict TEXT NOT NULL DEFAULT '',
+    severity TEXT NOT NULL DEFAULT '',
+    impact TEXT NOT NULL DEFAULT '',
+    poc_path TEXT NOT NULL DEFAULT '',
+    repro TEXT NOT NULL DEFAULT '',
+    evidence TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_messages_campaign ON messages(campaign_id, id);
@@ -96,6 +136,9 @@ CREATE INDEX IF NOT EXISTS idx_message_attachments ON message_attachments(messag
 CREATE INDEX IF NOT EXISTS idx_hypotheses_campaign ON hypotheses(campaign_id, status);
 CREATE INDEX IF NOT EXISTS idx_generators_campaign ON generators(campaign_id, status);
 CREATE INDEX IF NOT EXISTS idx_generator_messages ON generator_messages(generator_id, id);
+CREATE INDEX IF NOT EXISTS idx_workers_campaign ON workers(campaign_id, status);
+CREATE INDEX IF NOT EXISTS idx_worker_messages ON worker_messages(worker_id, id);
+CREATE INDEX IF NOT EXISTS idx_hunts_campaign ON hunts(campaign_id, worker_id);
 """
 
 
@@ -141,6 +184,16 @@ def migrate(conn):
         conn.execute("ALTER TABLE campaigns ADD COLUMN compacted_until INTEGER NOT NULL DEFAULT 0")
     if "generator_id" not in _columns(conn, "hypotheses"):
         conn.execute("ALTER TABLE hypotheses ADD COLUMN generator_id INTEGER REFERENCES generators(id) ON DELETE SET NULL")
+    if "worker_id" not in _columns(conn, "hypotheses"):
+        conn.execute("ALTER TABLE hypotheses ADD COLUMN worker_id INTEGER REFERENCES workers(id) ON DELETE SET NULL")
+    if "attempts" not in _columns(conn, "hypotheses"):
+        conn.execute("ALTER TABLE hypotheses ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0")
+    if "kernel_enabled" not in _columns(conn, "campaigns"):
+        conn.execute("ALTER TABLE campaigns ADD COLUMN kernel_enabled INTEGER NOT NULL DEFAULT 0")
+    if "kernel_root_access" not in _columns(conn, "campaigns"):
+        conn.execute("ALTER TABLE campaigns ADD COLUMN kernel_root_access INTEGER NOT NULL DEFAULT 0")
+    if "kernel_root_flag" not in _columns(conn, "campaigns"):
+        conn.execute("ALTER TABLE campaigns ADD COLUMN kernel_root_flag INTEGER NOT NULL DEFAULT 0")
     if "reasoning" not in _columns(conn, "messages"):
         conn.execute("ALTER TABLE messages ADD COLUMN reasoning TEXT NOT NULL DEFAULT ''")
     if "tool_calls" not in _columns(conn, "messages"):

@@ -8,7 +8,7 @@ from fastapi import APIRouter, File, Form, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
-from . import agent, config, db, mcp, settings, skills, supervisor, tools, uploads, workspace
+from . import agent, config, db, mcp, settings, skills, supervisor, tools, uploads, vm, vmctl, workspace
 
 log = logging.getLogger("l4rpness")
 router = APIRouter(prefix="/api")
@@ -344,6 +344,9 @@ async def create_campaign(
     instructions: str = Form(""),
     description: str = Form(""),
     scope: str = Form(""),
+    kernel: bool = Form(False),
+    kernel_root_access: bool = Form(False),
+    kernel_flag: bool = Form(False),
     target_files: list[UploadFile] = File(default=[]),
     info_files: list[UploadFile] = File(default=[]),
     instructions_files: list[UploadFile] = File(default=[]),
@@ -373,10 +376,13 @@ async def create_campaign(
         with db.db() as conn:
             cur = conn.execute(
                 """
-                INSERT INTO campaigns (target, info, instructions, description, scope, model, effort, mode)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO campaigns (target, info, instructions, description, scope, model, effort, mode,
+                                       kernel_enabled, kernel_root_access, kernel_root_flag)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (target.strip(), info.strip(), instructions.strip(), description.strip(), scope.strip(), model, effort, mode),
+                (target.strip(), info.strip(), instructions.strip(), description.strip(), scope.strip(), model, effort, mode,
+                 int(bool(kernel)), int(bool(kernel) and bool(kernel_root_access)),
+                 int(bool(kernel) and bool(kernel_flag))),
             )
             campaign_id = cur.lastrowid
             if campaign_id is None:
@@ -495,6 +501,11 @@ async def delete_campaign(campaign_id: int):
     if run is not None:
         run["stop"].set()
 
+    # Before the rows go: take the VM down. A deleted campaign must not leave a
+    # guest holding RAM and a qcow2 lock on the host, and teardown is best-effort
+    # so a dead control plane cannot make deletion fail.
+    await vm.destroy(campaign_id)
+
     with db.db() as conn:
         load_campaign(conn, campaign_id)
         conn.execute("DELETE FROM campaigns WHERE id = ?", (campaign_id,))
@@ -502,6 +513,37 @@ async def delete_campaign(campaign_id: int):
     shutil.rmtree(config.UPLOAD_DIR / str(campaign_id), ignore_errors=True)
     shutil.rmtree(config.WORK_DIR / str(campaign_id), ignore_errors=True)
     return {"deleted": campaign_id}
+
+
+@router.get("/campaigns/{campaign_id}/vm")
+async def campaign_vm(campaign_id: int, lines: int = 40):
+    """Operator view of the kernel VM: host-side state plus the console tail.
+
+    Deliberately not part of the campaign row — the VM lives on the host, so
+    this asks the control plane rather than trusting a cached column.
+    """
+    with db.db() as conn:
+        row = load_campaign(conn, campaign_id)
+    if not row["kernel_enabled"]:
+        return {"enabled": False}
+    try:
+        status = await vm.status(campaign_id)
+        console, _ = await vm.console(campaign_id, max(1, min(lines, 400)))
+    except vmctl.Unavailable as exc:
+        return {"enabled": True, "state": "unavailable", "error": str(exc), "console": ""}
+    return {
+        "enabled": True,
+        "state": status.get("state"),
+        "pid": status.get("pid"),
+        "uptime_s": status.get("uptime_s"),
+        "restarts": status.get("restarts"),
+        "root_access": status.get("root_access"),
+        "root_flag": status.get("root_flag"),
+        "accel": status.get("accel"),
+        "clone_bytes": status.get("clone_bytes"),
+        "summary": vm.describe(status),
+        "console": console,
+    }
 
 
 @router.post("/campaigns/{campaign_id}/stop")
@@ -614,7 +656,7 @@ def list_generators(campaign_id: int):
                     "SELECT content, parts FROM generator_messages WHERE id = ?",
                     (row["last_message_id"],),
                 ).fetchone()
-            entry["last_snippet"] = tools._message_snippet(last) if last is not None else ""
+            entry["last_snippet"] = tools._agent_snippet(last) if last is not None else ""
             entries.append(entry)
     return entries
 
@@ -675,6 +717,101 @@ def generator_messages(
             parts = []
         messages.append({**row_dict(row), "parts": parts})
     return messages
+
+
+@router.get("/campaigns/{campaign_id}/workers")
+def list_workers(campaign_id: int):
+    with db.db() as conn:
+        load_campaign(conn, campaign_id)
+        rows = conn.execute(
+            """
+            SELECT w.*,
+                   (SELECT count(*) FROM hypotheses h WHERE h.worker_id = w.id) AS hypothesis_count,
+                   (SELECT count(*) FROM hunts x WHERE x.worker_id = w.id) AS result_count,
+                   (SELECT id FROM worker_messages m WHERE m.worker_id = w.id ORDER BY id DESC LIMIT 1) AS last_message_id
+            FROM workers w
+            WHERE w.campaign_id = ?
+            ORDER BY w.id DESC
+            """,
+            (campaign_id,),
+        ).fetchall()
+
+        entries = []
+        for row in rows:
+            entry = row_dict(row)
+            last = None
+            if row["last_message_id"]:
+                last = conn.execute(
+                    "SELECT content, parts FROM worker_messages WHERE id = ?",
+                    (row["last_message_id"],),
+                ).fetchone()
+            entry["last_snippet"] = tools._agent_snippet(last) if last is not None else ""
+            entries.append(entry)
+    return entries
+
+
+@router.get("/workers/{worker_id}/messages")
+def worker_messages(
+    worker_id: int,
+    response: Response,
+    after: int = 0,
+    before: int = 0,
+    limit: int = 0,
+):
+    """Hunter transcript, oldest first (same paging contract as generators)."""
+    limit = max(0, min(limit, 500))
+    with db.db() as conn:
+        worker_row = conn.execute(
+            "SELECT * FROM workers WHERE id = ?", (worker_id,)
+        ).fetchone()
+        if worker_row is None:
+            raise HTTPException(404, "worker not found")
+
+        sql = "SELECT * FROM worker_messages WHERE worker_id = ?"
+        params: list = [worker_id]
+        if after:
+            sql += " AND id > ?"
+            params.append(after)
+        if before:
+            sql += " AND id < ?"
+            params.append(before)
+        if limit:
+            rows = conn.execute(f"{sql} ORDER BY id DESC LIMIT ?", [*params, limit]).fetchall()
+            rows = rows[::-1]
+        else:
+            rows = conn.execute(f"{sql} ORDER BY id", params).fetchall()
+
+        has_more = False
+        if limit and rows:
+            has_more = (
+                conn.execute(
+                    "SELECT 1 FROM worker_messages WHERE worker_id = ? AND id < ? LIMIT 1",
+                    (worker_id, rows[0]["id"]),
+                ).fetchone()
+                is not None
+            )
+
+    response.headers["X-Has-More"] = "1" if has_more else "0"
+
+    messages = []
+    for row in rows:
+        try:
+            parts = json.loads(row["parts"] or "[]")
+        except json.JSONDecodeError:
+            parts = []
+        messages.append({**row_dict(row), "parts": parts})
+    return messages
+
+
+@router.get("/campaigns/{campaign_id}/hunts")
+def list_hunts(campaign_id: int):
+    with db.db() as conn:
+        load_campaign(conn, campaign_id)
+        rows = conn.execute(
+            "SELECT * FROM hunts WHERE campaign_id = ? ORDER BY id DESC LIMIT 200",
+            (campaign_id,),
+        ).fetchall()
+    return [row_dict(row) for row in rows]
 
 
 @router.get("/campaigns/{campaign_id}/hypotheses")

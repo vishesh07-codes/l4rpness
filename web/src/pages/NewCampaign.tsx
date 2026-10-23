@@ -35,6 +35,9 @@ export function NewCampaign() {
   const [efforts, setEfforts] = useState<string[]>([])
   const [effort, setEffort] = useState("")
   const [mode, setMode] = useState<"continuous" | "goal">("continuous")
+  const [kernel, setKernel] = useState(false)
+  const [kernelRoot, setKernelRoot] = useState(false)
+  const [kernelFlag, setKernelFlag] = useState(false)
   const [text, setText] = useState(EMPTY_TEXT)
   const [files, setFiles] = useState<FileMap>(NO_FILES)
   const [error, setError] = useState("")
@@ -77,6 +80,9 @@ export function NewCampaign() {
     form.set("model", model)
     form.set("effort", effort)
     form.set("mode", mode)
+    form.set("kernel", kernel ? "true" : "false")
+    form.set("kernel_root_access", kernelRoot ? "true" : "false")
+    form.set("kernel_flag", kernelFlag ? "true" : "false")
     for (const field of FIELDS) {
       form.set(field, text[field])
       for (const file of files[field]) form.append(`${field}_files`, file)
@@ -173,6 +179,67 @@ export function NewCampaign() {
               { value: "goal", label: "Until goal" },
             ]}
           />
+        </Field>
+
+        <Field
+          label="Kernel pentest"
+          hint="Gives the campaign its own Linux VM, running this machine's own kernel, for LPE and QEMU-escape work. Hunters run commands in it; only the supervisor can restart or reset it."
+        >
+          <div className="flex flex-col gap-3">
+            <label className="flex w-fit items-center gap-2 text-[13px]">
+              <input
+                type="checkbox"
+                checked={kernel}
+                disabled={busy}
+                onChange={(event) => {
+                  setKernel(event.target.checked)
+                  if (!event.target.checked) {
+                    setKernelRoot(false)
+                    setKernelFlag(false)
+                  }
+                }}
+                className="size-4 accent-current"
+              />
+              Provision a kernel VM for this campaign
+            </label>
+            {kernel && (
+              <label className="flex w-fit items-center gap-2 text-[13px] text-ink-2">
+                <input
+                  type="checkbox"
+                  checked={kernelRoot}
+                  disabled={busy}
+                  onChange={(event) => setKernelRoot(event.target.checked)}
+                  className="size-4 accent-current"
+                />
+                Give the agents root (disclosed as a password)
+              </label>
+            )}
+            {kernel && (
+              <label className="flex w-fit items-center gap-2 text-[13px] text-ink-2">
+                <input
+                  type="checkbox"
+                  checked={kernelFlag}
+                  disabled={busy}
+                  onChange={(event) => setKernelFlag(event.target.checked)}
+                  className="size-4 accent-current"
+                />
+                Plant a root.txt flag (proves root when read)
+              </label>
+            )}
+            {kernel && kernelFlag && (
+              <FieldDescription>
+                A random per-campaign flag goes into `/root/root.txt`, readable only by root. Tell
+                the campaign to read it: getting the value is proof of escalation, and `vm_flag`
+                confirms it against the host's copy.
+              </FieldDescription>
+            )}
+            {kernel && !kernelRoot && (
+              <FieldDescription>
+                Root stays locked, so `su` cannot authenticate and escalation has to be a real
+                exploit. Leave it off for LPE work.
+              </FieldDescription>
+            )}
+          </div>
         </Field>
 
         <Field label="Info" htmlFor="info" hint="What the application is, anything the agent should know.">

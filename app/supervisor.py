@@ -14,6 +14,7 @@ import logging
 import random
 import re
 import time
+from pathlib import Path
 
 from . import agent, config, db, generator, tools, uploads
 
@@ -40,24 +41,48 @@ NOTHING_TO_FOLD = -1
 # iteration.
 MODELS_WARM_RETRY_SECONDS = 60
 
+# The supervisor's job is the worker pipeline, not hunting. If it has not
+# spawned a generator or a hunter for this long, the next turn is told so
+# explicitly (and the operator sees a notice) — the policy prompt alone is not
+# always enough to stop a model from doing the work itself.
+DELEGATION_NUDGE_SECONDS = 300
+
+DELEGATION_NUDGE = (
+    f"[DELEGATION CHECK] You have not spawned a generator or a hunter for "
+    f"{DELEGATION_NUDGE_SECONDS // 60} minutes. You are the supervisor: your job is to run "
+    "the worker pipeline, not to test the target yourself. Do one of these now, before any "
+    "more of your own testing:\n"
+    "- no `new` hypotheses in the backlog -> spawn 3 to 5 hypothesis generators "
+    "with different evidence-based focuses (spawn_hypothesis_generator);\n"
+    "- `new` hypotheses exist -> dispatch them to hunters with spawn_hunter (up "
+    "to 3 per worker, up to 5 workers);\n"
+    "- `review` results exist -> rule on them with worker_status then "
+    "hypothesis_update (done or dead).\n"
+    "A turn spent driving exploits yourself instead of spawning or dispatching "
+    "is a wasted turn."
+)
+
 BEGIN_PROMPT = (
     "Begin the engagement against {target}. Work continuously until the "
-    "operator stops you. Never declare the engagement complete. First, use the "
-    "available tools to establish what the target is, inspect the codebase or "
-    "reachable surface, and record concrete scope and technology facts. Only "
-    "after that reconnaissance, spawn several hypothesis generators with "
-    "different evidence-based focus areas (spawn_hypothesis_generator), then "
-    "pull work from hypothesis_list and record results with hypothesis_update."
+    "operator stops you. You are the SUPERVISOR: you do not test the target "
+    "yourself, you run the worker pipeline. Spend at most about five tool "
+    "calls establishing what the target is, then in THIS SAME TURN spawn 3 to "
+    "5 hypothesis generators with different evidence-based focuses "
+    "(spawn_hypothesis_generator) — do not explore the whole target first. The "
+    "moment hypotheses exist, dispatch them to hunter workers with "
+    "spawn_hunter (up to 3 per worker) and rule on the results they file. "
+    "Never declare the engagement complete."
 )
 
 CONTINUE_PROMPT = (
     "Your turn ended, but the engagement is not finished. This campaign is "
     "never \"done\": every software has vulnerabilities that have not been "
-    "found yet, and a clean surface only means the coverage was shallow. "
-    "Prefer working the hypothesis backlog (hypothesis_list) over inventing "
-    "angles from scratch, and spawn more generators when the backlog runs "
-    "dry. Review your notes and your previous results, form the next hypothesis, "
-    "and keep testing with real tools now."
+    "found yet, and a clean surface only means the coverage was shallow. Your "
+    "next action is a PIPELINE action, not your own testing: (1) spawn 3 to 5 "
+    "generators if the backlog has no 'new' hypotheses, (2) dispatch every "
+    "'new' hypothesis to hunters with spawn_hunter, (3) rule on every 'review' "
+    "result with worker_status then hypothesis_update. Do those before running "
+    "any exploit yourself — hunting is the workers' job, dispatching is yours."
 )
 
 GOAL_BEGIN_PROMPT = (
@@ -184,43 +209,19 @@ def restore() -> int:
     return started
 
 
-def _history(campaign_id: int) -> list[dict]:
-    """Rebuild the model conversation from the database.
+def _replay(rows, root: Path, by_message: dict | None = None) -> list[dict]:
+    """Turn stored turn rows into model messages.
 
     Assistant turns keep their tool calls and the tool outputs, not just the
     final text, so restarting a chain does not wipe how a result was produced.
+    `by_message` supplies per-user-message uploads (campaign history only).
     """
-    with db.db() as conn:
-        campaign = conn.execute(
-            "SELECT memory_summary, compacted_until FROM campaigns WHERE id = ?", (campaign_id,)
-        ).fetchone()
-        compacted_until = campaign["compacted_until"] if campaign else 0
-        rows = conn.execute(
-            "SELECT * FROM messages WHERE campaign_id = ? AND id > ? ORDER BY id",
-            (campaign_id, compacted_until),
-        ).fetchall()
-        files = conn.execute(
-            "SELECT * FROM message_attachments WHERE campaign_id = ? ORDER BY id", (campaign_id,)
-        ).fetchall()
-
-    by_message: dict[int, list] = {}
-    for file in files:
-        by_message.setdefault(file["message_id"], []).append(file)
-
     history: list[dict] = []
     first_attachments_rendered = False
-    if campaign is not None and campaign["memory_summary"]:
-        history.append({
-            "role": "user",
-            "content": (
-                "[CAMPAIGN MEMORY] Earlier turns were compacted into this summary. "
-                "Treat it as established context.\n\n" + campaign["memory_summary"]
-            ),
-        })
     for row in rows:
         content = row["content"] or ""
         if row["role"] == "user":
-            attached = by_message.get(row["id"])
+            attached = (by_message or {}).get(row["id"])
             if attached:
                 # Mirror the system-prompt brief policy (full once, filenames
                 # after): the first replayed user message with attachments
@@ -304,9 +305,40 @@ def _history(campaign_id: int) -> list[dict]:
         if budget[0] <= 0:
             break
         message["content"] = _restore_spilled_output(
-            campaign_id, str(message.get("content") or ""), budget
+            root, str(message.get("content") or ""), budget
         )
     return history
+
+
+def _history(campaign_id: int) -> list[dict]:
+    """Rebuild the model conversation from the database."""
+    with db.db() as conn:
+        campaign = conn.execute(
+            "SELECT memory_summary, compacted_until FROM campaigns WHERE id = ?", (campaign_id,)
+        ).fetchone()
+        compacted_until = campaign["compacted_until"] if campaign else 0
+        rows = conn.execute(
+            "SELECT * FROM messages WHERE campaign_id = ? AND id > ? ORDER BY id",
+            (campaign_id, compacted_until),
+        ).fetchall()
+        files = conn.execute(
+            "SELECT * FROM message_attachments WHERE campaign_id = ? ORDER BY id", (campaign_id,)
+        ).fetchall()
+
+    by_message: dict[int, list] = {}
+    for file in files:
+        by_message.setdefault(file["message_id"], []).append(file)
+
+    history: list[dict] = []
+    if campaign is not None and campaign["memory_summary"]:
+        history.append({
+            "role": "user",
+            "content": (
+                "[CAMPAIGN MEMORY] Earlier turns were compacted into this summary. "
+                "Treat it as established context.\n\n" + campaign["memory_summary"]
+            ),
+        })
+    return history + _replay(rows, _work_root(campaign_id), by_message)
 
 
 # Tool-output protection budget (opencode PRUNE_PROTECT parity): the newest
@@ -351,8 +383,14 @@ def _cleared_output(content: str) -> str:
 HISTORY_OUTPUT_CHARS = 20000
 
 
-def _spill_path_for(campaign_id: int, spill: str):
-    """Validated spill path under the campaign tmp/ dir, or None.
+def _work_root(campaign_id: int) -> Path:
+    """The campaign work directory: the root every spill and evidence path is
+    relative to (a worker's own root is a subdirectory of this)."""
+    return config.WORK_DIR / str(campaign_id)
+
+
+def _spill_path_for(root: Path, spill: str):
+    """Validated spill path under `root`/tmp, or None.
 
     Rejects absolute paths, parent escapes, non-tmp locations, and non-.txt
     names so arbitrary tool output cannot pull arbitrary campaign files
@@ -362,17 +400,16 @@ def _spill_path_for(campaign_id: int, spill: str):
         return None
     if not _SPILL_RE.match(spill):
         return None
-    work = config.WORK_DIR / str(campaign_id)
     try:
-        path = (work / spill).resolve()
-        work_resolved = work.resolve()
+        path = (root / spill).resolve()
+        root_resolved = root.resolve()
     except OSError:
         return None
-    if not path.is_relative_to(work_resolved) or not path.is_file():
+    if not path.is_relative_to(root_resolved) or not path.is_file():
         return None
-    # Belt and suspenders: must live under work/tmp/ even after symlinks.
+    # Belt and suspenders: must live under root/tmp/ even after symlinks.
     try:
-        path.relative_to(work_resolved / "tmp")
+        path.relative_to(root_resolved / "tmp")
     except ValueError:
         return None
     return path
@@ -389,9 +426,9 @@ def _read_spill_head(path, limit: int) -> str | None:
 
 
 def _restore_spilled_output(
-    campaign_id: int, content: str, budget: list[int] | None = None
+    root: Path, content: str, budget: list[int] | None = None
 ) -> str:
-    """Restore a clipped tool result from its campaign-local spill file.
+    """Restore a clipped tool result from its spill file under `root`.
 
     Only `tmp/*.txt` spills are eligible, reads are bounded, and an optional
     mutable single-item `budget` caps total restored chars across one history
@@ -405,7 +442,7 @@ def _restore_spilled_output(
     if not match:
         return content
     spill = match.group(1).rstrip(".,;:!?)")
-    path = _spill_path_for(campaign_id, spill)
+    path = _spill_path_for(root, spill)
     if path is None:
         return content
     if budget is not None and budget[0] <= 0:
@@ -530,7 +567,7 @@ COMPACT_SYSTEM = (
 )
 
 
-def _render_transcript(campaign_id: int, rows, cap_chars: int = 240_000) -> str:
+def _render_transcript(root: Path, rows, cap_chars: int = 240_000) -> str:
     lines: list[str] = []
     for row in rows:
         content = (row["content"] or "").strip()
@@ -567,7 +604,7 @@ def _render_transcript(campaign_id: int, rows, cap_chars: int = 240_000) -> str:
             match = re.search(r"full output saved to ([^\s\]]+)", rendered)
             if match:
                 spill = match.group(1).rstrip(".,;:!?)")
-                spill_path = _spill_path_for(campaign_id, spill)
+                spill_path = _spill_path_for(root, spill)
                 if spill_path is not None:
                     data = _read_spill_head(spill_path, 1500)
                     if data is not None:
@@ -618,6 +655,131 @@ def _row_tokens(row) -> int:
     return chars // agent.EST_CHARS_PER_TOKEN
 
 
+def _usable_or_fallback(model: str) -> int:
+    """Usable context for a model, degrading to the conservative default."""
+    try:
+        return agent.usable_context(model)
+    except Exception:
+        return agent.FALLBACK_LIMIT - agent.COMPACT_RESERVE
+
+
+def _fold_caps(usable: int, keep_override: int | None = None) -> tuple[int, int, int, int]:
+    """(eff_keep, transcript_cap, brief_cap, summary_cap) for one fold.
+
+    Transcript gets ~half the window in chars (4 chars/token), brief a bounded
+    slice; the rest is headroom for the system prompt + the summary itself.
+    After consecutive failures the caller raises keep_override, which scales
+    every cap down, so each retry is provably smaller input rather than the
+    same impossible request.
+    """
+    base_keep = config.COMPACT_KEEP_MESSAGES
+    try:
+        base_keep = max(1, int(base_keep))
+    except (TypeError, ValueError):
+        base_keep = 8
+    eff_keep = keep_override if keep_override is not None else base_keep
+    cap_divisor = max(1, eff_keep // base_keep)
+    return (
+        eff_keep,
+        max(8_000, usable * 2 // cap_divisor),
+        max(2_000, min(20_000, usable) // cap_divisor),
+        max(4_000, SUMMARY_MAX_CHARS // cap_divisor),
+    )
+
+
+def _size_aware_fold(rows, compacted_until: int, eff_keep: int, usable: int):
+    """Pick the fold: (boundary_id, rows) or None when nothing is worth folding.
+
+    Keeps the newest messages verbatim and folds everything older; the kept
+    tail shrinks by size until it fits the usable window (down to the newest
+    single row), because one row here is a whole chain and counting rows alone
+    says nothing about bytes.
+    """
+    if len(rows) < 2:
+        return None
+    eff_keep = max(1, eff_keep)
+    target_keep = max(1, min(eff_keep, len(rows) - 1))
+    keep = target_keep
+    budget = max(16_000, usable - agent.COMPACT_RESERVE)
+    while keep > 1 and sum(_row_tokens(row) for row in rows[-keep:]) > budget:
+        keep -= 1
+
+    if keep == target_keep and len(rows) <= eff_keep + 1:
+        # A small benign batch whose tail fits: there is no older history to
+        # win by folding, so do not burn a summarizer call on it.
+        return None
+
+    boundary = rows[-keep - 1]["id"]
+    fold = [row for row in rows if compacted_until < row["id"] <= boundary]
+    if not fold:
+        return None
+    return boundary, fold
+
+
+async def _summarize_fold(
+    campaign,
+    fold,
+    root: Path,
+    transcript_cap: int,
+    brief_cap: int,
+    summary_cap: int,
+    brief_text: str = "",
+    prior_summary: str | None = None,
+    label: str = "Campaign",
+) -> str | None:
+    """Ask the campaign model to fold `fold` into the rolling summary.
+
+    Returns the new summary, or None when the model produced nothing usable —
+    callers must not advance their checkpoint in that case, so a bad summary
+    can never displace a good one.
+    """
+    if prior_summary is None:
+        prior_summary = campaign["memory_summary"] or ""
+    prompt = (
+        f"{label} memory so far:\n{prior_summary or '(none yet)'}\n\n"
+        f"Transcript to fold in:\n{_render_transcript(root, fold, cap_chars=transcript_cap)}"
+    )
+    if len(prior_summary) > summary_cap:
+        # Cap the inherited summary in the prompt as well: without this, one
+        # oversized summary makes every future compaction input oversized.
+        prompt = prompt.replace(
+            prior_summary,
+            prior_summary[:summary_cap] + "\n[prior summary truncated]",
+            1,
+        )
+    # Bound the summarizer input for small-window models: scope facts matter,
+    # full brief bytes do not need to ride every compaction.
+    if len(brief_text) > brief_cap:
+        brief_text = brief_text[:brief_cap] + "\n[brief truncated for compaction]"
+    if brief_text.strip():
+        prompt += (
+            "\n\nBrief attachments (their contents stop being re-sent after "
+            "the first chain — preserve the key scope/target facts from them "
+            "in the summary):\n" + brief_text
+        )
+
+    provider, bare_model = agent.split_model(campaign["model"])
+    client = agent._client(provider)
+    response = await client.chat.completions.create(
+        model=bare_model,
+        messages=[
+            {"role": "system", "content": COMPACT_SYSTEM},
+            {"role": "user", "content": prompt},
+        ],
+        temperature=0.2,
+    )
+    if not response or not getattr(response, "choices", None):
+        return None
+    summary = (response.choices[0].message.content or "").strip()
+    # Blank or whitespace-only outputs are malformed. Short-but-nonempty
+    # summaries are accepted: small folds can legitimately summarize briefly.
+    if not summary:
+        return None
+    if len(summary) > SUMMARY_MAX_CHARS:
+        summary = summary[:SUMMARY_MAX_CHARS] + "\n[summary truncated]"
+    return summary
+
+
 async def compact_campaign(campaign_id: int, keep_override: int | None = None) -> int:
     """Fold older messages into the rolling memory summary.
 
@@ -641,60 +803,12 @@ async def compact_campaign(campaign_id: int, keep_override: int | None = None) -
     if agent.compact_trigger(campaign["model"]) is None:
         return NOTHING_TO_FOLD
 
-    try:
-        usable = agent.usable_context(campaign["model"])
-    except Exception:
-        usable = agent.FALLBACK_LIMIT - agent.COMPACT_RESERVE
-    # Transcript gets ~half the window in chars (4 chars/token), brief a
-    # bounded slice; the rest is headroom for system prompt + summary.
-    # After consecutive failures the caps scale down with the fold, so every
-    # retry is provably smaller input, not the same impossible request.
-    base_keep = config.COMPACT_KEEP_MESSAGES
-    try:
-        base_keep = max(1, int(base_keep))
-    except (TypeError, ValueError):
-        base_keep = 8
-    eff_keep = keep_override if keep_override is not None else base_keep
-    cap_divisor = max(1, eff_keep // base_keep)
-    transcript_cap = max(8_000, usable * 2 // cap_divisor)
-    brief_cap = max(2_000, min(20_000, usable) // cap_divisor)
-    summary_cap = max(4_000, SUMMARY_MAX_CHARS // cap_divisor)
-
-    # Keep target: the configured newest-message count, clamped so at least
-    # one older message always folds; then size-aware shrink — when the kept
-    # tail alone still outgrows the usable window, fold deeper (down to the
-    # newest single message) so recovery can actually make room. A fat row is
-    # one whole chain here, so counting rows alone says nothing about size.
-    if len(rows) < 2:
+    usable = _usable_or_fallback(campaign["model"])
+    eff_keep, transcript_cap, brief_cap, summary_cap = _fold_caps(usable, keep_override)
+    picked = _size_aware_fold(rows, campaign["compacted_until"], eff_keep, usable)
+    if picked is None:
         return NOTHING_TO_FOLD
-    target_keep = max(1, min(eff_keep if eff_keep > 0 else base_keep, len(rows) - 1))
-    keep = target_keep
-    budget = max(16_000, usable - agent.COMPACT_RESERVE)
-    while keep > 1 and sum(_row_tokens(row) for row in rows[-keep:]) > budget:
-        keep -= 1
-
-    if keep == target_keep and len(rows) <= eff_keep + 1:
-        # A small benign batch whose tail fits: there is no older history to
-        # win by folding, so do not burn a summarizer call on it.
-        return NOTHING_TO_FOLD
-
-    boundary = rows[-keep - 1]["id"]
-    fold = [row for row in rows if campaign["compacted_until"] < row["id"] <= boundary]
-    if not fold:
-        return NOTHING_TO_FOLD
-
-    prompt = (
-        f"Campaign memory so far:\n{campaign['memory_summary'] or '(none yet)'}\n\n"
-        f"Transcript to fold in:\n{_render_transcript(campaign_id, fold, cap_chars=transcript_cap)}"
-    )
-    if len(campaign["memory_summary"] or "") > summary_cap:
-        # Cap the inherited summary in the prompt as well: without this, one
-        # oversized summary makes every future compaction input oversized.
-        prompt = prompt.replace(
-            campaign["memory_summary"],
-            campaign["memory_summary"][:summary_cap] + "\n[prior summary truncated]",
-            1,
-        )
+    boundary, fold = picked
 
     # Brief uploads stop riding along after the first chain (filenames only),
     # so the summary is their only long-term home: give the summarizer the
@@ -703,39 +817,17 @@ async def compact_campaign(campaign_id: int, keep_override: int | None = None) -
         attachment_rows = conn.execute(
             "SELECT * FROM attachments WHERE campaign_id = ?", (campaign_id,)
         ).fetchall()
-    attachment_text = uploads.prompt_text(attachment_rows)
-    # Bound the summarizer input for small-window models: scope facts matter,
-    # full brief bytes do not need to ride every compaction.
-    if len(attachment_text) > brief_cap:
-        attachment_text = attachment_text[:brief_cap] + "\n[brief truncated for compaction]"
-    if attachment_text.strip():
-        prompt += (
-            "\n\nBrief attachments (their contents stop being re-sent after "
-            "the first chain — preserve the key scope/target facts from them "
-            "in the summary):\n" + attachment_text
-        )
-
-    provider, bare_model = agent.split_model(campaign["model"])
-    client = agent._client(provider)
-    response = await client.chat.completions.create(
-        model=bare_model,
-        messages=[
-            {"role": "system", "content": COMPACT_SYSTEM},
-            {"role": "user", "content": prompt},
-        ],
-        temperature=0.2,
+    summary = await _summarize_fold(
+        campaign,
+        fold,
+        _work_root(campaign_id),
+        transcript_cap,
+        brief_cap,
+        summary_cap,
+        brief_text=uploads.prompt_text(attachment_rows),
     )
-    if not response or not getattr(response, "choices", None):
+    if summary is None:
         return 0
-    summary = (response.choices[0].message.content or "").strip()
-    # Blank or whitespace-only outputs are malformed: reject without
-    # advancing the checkpoint, so a bad summary can never displace a good
-    # one. Short-but-nonempty summaries are accepted: small folds can
-    # legitimately summarize briefly.
-    if not summary:
-        return 0
-    if len(summary) > SUMMARY_MAX_CHARS:
-        summary = summary[:SUMMARY_MAX_CHARS] + "\n[summary truncated]"
 
     with db.db() as conn:
         conn.execute(
@@ -760,10 +852,7 @@ def _degrade_over_budget(campaign, history: list[dict]) -> int:
     """
     from . import routes
 
-    try:
-        usable = agent.usable_context(campaign["model"])
-    except Exception:
-        usable = agent.FALLBACK_LIMIT - agent.COMPACT_RESERVE
+    usable = _usable_or_fallback(campaign["model"])
     if agent.estimate_messages_tokens(history) < usable:
         return 0
 
@@ -797,8 +886,9 @@ def _degrade_over_budget(campaign, history: list[dict]) -> int:
 
 
 def _backlog_line(campaign_id: int) -> str:
-    """Compact status so the supervisor knows what the backlog and the
-    hypothesis workers are doing, without pulling full transcripts in."""
+    """Compact status so the supervisor knows what the backlog, the hypothesis
+    generators and the hunter workers are doing, without pulling full
+    transcripts in."""
     with db.db() as conn:
         counts = {
             row["status"]: row["c"]
@@ -811,6 +901,14 @@ def _backlog_line(campaign_id: int) -> str:
             "SELECT id, focus FROM generators WHERE campaign_id = ? AND status = 'running'",
             (campaign_id,),
         ).fetchall()
+        campaign_row = conn.execute(
+            "SELECT kernel_enabled, kernel_root_access FROM campaigns WHERE id = ?",
+            (campaign_id,),
+        ).fetchone()
+        hunting = conn.execute(
+            "SELECT count(*) AS c FROM workers WHERE campaign_id = ? AND status = 'running'",
+            (campaign_id,),
+        ).fetchone()["c"]
         spotlight = None
         if gens:
             pick = random.choice(gens)
@@ -821,27 +919,71 @@ def _backlog_line(campaign_id: int) -> str:
             if message is not None:
                 spotlight = (
                     f"GEN #{pick['id']} ({pick['focus'] or 'general'}): "
-                    f"{tools._message_snippet(message)}"
+                    f"{tools._agent_snippet(message)}"
                 )
 
     running = len(gens)
-    if not counts and not running:
+    vmline = ""
+    if campaign_row is not None and campaign_row["kernel_enabled"]:
+        root = "root password set" if campaign_row["kernel_root_access"] else "root locked"
+        vmline = (
+            f"\nKERNEL VM: on, {root}. Hunters test in it with vm_exec/vm_status/vm_console; "
+            "you own vm_start/vm_stop/vm_restart/vm_reset. Kernel exploits belong in there, "
+            "never in the container."
+        )
+
+    if not counts and not running and not hunting:
         # The nudge matters most when nothing exists yet: without it the
         # supervisor invents its own angles instead of spawning workers.
         return (
             "HYPOTHESES: none yet — spawn a few generators with different "
-            "focuses (spawn_hypothesis_generator), then work the backlog via "
-            "hypothesis_list."
+            "focuses (spawn_hypothesis_generator), then dispatch the backlog to "
+            "hunter workers with spawn_hunter." + vmline
         )
 
-    parts = [f"{counts.get(name, 0)} {name}" for name in ("new", "working", "done", "dead")]
+    parts = [
+        f"{counts.get(name, 0)} {name}"
+        for name in ("new", "working", "review", "done", "dead")
+    ]
     line = "HYPOTHESES: " + ", ".join(parts)
     if running:
         line += f" | generators running: {running}"
-    line += " (call hypothesis_list for the backlog, generator_status for a worker)"
+    if hunting:
+        line += f" | hunters running: {hunting}"
+    line += (
+        " (hypothesis_list for the backlog; dispatch 'new' with spawn_hunter; "
+        "rule on 'review' with worker_status then hypothesis_update; "
+        "generator_status for a generator)"
+    )
+    if vmline:
+        line += vmline
     if spotlight:
         line += "\n" + spotlight
     return line
+
+
+def _delegation_idle_seconds(campaign_id: int) -> float | None:
+    """Seconds since this campaign last spawned a generator or a hunter.
+
+    None means nothing was ever spawned. Read from the database rather than
+    tracked in memory so resumed campaigns and rows that predate this check are
+    covered too.
+    """
+    with db.db() as conn:
+        row = conn.execute(
+            """
+            SELECT (julianday('now') - julianday(max(created_at))) * 86400.0 AS age
+            FROM (
+                SELECT created_at FROM generators WHERE campaign_id = ?
+                UNION ALL
+                SELECT created_at FROM workers WHERE campaign_id = ?
+            )
+            """,
+            (campaign_id, campaign_id),
+        ).fetchone()
+    if row is None or row["age"] is None:
+        return None
+    return float(row["age"])
 
 
 async def _sleep(stop: asyncio.Event, seconds: float) -> None:
@@ -852,7 +994,7 @@ async def _sleep(stop: asyncio.Event, seconds: float) -> None:
 
 
 async def _loop(campaign_id: int) -> None:
-    from . import routes
+    from . import routes, vm, vmctl, worker
 
     log.info("supervisor loop started for campaign %d", campaign_id)
     run = routes.RUNNING.get(campaign_id)
@@ -861,12 +1003,22 @@ async def _loop(campaign_id: int) -> None:
 
     # tasks do not survive a restart; close their rows out
     generator.reconcile(campaign_id)
+    worker.reconcile(campaign_id)
 
     stop: asyncio.Event = run["stop"]
     backoff = config.SUPERVISOR_BACKOFF
     cancelled = False
     context_errors = 0
     compact_failures = 0
+    # delegation backstop: five minutes from this point with nothing spawned
+    loop_started_at = time.monotonic()
+    last_nudge_at = 0.0
+    # kernel VM: brought up on the first chain that can have one, and retried
+    # until it works, so a control plane that was not running yet heals without
+    # anyone restarting the campaign. Once it has succeeded an explicit vm_stop
+    # is left alone.
+    vm_ready = False
+    last_vm_notice = 0.0
     # last opportunistic model-listing re-warm (see the loop body)
     warm_attempted_at = 0.0
 
@@ -895,6 +1047,28 @@ async def _loop(campaign_id: int) -> None:
                 break
 
             mode = campaign["mode"] or "continuous"
+
+            if not vm_ready and vm.enabled(campaign):
+                try:
+                    state = await vm.ensure(campaign_id, vm.as_root(campaign))
+                    vm_ready = True
+                    log.info("campaign %d: vm ready (%s)", campaign_id, vm.describe(state))
+                except vmctl.Unavailable as exc:
+                    # Rate-limited: a control plane that is down produces one
+                    # notice every few minutes, not one per chain.
+                    if time.monotonic() - last_vm_notice > 300:
+                        last_vm_notice = time.monotonic()
+                        log.warning("campaign %d: vm unavailable: %s", campaign_id, exc)
+                        routes.push_event(
+                            campaign_id,
+                            "notice",
+                            {
+                                "text": (
+                                    f"kernel VM not available: {exc} — start vmctl on the host, "
+                                    "or use vm_start once it is up"
+                                )
+                            },
+                        )
 
             # Provider model listings are cached in-process and go cold on
             # startup and on provider/key edits; without them every context
@@ -933,7 +1107,21 @@ async def _loop(campaign_id: int) -> None:
                     keep_override = _preserve_keep(base_keep, compact_failures)
                 try:
                     folded = await compact_campaign(campaign_id, keep_override=keep_override)
-                except Exception:
+                except Exception as exc:
+                    if agent.summarizer_unreachable(exc):
+                        # The summarizer socket failed: nothing about the fold
+                        # was even attempted, so this must not burn the failure
+                        # budget (nor freeze the checkpoint). A provider that
+                        # comes back should heal the campaign with no restart,
+                        # so back off and retry like any other provider outage.
+                        log.warning(
+                            "campaign %d: summarizer unreachable — retrying after backoff: %s",
+                            campaign_id,
+                            exc,
+                        )
+                        await _sleep(stop, backoff)
+                        backoff = min(backoff * 2, MAX_BACKOFF_SECONDS)
+                        continue
                     log.exception("compaction failed for campaign %d", campaign_id)
                     folded = 0
                 if folded > 0:
@@ -989,6 +1177,39 @@ async def _loop(campaign_id: int) -> None:
             backlog = _backlog_line(campaign_id)
             if backlog:
                 prompt += "\n\n" + backlog
+
+            # Delegation backstop. The policy prompt asks for this, but a model
+            # that starts hunting on its own will keep going, so the condition
+            # is enforced here: five minutes into the run (and every five
+            # minutes after) with nothing spawned, the turn itself is told to
+            # delegate. Checked between chains — a chain already in flight
+            # cannot be interrupted.
+            since_start = time.monotonic() - loop_started_at
+            idle = _delegation_idle_seconds(campaign_id)
+            if (
+                since_start >= DELEGATION_NUDGE_SECONDS
+                and (idle is None or idle >= DELEGATION_NUDGE_SECONDS)
+                and time.monotonic() - last_nudge_at >= DELEGATION_NUDGE_SECONDS
+            ):
+                last_nudge_at = time.monotonic()
+                prompt += "\n\n" + DELEGATION_NUDGE
+                routes.push_event(
+                    campaign_id,
+                    "notice",
+                    {
+                        "text": (
+                            f"no generator or hunter spawned for "
+                            f"{DELEGATION_NUDGE_SECONDS // 60} minutes — the supervisor "
+                            "must delegate, not hunt alone"
+                        )
+                    },
+                )
+                log.warning(
+                    "campaign %d: no delegation in %.0fs — telling the supervisor to delegate",
+                    campaign_id,
+                    since_start,
+                )
+
             history.append({"role": "user", "content": prompt})
 
             # Full-request budget before the provider call: history + prompt
@@ -1060,7 +1281,22 @@ async def _loop(campaign_id: int) -> None:
                 est_before = agent.estimate_messages_tokens(history)
                 try:
                     folded = await compact_campaign(campaign_id)
-                except Exception:
+                except Exception as exc:
+                    if agent.summarizer_unreachable(exc):
+                        # No fold was attempted, so "est_after == est_before" is
+                        # not evidence that recovery is impossible — it is only
+                        # evidence the summarizer was unreachable. Stopping here
+                        # killed campaigns on a startup blip; retry with backoff
+                        # so the campaign heals when the provider returns.
+                        log.warning(
+                            "campaign %d: summarizer unreachable during recovery — "
+                            "retrying after backoff: %s",
+                            campaign_id,
+                            exc,
+                        )
+                        await _sleep(stop, backoff)
+                        backoff = min(backoff * 2, MAX_BACKOFF_SECONDS)
+                        continue
                     log.exception(
                         "recovery compaction failed for campaign %d", campaign_id
                     )
@@ -1204,8 +1440,9 @@ async def _loop(campaign_id: int) -> None:
         cancelled = True
         log.info("supervisor loop cancelled for campaign %d", campaign_id)
     finally:
-        # stop the hypothesis generators before the loop disappears
+        # stop the hypothesis generators and hunters before the loop disappears
         await generator.stop_campaign(campaign_id)
+        await worker.stop_campaign(campaign_id)
         # close the live SSE before the run disappears so watchers fall back to
         # the saved transcript
         routes.close_run(campaign_id)

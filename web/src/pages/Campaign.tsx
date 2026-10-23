@@ -71,6 +71,10 @@ import {
   type GeneratorInfo,
   type GeneratorMessage,
   type Hypothesis,
+  type CampaignVm,
+  type Hunt,
+  type WorkerInfo,
+  type WorkerMessage,
   type Message,
   type Part,
   type ToolCall,
@@ -151,9 +155,26 @@ function sameHypotheses(a: Hypothesis[], b: Hypothesis[]) {
   );
 }
 
-function mergeGeneratorMessages(
-  prev: GeneratorMessage[],
-  incoming: GeneratorMessage[],
+function sameWorkers(a: WorkerInfo[], b: WorkerInfo[]) {
+  return (
+    a.length === b.length &&
+    a.every((item, index) => {
+      const next = b[index];
+      return (
+        item.id === next.id &&
+        item.status === next.status &&
+        item.hypothesis_count === next.hypothesis_count &&
+        item.result_count === next.result_count &&
+        item.last_snippet === next.last_snippet &&
+        item.updated_at === next.updated_at
+      );
+    })
+  );
+}
+
+function mergeAgentMessages<T extends { id: number }>(
+  prev: T[],
+  incoming: T[],
 ) {
   if (incoming.length === 0) return prev;
   const byId = new Map(prev.map((message) => [message.id, message]));
@@ -300,7 +321,9 @@ export function Campaign() {
   const [hasEarlier, setHasEarlier] = useState(false);
   const [windowSize, setWindowSize] = useState(PAGE_SIZE);
   const [loadingEarlier, setLoadingEarlier] = useState(false);
-  const [tab, setTab] = useState<"generators" | "hypotheses" | "workspace">(
+  const [tab, setTab] = useState<
+    "generators" | "hunters" | "hypotheses" | "workspace"
+  >(
     "generators",
   );
   // right pane width (lg+), persisted; dragged via the divider. The max grows
@@ -409,6 +432,13 @@ export function Campaign() {
     useState(GENERATOR_PAGE);
   const [hypotheses, setHypotheses] = useState<Hypothesis[]>([]);
   const [hypothesesShown, setHypothesesShown] = useState(HYPOTHESIS_PAGE);
+  const [workers, setWorkers] = useState<WorkerInfo[]>([]);
+  const [selectedWorker, setSelectedWorker] = useState<number | null>(null);
+  const [workerMessages, setWorkerMessages] = useState<WorkerMessage[]>([]);
+  const [workerHasEarlier, setWorkerHasEarlier] = useState(false);
+  const [workerWindowSize, setWorkerWindowSize] = useState(GENERATOR_PAGE);
+  const [hunts, setHunts] = useState<Hunt[]>([]);
+  const [vmInfo, setVmInfo] = useState<CampaignVm | null>(null);
   const initialIds = useRef<Set<number> | null>(null);
   const lastIdRef = useRef(0);
   // oldest message id ever held: trimming the state window must not move the
@@ -427,9 +457,12 @@ export function Campaign() {
   const generatorLoadRef = useRef(0);
   const lastGeneratorsLoad = useRef(0);
   const lastHypothesesLoad = useRef(0);
-  const tabRef = useRef<"generators" | "hypotheses" | "workspace">(
-    "generators",
-  );
+  const selectedWorkerRef = useRef<number | null>(null);
+  const workerLoadRef = useRef(0);
+  const lastWorkersLoad = useRef(0);
+  const tabRef = useRef<
+    "generators" | "hunters" | "hypotheses" | "workspace"
+  >("generators");
   const viewportRef = useRef<HTMLElement | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
 
@@ -441,8 +474,10 @@ export function Campaign() {
       api.config(),
       api.listGenerators(campaignId),
       api.listHypotheses(campaignId),
+      api.listWorkers(campaignId),
+      api.listHunts(campaignId),
     ])
-      .then(([c, page, cfg, gens, hypos]) => {
+      .then(([c, page, cfg, gens, hypos, wkrs, hnts]) => {
         setCampaign(c);
         partsCache.clear();
         syncHeld(page.messages);
@@ -457,6 +492,8 @@ export function Campaign() {
         setGenerators(gens);
         setHypotheses(hypos);
         setHypothesesShown(HYPOTHESIS_PAGE);
+        setWorkers(wkrs);
+        setHunts(hnts);
         initialIds.current = new Set(
           page.messages.map((message) => message.id),
         );
@@ -467,6 +504,10 @@ export function Campaign() {
   useEffect(() => {
     selectedGeneratorRef.current = selectedGenerator;
   }, [selectedGenerator]);
+
+  useEffect(() => {
+    selectedWorkerRef.current = selectedWorker;
+  }, [selectedWorker]);
 
   useEffect(() => {
     tabRef.current = tab;
@@ -574,6 +615,77 @@ export function Campaign() {
     }
   }
 
+  async function loadWorkers(force = false) {
+    const now = Date.now();
+    if (!force && now - lastWorkersLoad.current < 1500) return;
+    lastWorkersLoad.current = now;
+    try {
+      const [fresh, results] = await Promise.all([
+        api.listWorkers(campaignId),
+        api.listHunts(campaignId),
+      ]);
+      setWorkers((prev) => (sameWorkers(prev, fresh) ? prev : fresh));
+      setHunts(results);
+    } catch {
+      // the next refresh retries
+    }
+  }
+
+  // The VM lives on the host, so this is asked for rather than cached in the
+  // campaign row. Failure is silent: the panel just does not appear.
+  async function loadVm() {
+    try {
+      setVmInfo(await api.getCampaignVm(campaignId));
+    } catch {
+      // next poll retries
+    }
+  }
+
+  async function openWorker(workerId: number) {
+    setSelectedWorker(workerId);
+    selectedWorkerRef.current = workerId;
+    setWorkerMessages([]);
+    setWorkerHasEarlier(false);
+    setWorkerWindowSize(GENERATOR_PAGE);
+    const loadId = ++workerLoadRef.current;
+    try {
+      const page = await api.getWorkerMessages(workerId, {
+        limit: GENERATOR_PAGE,
+      });
+      if (workerLoadRef.current !== loadId) return;
+      setWorkerMessages(page.messages);
+      setWorkerHasEarlier(page.hasMore);
+    } catch {
+      // leave it empty; the next refresh retries
+    }
+  }
+
+  function loadEarlierWorker() {
+    if (workerMessages.length > workerWindowSize) {
+      setWorkerWindowSize((size) => size + GENERATOR_PAGE * 2);
+      return;
+    }
+    const workerId = selectedWorkerRef.current;
+    if (!workerHasEarlier || workerId === null || workerMessages.length === 0)
+      return;
+    const loadId = workerLoadRef.current;
+    void api
+      .getWorkerMessages(workerId, {
+        before: workerMessages[0].id,
+        limit: GENERATOR_PAGE,
+      })
+      .then((page) => {
+        if (workerLoadRef.current !== loadId) return;
+        setWorkerMessages((prev) =>
+          mergeAgentMessages(prev, page.messages),
+        );
+        setWorkerHasEarlier(page.hasMore);
+      })
+      .catch(() => {
+        // keep the window we have
+      });
+  }
+
   async function openGenerator(generatorId: number) {
     setSelectedGenerator(generatorId);
     selectedGeneratorRef.current = generatorId;
@@ -615,7 +727,7 @@ export function Campaign() {
         if (generatorLoadRef.current !== loadId) return;
         if (page.messages.length > 0) {
           setGeneratorMessages((prev) =>
-            mergeGeneratorMessages(prev, page.messages),
+            mergeAgentMessages(prev, page.messages),
           );
           setGeneratorWindowSize((size) => size + page.messages.length);
         }
@@ -633,12 +745,27 @@ export function Campaign() {
     if (selected !== null) void openGenerator(selected);
   }, [tab, campaignId, selectedGenerator]);
 
+  useEffect(() => {
+    if (tab !== "hunters") return;
+    void loadWorkers(true);
+    void loadVm();
+    const selected = selectedWorker;
+    if (selected !== null) void openWorker(selected);
+  }, [tab, campaignId, selectedWorker]);
+
   // backstop for missed stream events while the worker tabs are open
   useEffect(() => {
-    if (!campaign?.running || (tab !== "generators" && tab !== "hypotheses"))
+    if (
+      !campaign?.running ||
+      (tab !== "generators" && tab !== "hypotheses" && tab !== "hunters")
+    )
       return;
     const timer = setInterval(() => {
       if (tabRef.current === "generators") void loadGenerators();
+      else if (tabRef.current === "hunters") {
+        void loadWorkers();
+        void loadVm();
+      }
       else void loadHypotheses();
     }, 4000);
     return () => clearInterval(timer);
@@ -841,6 +968,17 @@ export function Campaign() {
         }
       }
     });
+    on("worker", (d) => {
+      void loadWorkers();
+      if (d.message && selectedWorkerRef.current === d.worker_id) {
+        const message = d.message as WorkerMessage;
+        if (tabRef.current === "hunters") {
+          setWorkerMessages((prev) =>
+            prev.some((m) => m.id === message.id) ? prev : [...prev, message],
+          );
+        }
+      }
+    });
     on("chain_end", () => {
       setStream({ parts: [], pendingTool: null });
       void refresh();
@@ -897,6 +1035,13 @@ export function Campaign() {
   const shownHypotheses = useMemo(
     () => hypotheses.slice(0, hypothesesShown),
     [hypotheses, hypothesesShown],
+  );
+  const visibleWorkerMessages = useMemo(
+    () =>
+      workerWindowSize >= workerMessages.length
+        ? workerMessages
+        : workerMessages.slice(-workerWindowSize),
+    [workerMessages, workerWindowSize],
   );
   const railPreviews = useMemo(
     () =>
@@ -1071,10 +1216,18 @@ export function Campaign() {
         (h) => h.status === "new" || h.status === "working",
       ).length,
     },
+    {
+      key: "hunters" as const,
+      label: "Hunters",
+      count: workers.filter((w) => w.status === "running").length,
+    },
     { key: "workspace" as const, label: "Workspace", count: 0 },
   ];
   const selectedGeneratorInfo =
     generators.find((g) => g.id === selectedGenerator) ?? null;
+  const selectedWorkerInfo =
+    workers.find((w) => w.id === selectedWorker) ?? null;
+  const workerHunts = hunts.filter((h) => h.worker_id === selectedWorker);
   const usageIn = liveUsage?.in ?? campaign.usage_in ?? 0;
   const usageOut = liveUsage?.out ?? campaign.usage_out ?? 0;
   const usageCtx = liveUsage?.ctx ?? campaign.last_prompt_tokens ?? 0;
@@ -1637,6 +1790,171 @@ export function Campaign() {
                             </div>
                           )}
                           {visibleGeneratorMessages.map((message) => (
+                            <AssistantMessage
+                              key={message.id}
+                              parts={message.parts}
+                            />
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+
+            {tab === "hunters" && (
+              <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl bg-surface shadow-card">
+                {selectedWorker === null || !selectedWorkerInfo ? (
+                  <>
+                    <div className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-2">
+                      <span className="text-[12px] font-medium text-ink-2">
+                        Hunters
+                      </span>
+                      <span className="font-mono text-[11px] tabular-nums text-ink-3">
+                        {workers.length}
+                      </span>
+                    </div>
+                    <div className="min-h-0 flex-1 overflow-y-auto p-2">
+                      {campaign.kernel_enabled && vmInfo?.enabled && (
+                        <div className="mb-2 rounded-md border border-line px-2.5 py-2">
+                          <span className="flex items-center gap-2">
+                            <span className="text-[12px] font-medium text-ink-2">
+                              Kernel VM
+                            </span>
+                            <StatusBadge status={vmInfo.state ?? "unknown"} />
+                          </span>
+                          <span className="mt-1 block font-mono text-[11px] text-ink-3">
+                            {vmInfo.summary ?? vmInfo.error ?? "no state"}
+                          </span>
+                          {vmInfo.console && (
+                            <pre className="mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap text-[10px] leading-tight text-ink-3">
+                              {vmInfo.console}
+                            </pre>
+                          )}
+                        </div>
+                      )}
+                      {workers.length === 0 ? (
+                        <p className="p-3 text-[12px] text-ink-3">
+                          No hunter workers yet. The supervisor dispatches them
+                          with the hypotheses it wants tested.
+                        </p>
+                      ) : (
+                        <div className="flex flex-col gap-1.5">
+                          {workers.map((worker) => (
+                            <button
+                              key={worker.id}
+                              type="button"
+                              onClick={() => openWorker(worker.id)}
+                              className="generator-row material-key flex w-full flex-col gap-1 rounded-md px-2.5 py-2 text-left transition-[background-color,box-shadow,color,transform] duration-150 ease-[var(--ease-out-strong)] active:scale-[0.98]"
+                            >
+                              <span className="flex items-center gap-2">
+                                <span className="font-mono text-[11px] text-ink-3">
+                                  #{worker.id}
+                                </span>
+                                <span className="min-w-0 flex-1 truncate text-[12px] font-medium">
+                                  {worker.title || "hunter"}
+                                </span>
+                                <StatusBadge status={worker.status} />
+                              </span>
+                              <span className="flex items-center gap-2 text-[11px] text-ink-3">
+                                <span className="shrink-0">
+                                  {worker.hypothesis_count} hypotheses ·{" "}
+                                  {worker.result_count} results
+                                </span>
+                                {worker.last_snippet && (
+                                  <span className="min-w-0 flex-1 truncate">
+                                    {worker.last_snippet}
+                                  </span>
+                                )}
+                              </span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="flex shrink-0 flex-col gap-1.5 border-b border-line px-4 py-3">
+                      <button
+                        type="button"
+                        onClick={() => setSelectedWorker(null)}
+                        className="-ml-1 flex w-fit items-center gap-1 rounded-md px-1 py-1 text-[13px] text-ink-2 outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 active:scale-[0.97]"
+                      >
+                        <ArrowLeft className="size-4" strokeWidth={1.5} />
+                        Hunters
+                      </button>
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono text-[11px] text-ink-3">
+                          #{selectedWorkerInfo.id}
+                        </span>
+                        <span
+                          className="min-w-0 flex-1 truncate text-[13px] font-medium text-ink"
+                          title={selectedWorkerInfo.title || "hunter"}
+                        >
+                          {selectedWorkerInfo.title || "hunter"}
+                        </span>
+                        <StatusBadge status={selectedWorkerInfo.status} />
+                      </div>
+                      {selectedWorkerInfo.note && (
+                        <span className="text-[11px] text-ink-3">
+                          {selectedWorkerInfo.note}
+                        </span>
+                      )}
+                    </div>
+                    <div className="min-h-0 flex-1 overflow-y-auto p-3">
+                      {workerHunts.length > 0 && (
+                        <div className="mb-3 flex flex-col gap-1.5">
+                          {workerHunts.map((hunt) => (
+                            <div
+                              key={hunt.id}
+                              className="rounded-md border border-line px-2.5 py-2 text-[11px]"
+                            >
+                              <span className="flex items-center gap-2">
+                                <span className="font-mono text-[10px] text-ink-3">
+                                  hyp #{hunt.hypothesis_id ?? "?"}
+                                </span>
+                                <span className="font-medium">
+                                  {hunt.verdict}
+                                </span>
+                                {hunt.severity && (
+                                  <Badge variant="secondary">
+                                    {hunt.severity}
+                                  </Badge>
+                                )}
+                              </span>
+                              {hunt.impact && (
+                                <span className="mt-1 block text-ink-2">
+                                  {hunt.impact}
+                                </span>
+                              )}
+                              {hunt.poc_path && (
+                                <span className="mt-1 block font-mono text-[10px] text-ink-3">
+                                  {hunt.poc_path}
+                                </span>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {workerMessages.length === 0 ? (
+                        <LoadingState label="Loading hunter" />
+                      ) : (
+                        <div className="flex flex-col gap-3">
+                          {(workerHasEarlier ||
+                            workerMessages.length > workerWindowSize) && (
+                            <div className="flex justify-center">
+                              <button
+                                type="button"
+                                onClick={loadEarlierWorker}
+                                className="material-key rounded-full px-3 py-1 text-[12px] text-ink-2 outline-none transition-[background-color,box-shadow,color,scale] duration-150 ease-[var(--ease-out-strong)] hover:text-ink focus-visible:ring-2 focus-visible:ring-ring/60 active:scale-[0.96]"
+                              >
+                                Load earlier output
+                              </button>
+                            </div>
+                          )}
+                          {visibleWorkerMessages.map((message) => (
                             <AssistantMessage
                               key={message.id}
                               parts={message.parts}

@@ -29,6 +29,24 @@ export type Campaign = {
   last_prompt_tokens?: number
   context_window?: number
   context_window_source?: "api" | "table" | "fallback"
+  kernel_enabled?: number
+  kernel_root_access?: number
+  kernel_root_flag?: number
+}
+
+export type CampaignVm = {
+  enabled: boolean
+  state?: string
+  pid?: number
+  uptime_s?: number
+  restarts?: number
+  root_access?: boolean
+  root_flag?: boolean
+  accel?: string
+  clone_bytes?: number
+  summary?: string
+  console?: string
+  error?: string
 }
 
 export type MessageAttachment = {
@@ -90,16 +108,55 @@ export type GeneratorMessage = {
   created_at: string
 }
 
+export type WorkerInfo = {
+  id: number
+  campaign_id: number
+  title: string
+  note: string
+  status: string
+  last_prompt_tokens: number
+  hypothesis_count: number
+  result_count: number
+  last_snippet?: string
+  created_at: string
+  updated_at: string
+}
+
+export type WorkerMessage = {
+  id: number
+  worker_id: number
+  role: string
+  content: string
+  parts: Part[]
+  created_at: string
+}
+
+export type Hunt = {
+  id: number
+  campaign_id: number
+  worker_id: number
+  hypothesis_id?: number | null
+  verdict: string
+  severity: string
+  impact: string
+  poc_path: string
+  repro: string
+  evidence: string
+  created_at: string
+}
+
 export type Hypothesis = {
   id: number
   campaign_id: number
   generator_id?: number | null
+  worker_id?: number | null
   title: string
   angle: string
   vuln_class: string
   rationale: string
   result: string
   status: string
+  attempts: number
   created_at: string
   updated_at: string
 }
@@ -447,6 +504,26 @@ export const api = {
     }
   },
   listHypotheses: (id: number) => req<Hypothesis[]>(`/api/campaigns/${id}/hypotheses`),
+  getCampaignVm: (id: number, lines = 40) =>
+    req<CampaignVm>(`/api/campaigns/${id}/vm?lines=${lines}`),
+  listWorkers: (id: number) => req<WorkerInfo[]>(`/api/campaigns/${id}/workers`),
+  listHunts: (id: number) => req<Hunt[]>(`/api/campaigns/${id}/hunts`),
+  getWorkerMessages: async (
+    workerId: number,
+    options: { limit?: number; after?: number; before?: number } = {}
+  ): Promise<{ messages: WorkerMessage[]; hasMore: boolean }> => {
+    const params = new URLSearchParams()
+    if (options.limit) params.set("limit", String(options.limit))
+    if (options.after) params.set("after", String(options.after))
+    if (options.before) params.set("before", String(options.before))
+    const query = params.toString()
+    const res = await fetch(`/api/workers/${workerId}/messages${query ? `?${query}` : ""}`)
+    if (!res.ok) throw new Error(await errorText(res))
+    return {
+      messages: (await res.json()) as WorkerMessage[],
+      hasMore: res.headers.get("x-has-more") === "1",
+    }
+  },
   listMessagesPage: async (
     id: number,
     options: { limit?: number; after?: number; before?: number } = {}

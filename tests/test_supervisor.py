@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from openai import APIConnectionError
 
 from app import agent, config, db, routes, supervisor
 
@@ -375,3 +376,193 @@ def test_restore_resumes_only_auto_running(monkeypatch):
 
     assert supervisor.restore() == 1
     assert started == [1]
+
+
+def _unreachable():
+    # what a dead endpoint raises out of compact_campaign: the summarizer call
+    # never landed, so the fold's own size was never judged
+    return APIConnectionError(request=MagicMock())
+
+
+def _drive_loop(calls: dict, stop_after: int) -> int:
+    """Run loop 1 in-process, stopping once `calls['compactions']` is reached.
+
+    Returns auto_running as it stood while the loop was still retrying — read
+    before supervisor.stop() because a manual stop clears that flag itself.
+    """
+    observed = {"auto_running": None}
+
+    async def drive():
+        assert supervisor.start(1)
+        task = supervisor.SUPERVISORS[1]
+        for _ in range(400):
+            if calls["compactions"] >= stop_after:
+                break
+            await asyncio.sleep(0.01)
+        with db.db() as conn:
+            row = conn.execute("SELECT auto_running FROM campaigns WHERE id = 1").fetchone()
+        observed["auto_running"] = row["auto_running"]
+        supervisor.stop(1)
+        await asyncio.wait_for(task, timeout=2)
+
+    asyncio.run(drive())
+    return observed["auto_running"]
+
+
+def test_unreachable_summarizer_retries_instead_of_stopping_the_campaign(monkeypatch):
+    """A compaction that dies on the socket says nothing about whether the fold
+    was too big. Burning the failure budget on it (or reading est_after ==
+    est_before as 'no progress') used to durably stop a campaign on a startup
+    blip; the loop must back off and retry so a provider that returns heals it
+    without an operator restart."""
+    monkeypatch.setattr(config, "SUPERVISOR_BACKOFF", 0.01)
+    calls = {"compactions": 0}
+
+    async def exploding_compact(campaign_id, keep_override=None):
+        calls["compactions"] += 1
+        raise _unreachable()
+
+    monkeypatch.setattr(supervisor, "compact_campaign", exploding_compact)
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("chain ran despite an over-budget history")
+
+    monkeypatch.setattr(routes, "_run", fail_if_called)
+
+    with db.db() as conn:
+        conn.execute(
+            "INSERT INTO campaigns (id, target, model, last_prompt_tokens) "
+            "VALUES (1, 't', 'm', 200000)"
+        )
+
+    auto_running = _drive_loop(calls, stop_after=3)
+
+    assert calls["compactions"] >= 3
+    # not durably stopped: clearing auto_running is the loop's "stay stopped"
+    # kill switch, and this must not have tripped
+    assert auto_running == 1
+
+
+def test_unreachable_summarizer_does_not_stop_truncated_chain_recovery(monkeypatch):
+    """The truncated-chain recovery path is the one that stopped in the field:
+    the chain truncated, the recovery compaction died on the socket, and
+    est_after >= est_before looked like 'recovery made no progress'."""
+    monkeypatch.setattr(config, "SUPERVISOR_BACKOFF", 0.01)
+    calls = {"compactions": 0, "runs": 0}
+
+    async def exploding_compact(campaign_id, keep_override=None):
+        calls["compactions"] += 1
+        raise _unreachable()
+
+    monkeypatch.setattr(supervisor, "compact_campaign", exploding_compact)
+
+    async def truncated_run(campaign_id, campaign, attachments, history, content, run, files=(), store_user=True, keep=False, tool_kind=None, include_attachments=True):
+        calls["runs"] += 1
+        return {
+            "ok": False,
+            "stopped": False,
+            "empty": False,
+            "error": "",
+            "truncated": "[context budget reached mid-chain]",
+        }
+
+    monkeypatch.setattr(routes, "_run", truncated_run)
+
+    # last_prompt_tokens stays 0 so the trigger path is skipped and the loop
+    # reaches the truncated-recovery branch
+    with db.db() as conn:
+        conn.execute("INSERT INTO campaigns (id, target, model) VALUES (1, 't', 'm')")
+
+    auto_running = _drive_loop(calls, stop_after=3)
+
+    assert calls["runs"] >= 3
+    assert calls["compactions"] >= 3
+    assert auto_running == 1  # retried (backoff) instead of the durable stop
+
+
+
+def test_delegation_idle_tracks_the_newest_spawn():
+    """None means nothing was ever spawned; otherwise it is the age of the
+    newest generator OR hunter, so a resumed campaign with pre-existing rows
+    is measured the same way as a fresh one."""
+    assert supervisor._delegation_idle_seconds(1) is None
+
+    with db.db() as conn:
+        conn.execute("INSERT INTO campaigns (id, target, model) VALUES (1, 't', 'm')")
+        conn.execute("INSERT INTO generators (campaign_id, focus) VALUES (1, 'auth')")
+    fresh = supervisor._delegation_idle_seconds(1)
+    assert fresh is not None and fresh < 5
+
+    with db.db() as conn:
+        conn.execute("INSERT INTO workers (campaign_id, title) VALUES (1, 'h')")
+        conn.execute("UPDATE workers SET created_at = datetime('now', '-600 seconds') WHERE id = 1")
+        conn.execute("UPDATE generators SET created_at = datetime('now', '-700 seconds')")
+    assert supervisor._delegation_idle_seconds(1) >= 590
+
+
+def test_loop_tells_the_supervisor_to_delegate(monkeypatch):
+    """Five minutes without a spawn: the turn itself must say so, and the
+    operator must see it on the stream."""
+    monkeypatch.setattr(supervisor, "DELEGATION_NUDGE_SECONDS", 0)
+    chains: list[str] = []
+    notices: list[tuple[str, dict]] = []
+
+    async def fake_run(campaign_id, campaign, attachments, history, content, run, files=(), store_user=True, keep=False, tool_kind=None, include_attachments=True):
+        chains.append(history[-1]["content"])
+        return {"ok": True, "stopped": False, "empty": False, "error": ""}
+
+    monkeypatch.setattr(routes, "_run", fake_run)
+    monkeypatch.setattr(
+        routes, "push_event", lambda cid, name, data: notices.append((name, data))
+    )
+
+    with db.db() as conn:
+        conn.execute("INSERT INTO campaigns (id, target, model) VALUES (1, 'target.example', 'm')")
+
+    async def drive():
+        assert supervisor.start(1)
+        task = supervisor.SUPERVISORS[1]
+        for _ in range(200):
+            if len(chains) >= 2:
+                break
+            await asyncio.sleep(0.01)
+        supervisor.stop(1)
+        await asyncio.wait_for(task, timeout=2)
+
+    asyncio.run(drive())
+
+    assert chains and all(supervisor.DELEGATION_NUDGE in chain for chain in chains)
+    assert any(
+        name == "notice" and "delegate" in data.get("text", "")
+        for name, data in notices
+    )
+
+
+def test_loop_does_not_nudge_a_fresh_campaign(monkeypatch):
+    """The default five-minute grace: nothing is injected on a campaign that
+    just started spawning."""
+    chains: list[str] = []
+
+    async def fake_run(campaign_id, campaign, attachments, history, content, run, files=(), store_user=True, keep=False, tool_kind=None, include_attachments=True):
+        chains.append(history[-1]["content"])
+        return {"ok": True, "stopped": False, "empty": False, "error": ""}
+
+    monkeypatch.setattr(routes, "_run", fake_run)
+
+    with db.db() as conn:
+        conn.execute("INSERT INTO campaigns (id, target, model) VALUES (1, 'target.example', 'm')")
+
+    async def drive():
+        assert supervisor.start(1)
+        task = supervisor.SUPERVISORS[1]
+        for _ in range(200):
+            if chains:
+                break
+            await asyncio.sleep(0.01)
+        supervisor.stop(1)
+        await asyncio.wait_for(task, timeout=2)
+
+    asyncio.run(drive())
+
+    assert chains
+    assert all(supervisor.DELEGATION_NUDGE not in chain for chain in chains)

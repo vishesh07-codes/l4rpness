@@ -251,7 +251,7 @@ def test_write_file_cannot_touch_skill_dir(work, tmp_path, monkeypatch):
 
 
 def test_execute_routes_mcp_tools(work, monkeypatch):
-    async def fake_call(name, args):
+    async def fake_call(name, args, scope=""):
         return "row1\nrow2", True
 
     monkeypatch.setattr(tools.mcp, "is_tool", lambda name: name == "frank_dns_lookup")
@@ -266,7 +266,7 @@ def test_execute_routes_mcp_tools(work, monkeypatch):
 def test_mcp_code_tools_receive_campaign_work_dir(work, monkeypatch):
     seen = {}
 
-    async def fake_call(name, args):
+    async def fake_call(name, args, scope=""):
         seen.update(args)
         return "identified", True
 

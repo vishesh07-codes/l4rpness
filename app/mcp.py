@@ -91,6 +91,30 @@ _reconnect_locks: dict[str, asyncio.Lock] = {}
 _locks: dict[str, asyncio.Lock] = _reconnect_locks
 
 
+def _session_key(server: str, scope: str = "") -> str:
+    """Session registry key. '' is the shared session every agent uses; a
+    worker scope gets a private instance of the stateful servers."""
+    return f"{server}#{scope}" if scope else server
+
+
+def _spec_for(server: str) -> dict | None:
+    return next((s for s in definitions() if s.get("name") == server), None)
+
+
+def _is_scoped(spec: dict) -> bool:
+    """Servers that carry per-agent state need their own process per scope:
+    the browser keeps cookies and navigation state, so two hunters sharing one
+    would stomp each other's session and produce false negatives."""
+    command = spec.get("command") or []
+    if not command:
+        return False
+    return os.path.basename(str(command[0])).startswith("playwright")
+
+
+def tool_names() -> set[str]:
+    return set(_routes)
+
+
 def _reconnect_lock_for(server: str) -> asyncio.Lock:
     lock = _reconnect_locks.get(server)
     if lock is None:
@@ -104,16 +128,16 @@ def _lock_for(server: str) -> asyncio.Lock:
     return _reconnect_lock_for(server)
 
 
-async def _close_server(server: str) -> None:
+async def _close_server(key: str) -> None:
     """Drop a suspect session and its stack. Used after timeouts and
     cancellations, where the transport state can no longer be trusted."""
-    stack = _stacks.pop(server, None)
+    stack = _stacks.pop(key, None)
     if stack is not None:
         try:
             await stack.aclose()
         except Exception:
             pass
-    _sessions.pop(server, None)
+    _sessions.pop(key, None)
 
 
 def _file():
@@ -139,7 +163,8 @@ def save(servers: list[dict]) -> None:
     _file().write_text(json.dumps({"servers": servers}, indent=2) + "\n")
 
 
-async def _connect(spec: dict) -> ClientSession:
+async def _connect(spec: dict, key: str | None = None) -> ClientSession:
+    key = key or spec["name"]
     stack = AsyncExitStack()
     command = spec.get("command")
 
@@ -172,7 +197,7 @@ async def _connect(spec: dict) -> ClientSession:
 
     session = await stack.enter_async_context(ClientSession(read, write))
     await session.initialize()
-    _stacks[spec["name"]] = stack
+    _stacks[key] = stack
     return session
 
 
@@ -237,29 +262,69 @@ def is_tool(name: str) -> bool:
     return name in _routes
 
 
-async def _reconnect(server: str) -> bool:
-    """Reconnect one server after a failed call. Bounded and serialized by
-    the caller-held lock. Returns True if usable."""
-    spec = next((s for s in definitions() if s.get("name") == server), None)
+async def _reconnect(key: str) -> bool:
+    """Reconnect one session key after a failed call. Bounded and serialized
+    by the caller-held lock. Returns True if usable. Works for both the shared
+    session (key == server name) and a worker's private one (server#scope)."""
+    server = key.split("#", 1)[0]
+    spec = _spec_for(server)
     if spec is None:
         return False
-    await _close_server(server)
+    await _close_server(key)
     try:
-        session = await asyncio.wait_for(_connect(spec), timeout=MCP_CALL_TIMEOUT)
+        session = await asyncio.wait_for(_connect(spec, key), timeout=MCP_CALL_TIMEOUT)
         listing = await asyncio.wait_for(session.list_tools(), timeout=MCP_CALL_TIMEOUT)
     except asyncio.TimeoutError:
-        _errors[server] = f"reconnect timed out after {MCP_CALL_TIMEOUT:g}s"
-        log.warning("mcp server %s reconnect timed out", server)
+        _errors[key] = f"reconnect timed out after {MCP_CALL_TIMEOUT:g}s"
+        log.warning("mcp session %s reconnect timed out", key)
         return False
     except Exception as exc:
-        _errors[server] = str(exc)[:200]
-        log.warning("mcp server %s reconnect failed: %s", server, exc)
+        _errors[key] = str(exc)[:200]
+        log.warning("mcp session %s reconnect failed: %s", key, exc)
         return False
-    _sessions[server] = session
+    _sessions[key] = session
     _catalog[server] = list(listing.tools)
-    _errors.pop(server, None)
+    _errors.pop(key, None)
     schemas()
     return True
+
+
+async def open_scope(scope: str) -> None:
+    """Start a private session for each stateful server under this scope.
+
+    Must be awaited from the task that will use it and closed with
+    close_scope() from that same task: every stdio session nests an anyio
+    cancel scope, which cannot be exited from a different task.
+    """
+    if not scope:
+        return
+    for spec in definitions():
+        if not _is_scoped(spec):
+            continue
+        key = _session_key(spec["name"], scope)
+        if key in _sessions:
+            continue
+        try:
+            session = await asyncio.wait_for(_connect(spec, key), timeout=MCP_CALL_TIMEOUT)
+            await asyncio.wait_for(session.list_tools(), timeout=MCP_CALL_TIMEOUT)
+        except Exception as exc:
+            _errors[key] = str(exc)[:200]
+            log.warning("mcp scope %s: %s failed to start: %s", scope, spec["name"], exc)
+            await _close_server(key)
+            continue
+        _sessions[key] = session
+        _errors.pop(key, None)
+        log.info("mcp scope %s: %s ready", scope, spec["name"])
+
+
+async def close_scope(scope: str) -> None:
+    """Close the private sessions opened for this scope (same-task rule)."""
+    if not scope:
+        return
+    suffix = f"#{scope}"
+    keys = {key for key in (*_stacks, *_sessions) if key.endswith(suffix)}
+    for key in keys:
+        await _close_server(key)
 
 
 def _is_error_payload(text: str) -> bool:
@@ -275,16 +340,26 @@ def _is_error_payload(text: str) -> bool:
     return isinstance(payload, dict) and "error" in payload and len(payload) <= 2
 
 
-async def call(name: str, args: dict) -> tuple[str, bool]:
+async def call(name: str, args: dict, scope: str = "") -> tuple[str, bool]:
     target = _routes.get(name)
     if target is None:
         return f"error: unknown mcp tool {name}", False
 
     server, tool = target
-    session = _sessions.get(server)
+    key = _session_key(server, scope)
+    session = _sessions.get(key)
     if session is None:
-        reason = _errors.get(server, "startup failed")
-        return f"error: mcp server {server} is not connected: {reason}", False
+        # A stateful server under a worker scope gets its own process, opened
+        # lazily on first use so a worker that never browses costs nothing.
+        spec = _spec_for(server)
+        if scope and spec is not None and _is_scoped(spec):
+            await open_scope(scope)
+            session = _sessions.get(key)
+        if session is None:
+            session = _sessions.get(server)
+        if session is None:
+            reason = _errors.get(key) or _errors.get(server, "startup failed")
+            return f"error: mcp server {server} is not connected: {reason}", False
 
     try:
         result = await asyncio.wait_for(
@@ -293,34 +368,34 @@ async def call(name: str, args: dict) -> tuple[str, bool]:
     except asyncio.TimeoutError:
         # Only the reconnect/teardown path is serialized. If another call has
         # already replaced this session, do not tear it down out from under it.
-        async with _reconnect_lock_for(server):
-            if _sessions.get(server) is session:
-                await _close_server(server)
-                _errors[server] = f"call timed out after {MCP_CALL_TIMEOUT:g}s"
+        async with _reconnect_lock_for(key):
+            if _sessions.get(key) is session:
+                await _close_server(key)
+                _errors[key] = f"call timed out after {MCP_CALL_TIMEOUT:g}s"
         return (
             f"error: mcp tool {name} timed out after {MCP_CALL_TIMEOUT:g}s; "
             "retry once, then fall back to bash/read_file",
             False,
         )
     except asyncio.CancelledError:
-        async with _reconnect_lock_for(server):
-            if _sessions.get(server) is session:
-                await _close_server(server)
+        async with _reconnect_lock_for(key):
+            if _sessions.get(key) is session:
+                await _close_server(key)
         raise
     except Exception as exc:
         # One reconnect + retry before failing: a restarted frank server must
         # not wedge every later chain. Serialize just this transition.
-        log.warning("mcp call %s failed, reconnecting %s: %s", name, server, exc)
-        async with _reconnect_lock_for(server):
-            current = _sessions.get(server)
+        log.warning("mcp call %s failed, reconnecting %s: %s", name, key, exc)
+        async with _reconnect_lock_for(key):
+            current = _sessions.get(key)
             if current is None or current is session:
-                if not await _reconnect(server):
+                if not await _reconnect(key):
                     return (
                         f"error: mcp call failed: {exc}; "
                         "retry once, then fall back to bash/read_file",
                         False,
                     )
-            session = _sessions.get(server)
+            session = _sessions.get(key)
             if session is None:
                 return f"error: mcp server {server} unreachable", False
         try:
@@ -351,12 +426,16 @@ async def call(name: str, args: dict) -> tuple[str, bool]:
 async def stop() -> None:
     # every stdio session nests an anyio cancel scope, so they must be
     # exited in reverse order of entry; closing the first one first corrupts
-    # the rest of the teardown (RuntimeError, then stray CancelledError)
-    for name, stack in reversed(list(_stacks.items())):
+    # the rest of the teardown (RuntimeError, then stray CancelledError).
+    # Scoped (worker) sessions are skipped on purpose: they were entered in
+    # the worker's task and can only be exited there.
+    for key, stack in reversed(list(_stacks.items())):
+        if "#" in key:
+            continue
         try:
             await stack.aclose()
         except Exception:
-            log.warning("closing mcp server %s failed", name)
+            log.warning("closing mcp server %s failed", key)
 
     _stacks.clear()
     _sessions.clear()
