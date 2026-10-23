@@ -1,0 +1,15 @@
+services:
+  l4rpness:
+    build: .
+    image: l4rpness:local
+    ports:
+      - "127.0.0.1:4517:4517"
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - l4rpness-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  l4rpness-data:
