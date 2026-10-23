@@ -5,7 +5,7 @@ import { toast } from "sonner"
 import { PromptInput } from "@/components/agents/prompt-input"
 import { ConfirmDialog } from "@/components/ConfirmDialog"
 import { IconAction } from "@/components/IconAction"
-import { Crosshair, Plus, Search, Square, Trash2, TriangleAlert } from "@/components/icons"
+import { Crosshair, Play, Plus, Search, Square, Trash2, TriangleAlert } from "@/components/icons"
 import { Pulse } from "@/components/Pulse"
 import { StatusBadge } from "@/components/StatusBadge"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -111,6 +111,19 @@ export function Dashboard() {
     }
   }
 
+  async function resume(campaign: Campaign) {
+    setBusy(campaign.id)
+    try {
+      await api.resumeCampaign(campaign.id)
+      toast.success("Agent resumed")
+      await load()
+    } catch (e) {
+      toast.error("Could not resume the campaign", { description: (e as Error).message })
+    } finally {
+      setBusy(0)
+    }
+  }
+
   async function stop(campaign: Campaign) {
     setBusy(campaign.id)
     try {
@@ -148,7 +161,7 @@ export function Dashboard() {
           What are we testing?
         </h1>
         <p className="mt-2 max-w-md text-sm text-pretty text-ink-2">
-          Name a target and the agent starts probing it in an isolated work dir.
+          Name a target and the agent starts probing it in an isolated work dir — and keeps going until you stop it.
         </p>
 
         <div ref={composerRef} className="mt-6 w-full max-w-2xl text-left">
@@ -260,7 +273,7 @@ export function Dashboard() {
                   {c.running ? (
                     <span className="flex items-center gap-1.5 text-[11px] font-medium text-ink-2">
                       <Pulse />
-                      running
+                      running 24x7
                     </span>
                   ) : (
                     <StatusBadge status={c.status} />
@@ -278,6 +291,19 @@ export function Dashboard() {
                         className="text-ink-3 hover:text-ink focus-visible:opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover/card:opacity-100"
                       >
                         <Square className="size-3.5" strokeWidth={1.5} />
+                      </IconAction>
+                    )}
+                    {!c.running && (
+                      <IconAction
+                        variant="ghost"
+                        size="icon-xs"
+                        label="Resume 24x7"
+                        description={`Resume campaign ${c.target.split("\n")[0]}`}
+                        disabled={busy === c.id}
+                        onClick={() => resume(c)}
+                        className="text-ink-3 hover:text-ink focus-visible:opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover/card:opacity-100"
+                      >
+                        <Play className="size-3.5 fill-current" strokeWidth={1.5} />
                       </IconAction>
                     )}
                     <IconAction

@@ -43,6 +43,7 @@ import {
   Moon02Icon,
   MusicNote01Icon,
   PencilEdit02Icon,
+  PlayIcon,
   RefreshIcon,
   Search01Icon,
   Shield01Icon,
@@ -109,6 +110,7 @@ export const MessageSquare = icon(Message01Icon)
 export const Moon = icon(Moon02Icon)
 export const Paperclip = icon(Attachment01Icon)
 export const PencilLine = icon(Edit02Icon)
+export const Play = icon(PlayIcon)
 export const Plus = icon(Add01Icon)
 export const RefreshCw = icon(RefreshIcon)
 export const RotateCcw = icon(ArrowReloadHorizontalIcon)

@@ -93,7 +93,10 @@ export function NewCampaign() {
       />
 
       <form onSubmit={submit} className="flex flex-col gap-6">
-        <Field label="Target" hint="URL, IP, host — or paragraphs, anything you want.">
+        <Field
+          label="Target"
+          hint="URL, IP, host — or paragraphs, anything you want. The agent starts immediately and keeps testing until you stop it."
+        >
           <Textarea
             ref={targetRef}
             id="target"
