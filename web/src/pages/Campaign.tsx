@@ -239,20 +239,25 @@ export function Campaign() {
     optimisticRef.current = null
   }
 
-  function stop() {
-    stoppedRef.current = true
-    const controller = abortRef.current
-    abortRef.current = null
-    controller?.abort()
+  async function stop() {
+    try {
+      await api.stopCampaign(campaignId)
+      // the stream ends on its own, stores what arrived and reports stopped by user
+    } catch {
+      stoppedRef.current = true
+      const controller = abortRef.current
+      abortRef.current = null
+      controller?.abort()
 
-    if (optimisticRef.current != null) {
-      const id = optimisticRef.current
-      setMessages((prev) => prev.filter((m) => m.id !== id))
-      optimisticRef.current = null
+      if (optimisticRef.current != null) {
+        const id = optimisticRef.current
+        setMessages((prev) => prev.filter((m) => m.id !== id))
+        optimisticRef.current = null
+      }
+      setInput(contentRef.current)
+      setStream(null)
+      setPending(false)
     }
-    setInput(contentRef.current)
-    setStream(null)
-    setPending(false)
   }
 
   async function remove() {

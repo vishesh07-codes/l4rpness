@@ -30,6 +30,7 @@ It does not stop by itself. It stops when you pause or kill it. Right now there 
 - Pick the model and the effort per campaign. The model list comes from the DeepSeek API; effort is low, high or max.
 - Chat streams as it is written and replies render markdown as they arrive. Thinking is shown above every answer, always, and the full history including thinking is stored in SQLite.
 - The agent runs tools: bash for shell commands, read_file and write_file for files, all inside a per-campaign work directory. Long command output is saved to a file the model can page through. Every tool call shows up in the chat as a card you can expand.
+- Skills: the agent sees the list of available skills in its prompt and loads the matching one with the skill tool. Built-ins live in `skills/` in the repo, custom ones are created and edited on the Skills page and stored in the data volume.
 
 ## How it is built
 
@@ -53,6 +54,9 @@ Backend, Python and FastAPI:
 - `app/uploads.py` validates files, stores them, extracts text for the prompt
 - `app/agent.py` runs the model and tool loop, streaming thinking, content and tool events
 - `app/tools.py` has the tools the agent can call and their limits
+- `app/skills.py` finds SKILL.md files and feeds the skill index to the prompt
+- `skills/` holds the built-in playbooks
+- `prompts/operator_policy.md` is appended to every campaign agent prompt as the operator directive. `AGENTS.md` is the repo guide for coding agents, not injected at runtime
 - `config.toml` holds every setting, `.env` holds only the API key
 - `prompts/campaign_agent.md` is the system prompt. Edit it without touching code
 
@@ -61,6 +65,7 @@ Frontend, React and TypeScript with Tailwind and shadcn components:
 - `/` dashboard with the campaign list
 - `/campaigns/new` the create form
 - `/campaigns/:id` campaign details and the chat
+- `/skills` the skill list, viewer and editor
 
 The agent runtime is the next thing to build, and it is our own loop, no framework. The loop sends the conversation plus tool definitions to DeepSeek, runs whatever tools come back, appends the results and goes around again. Planned tools: shell, HTTP requests, file read and write, and a headless browser later. On top of that, state tools so agents write tasks, findings, hypotheses and coverage straight to the database instead of us trying to parse prose out of their replies.
 
@@ -111,7 +116,7 @@ The Vite dev server proxies /api to port 4517.
 
     .venv/bin/pytest
 
-26 tests cover the API, the config loader, the tools and the agent loop, all offline. The DeepSeek call is stubbed.
+51 tests cover the API, the config loader, the tools, skills and the agent loop, all offline. The DeepSeek call is stubbed.
 
 ## Roadmap
 
@@ -121,5 +126,6 @@ The Vite dev server proxies /api to port 4517.
 - [ ] campaign runner with supervisors that never stop and workers per task
 - [ ] coverage map and the scheduler that picks work from it
 - [ ] verifier that replays findings
-- [ ] browser tool, skills, MCP servers
+- [x] skills (SKILL.md, loaded on demand, Skills page)
+- [ ] browser tool, MCP servers
 - [ ] the boring 24/7 parts: watchdog, resume after crash, log rotation
