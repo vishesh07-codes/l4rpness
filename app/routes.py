@@ -4,7 +4,7 @@ import logging
 import shutil
 import time
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
@@ -342,22 +342,63 @@ class MessageIn(BaseModel):
 
 
 @router.get("/campaigns/{campaign_id}/messages")
-def list_messages(campaign_id: int):
+def list_messages(
+    campaign_id: int,
+    response: Response,
+    limit: int = 0,
+    after: int = 0,
+    before: int = 0,
+):
+    """List messages, oldest first.
+
+    ``limit`` returns the newest window (the last N, still ascending),
+    ``after`` returns everything newer than that id, and ``before`` returns a
+    page above that id. The ``X-Has-More`` header says whether older rows
+    exist. Without params the whole history is returned, oldest first.
+    """
+    limit = max(0, min(limit, 500))
     with db.db() as conn:
         load_campaign(conn, campaign_id)
-        rows = conn.execute(
-            "SELECT * FROM messages WHERE campaign_id = ? ORDER BY id",
-            (campaign_id,),
-        ).fetchall()
-        files = conn.execute(
-            "SELECT * FROM message_attachments WHERE campaign_id = ? ORDER BY id",
-            (campaign_id,),
-        ).fetchall()
+
+        sql = "SELECT * FROM messages WHERE campaign_id = ?"
+        params: list = [campaign_id]
+        if after:
+            sql += " AND id > ?"
+            params.append(after)
+        if before:
+            sql += " AND id < ?"
+            params.append(before)
+
+        if limit:
+            rows = conn.execute(f"{sql} ORDER BY id DESC LIMIT ?", [*params, limit]).fetchall()
+            rows = rows[::-1]
+        else:
+            rows = conn.execute(f"{sql} ORDER BY id", params).fetchall()
+
+        has_more = False
+        if limit and rows:
+            has_more = (
+                conn.execute(
+                    "SELECT 1 FROM messages WHERE campaign_id = ? AND id < ? LIMIT 1",
+                    (campaign_id, rows[0]["id"]),
+                ).fetchone()
+                is not None
+            )
+
+        files: list = []
+        if rows:
+            ids = [row["id"] for row in rows]
+            placeholders = ",".join("?" * len(ids))
+            files = conn.execute(
+                f"SELECT * FROM message_attachments WHERE message_id IN ({placeholders}) ORDER BY id",
+                ids,
+            ).fetchall()
 
     by_message: dict[int, list] = {}
     for file in files:
         by_message.setdefault(file["message_id"], []).append(row_dict(file))
 
+    response.headers["X-Has-More"] = "1" if has_more else "0"
     return [
         {**row_dict(row), "attachments": by_message.get(row["id"], [])} for row in rows
     ]

@@ -800,6 +800,36 @@ def test_tool_output_streams_live(client, monkeypatch):
     assert tool["ok"] is True
 
 
+def test_messages_pagination(client):
+    campaign = create(client)
+    with db.db() as conn:
+        for i in range(6):
+            conn.execute(
+                "INSERT INTO messages (campaign_id, role, content) VALUES (?, 'user', ?)",
+                (campaign["id"], f"m{i}"),
+            )
+
+    res = client.get(f"/api/campaigns/{campaign['id']}/messages?limit=2")
+    assert res.headers.get("x-has-more") == "1"
+    tail = res.json()
+    assert [m["content"] for m in tail] == ["m4", "m5"]
+
+    res = client.get(
+        f"/api/campaigns/{campaign['id']}/messages?before={tail[0]['id']}&limit=3"
+    )
+    assert res.headers.get("x-has-more") == "1"
+    assert [m["content"] for m in res.json()] == ["m1", "m2", "m3"]
+
+    res = client.get(f"/api/campaigns/{campaign['id']}/messages?after={tail[-1]['id']}")
+    assert res.json() == []
+
+    res = client.get(f"/api/campaigns/{campaign['id']}/messages?after={tail[0]['id']}")
+    assert [m["content"] for m in res.json()] == ["m5"]
+
+    # without params the whole history is still returned
+    assert len(client.get(f"/api/campaigns/{campaign['id']}/messages").json()) == 6
+
+
 def test_usage_is_tracked_and_streamed(client, monkeypatch):
     async def fake_run(campaign, attachments, history, campaign_id, stop=None, on_tool_output=None):
         yield "usage", {"prompt_tokens": 1200, "completion_tokens": 300}
