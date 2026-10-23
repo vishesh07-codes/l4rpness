@@ -16,7 +16,7 @@ api_key_env = "DEEPSEEK_API_KEY"
 thinking = true
 
 [llm.providers."9router"]
-base_url = "http://host.docker.internal:20128/v1"
+base_url = "http://178.83.181.199:8888/v1"
 api_key_env = "ROUTER9_API_KEY"
 thinking = false
 

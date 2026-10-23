@@ -3,7 +3,7 @@ import { toast } from "sonner"
 
 import { PageHeader } from "@/components/PageHeader"
 import { ConfirmDialog } from "@/components/ConfirmDialog"
-import { TriangleAlert } from "@/components/icons"
+import { PencilLine, Plus, Trash2, TriangleAlert } from "@/components/icons"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -19,6 +19,9 @@ import {
 import { Skeleton } from "@/components/ui/skeleton"
 import {
   api,
+  type Endpoint,
+  type EndpointsState,
+  type HostConfigState,
   type HostEnvState,
   type ProviderKeyStatus,
   type RuntimeConfig,
@@ -64,6 +67,8 @@ export function Settings() {
   const [rows, setRows] = useState<ProviderKeyStatus[] | null>(null)
   const [runtime, setRuntime] = useState<RuntimeConfig | null>(null)
   const [host, setHost] = useState<HostEnvState | null>(null)
+  const [hostConfig, setHostConfig] = useState<HostConfigState | null>(null)
+  const [endpoints, setEndpoints] = useState<EndpointsState | null>(null)
   // presence means "edited"; the value is the unsent draft
   const [keyDrafts, setKeyDrafts] = useState<Record<string, string>>({})
   const [runtimeDrafts, setRuntimeDrafts] = useState<Record<string, string>>({})
@@ -71,21 +76,33 @@ export function Settings() {
   const [busy, setBusy] = useState(false)
   const [confirmReset, setConfirmReset] = useState(false)
   const lastAppliedAt = useRef<number | null>(null)
-  // the poll interval below closes over render state, so reads of drafts go
-  // through this mirror instead of a stale closure
+  const lastConfigAppliedAt = useRef<number | null>(null)
+  // the poll intervals below close over render state, so reads of drafts go
+  // through these mirrors instead of a stale closure
   const keyDraftsRef = useRef(keyDrafts)
   keyDraftsRef.current = keyDrafts
+  const runtimeDraftsRef = useRef(runtimeDrafts)
+  runtimeDraftsRef.current = runtimeDrafts
 
   const keysDirty = Object.keys(keyDrafts).length > 0
   const runtimeDirty = Object.keys(runtimeDrafts).length > 0
 
   useEffect(() => {
-    Promise.all([api.settingsProviders(), api.settingsConfig(), api.hostEnv()])
-      .then(([providers, config, hostEnv]) => {
+    Promise.all([
+      api.settingsProviders(),
+      api.settingsConfig(),
+      api.hostEnv(),
+      api.hostConfig(),
+      api.settingsEndpoints(),
+    ])
+      .then(([providers, config, hostEnv, hostCfg, eps]) => {
         setRows(providers)
         setRuntime(config)
         setHost(hostEnv)
+        setHostConfig(hostCfg)
+        setEndpoints(eps)
         lastAppliedAt.current = hostEnv.last_applied.at
+        lastConfigAppliedAt.current = hostCfg.last_applied.at
       })
       .catch((e: Error) => setError(e.message))
   }, [])
@@ -124,6 +141,53 @@ export function Settings() {
                       dropped.length > 0 ? " (discarded conflicting edits)" : ""
                     }`
                   : "Host .env changed — applied"
+              )
+            } catch {
+              // silent: the next poll retries
+            }
+          })()
+        })
+        .catch(() => {})
+    }, 10000)
+    return () => window.clearInterval(id)
+  }, [])
+
+  // same as above for the host config.toml watcher
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      api
+        .hostConfig()
+        .then((state) => {
+          setHostConfig(state)
+          const at = state.last_applied.at
+          if (at == null) return
+          if (lastConfigAppliedAt.current != null && at <= lastConfigAppliedAt.current) return
+          lastConfigAppliedAt.current = at
+          const keys = state.last_applied.keys
+          const dropped = keys.filter((k) => k in runtimeDraftsRef.current)
+          if (dropped.length > 0) {
+            // the host change just overrode these edits — keeping the stale
+            // drafts would clobber the applied values on the next save
+            setRuntimeDrafts((prev) => {
+              const next = { ...prev }
+              dropped.forEach((k) => delete next[k])
+              return next
+            })
+          }
+          void (async () => {
+            try {
+              const [config, eps] = await Promise.all([
+                api.settingsConfig(),
+                api.settingsEndpoints(),
+              ])
+              setRuntime(config)
+              setEndpoints(eps)
+              toast.success(
+                keys.length > 0
+                  ? `Host config.toml changed — applied: ${keys.join(", ")}${
+                      dropped.length > 0 ? " (discarded conflicting edits)" : ""
+                    }`
+                  : "Host config.toml changed — applied"
               )
             } catch {
               // silent: the next poll retries
@@ -196,14 +260,30 @@ export function Settings() {
     )
   }
 
+  // like saveKeys: overlay + live settings always, plus the host file when
+  // it is writable; pushing drops the now-redundant overlay copies
   async function saveRuntime() {
     const names = Object.keys(runtimeDrafts)
     if (names.length === 0) return
-    setRuntime(await api.saveRuntimeConfig({ ...runtimeDrafts }))
+    const fresh = await api.saveRuntimeConfig({ ...runtimeDrafts })
+    let pushed: string[] = []
+    if (hostConfig?.writable) {
+      try {
+        const res = await api.pushHostConfig({ ...runtimeDrafts })
+        setRuntime(res.runtime)
+        setHostConfig(res.host)
+        pushed = res.written
+      } catch (e) {
+        setRuntime(fresh)
+        setHostConfig(await api.hostConfig())
+        throw e
+      }
+    } else {
+      setRuntime(fresh)
+    }
     setRuntimeDrafts({})
-    toast.success(
-      names.length === 1 ? `Saved ${names[0]}` : `Saved ${names.length} runtime settings`
-    )
+    const label = names.length === 1 ? names[0] : `${names.length} runtime settings`
+    toast.success(pushed.length > 0 ? `Saved ${label} · host config.toml updated` : `Saved ${label}`)
   }
 
   async function doReset() {
@@ -212,11 +292,25 @@ export function Settings() {
     toast.success("Runtime settings reset to config.toml")
   }
 
+  // endpoint edits touch config.toml itself, so refresh everything derived:
+  // provider key rows, the "Default provider" options and the host state
+  async function refreshAfterEndpoints(next: EndpointsState) {
+    setEndpoints(next)
+    const [providers, config, hostCfg] = await Promise.all([
+      api.settingsProviders(),
+      api.settingsConfig(),
+      api.hostConfig(),
+    ])
+    setRows(providers)
+    setRuntime(config)
+    setHostConfig(hostCfg)
+  }
+
   return (
     <div className="mx-auto max-w-2xl px-8 py-10 max-md:pt-16">
       <PageHeader
         title="Settings"
-        description="Provider keys and runtime knobs. Saves apply immediately everywhere; edits to the host .env outside the app are picked up automatically."
+        description="Provider keys, model endpoints and runtime knobs. Saves apply immediately everywhere; edits to the host .env and config.toml outside the app are picked up automatically."
       />
 
       {error && <SettingsError error={error} />}
@@ -236,9 +330,12 @@ export function Settings() {
         />
       )}
 
+      {endpoints && <EndpointSettings state={endpoints} onChanged={refreshAfterEndpoints} />}
+
       {runtime && (
         <RuntimeSettings
           runtime={runtime}
+          host={hostConfig}
           drafts={runtimeDrafts}
           dirty={runtimeDirty}
           busy={busy}
@@ -372,6 +469,7 @@ function ProviderKeys({
 
 function RuntimeSettings({
   runtime,
+  host,
   drafts,
   dirty,
   busy,
@@ -380,6 +478,7 @@ function RuntimeSettings({
   onReset,
 }: {
   runtime: RuntimeConfig
+  host: HostConfigState | null
   drafts: Record<string, string>
   dirty: boolean
   busy: boolean
@@ -413,6 +512,15 @@ function RuntimeSettings({
           </div>
         )
       })}
+      <p className="mt-3 font-mono text-[10px] text-ink-3">
+        {host == null ? (
+          "host config.toml: checking…"
+        ) : host.mounted ? (
+          <>host config.toml · tracked{host.writable ? " · writable" : " · read-only"} · auto-sync on</>
+        ) : (
+          "host config.toml: not mounted — overrides live in the Settings overlay"
+        )}
+      </p>
       <div className="mt-3 flex flex-wrap items-center gap-2">
         {dirty && <span className="text-xs text-ink-2">unsaved changes</span>}
         <div className="ml-auto flex gap-2">
@@ -433,9 +541,10 @@ function RuntimeSettings({
       </div>
       <p className="mt-3 text-xs text-pretty text-ink-3">
         Saved keys and overrides apply immediately and persist in the data volume. When the
-        host .env is mounted and writable, key saves also update it; clearing a row drops the
-        override but never deletes host lines. Server binding, storage paths, and provider
-        wiring stay config.toml-only and need a recreate.
+        host .env or config.toml is mounted and writable, saves also write through to it, and
+        outside edits to either file are applied automatically. Endpoints are edited directly
+        in config.toml. Server binding and storage paths stay config.toml-only and need a
+        recreate.
       </p>
     </section>
   )
@@ -491,6 +600,280 @@ function RuntimeFieldInput({
         />
       )}
       {field.hint && <p className="text-xs text-ink-3">{field.hint}</p>}
+    </div>
+  )
+}
+
+type EndpointForm = {
+  name: string
+  base_url: string
+  api_key_env: string
+  thinking: boolean
+}
+
+const EMPTY_ENDPOINT: EndpointForm = { name: "", base_url: "", api_key_env: "", thinking: false }
+
+// Model endpoints, straight from config.toml's `llm.providers` tables. Each
+// edit is written through to the host file immediately, and the rest of the
+// page (provider keys, default-provider options) refreshes from onChanged.
+function EndpointSettings({
+  state,
+  onChanged,
+}: {
+  state: EndpointsState
+  onChanged: (next: EndpointsState) => Promise<void>
+}) {
+  // "" opens the new-endpoint form; an endpoint name edits that row
+  const [editing, setEditing] = useState<string | null>(null)
+  const [form, setForm] = useState<EndpointForm>(EMPTY_ENDPOINT)
+  const [busy, setBusy] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
+
+  const locked = busy || !state.writable
+
+  async function run(action: () => Promise<EndpointsState>, done?: () => void) {
+    setBusy(true)
+    try {
+      await onChanged(await action())
+      done?.()
+    } catch (e) {
+      toast.error((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  function startNew() {
+    setEditing("")
+    setForm(EMPTY_ENDPOINT)
+  }
+
+  function startEdit(endpoint: Endpoint) {
+    setEditing(endpoint.name)
+    setForm({
+      name: endpoint.name,
+      base_url: endpoint.base_url,
+      api_key_env: endpoint.api_key_env,
+      thinking: endpoint.thinking,
+    })
+  }
+
+  function save() {
+    void run(
+      () => api.saveEndpoint(form),
+      () => {
+        toast.success(`Saved endpoint ${form.name}`)
+        setEditing(null)
+      }
+    )
+  }
+
+  return (
+    <section aria-label="Model endpoints" className="mt-3 rounded-2xl bg-surface p-4 shadow-card">
+      <div className="flex flex-wrap items-center gap-2">
+        <h2 className="min-w-0 flex-1 text-[13px] font-medium">Endpoints</h2>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={startNew}
+          disabled={locked || editing !== null}
+          className="ml-auto shrink-0"
+        >
+          <Plus className="size-3.5" /> Add endpoint
+        </Button>
+      </div>
+      <p className="mt-2 font-mono text-[10px] text-ink-3">
+        config.toml · llm.providers ·{" "}
+        {!state.mounted
+          ? "not mounted — editing needs the file"
+          : state.writable
+            ? "writable"
+            : "read-only — editing needs a writable mount"}
+      </p>
+
+      {editing === "" && (
+        <EndpointFormRow
+          id="endpoint-new"
+          newEndpoint
+          form={form}
+          busy={busy}
+          onChange={setForm}
+          onSave={save}
+          onCancel={() => setEditing(null)}
+        />
+      )}
+
+      <div className="mt-3 flex flex-col gap-3">
+        {state.endpoints.length === 0 && (
+          <p className="text-xs text-ink-3">No endpoints configured.</p>
+        )}
+        {state.endpoints.map((endpoint) =>
+          editing === endpoint.name ? (
+            <EndpointFormRow
+              key={endpoint.name}
+              id={`endpoint-${endpoint.name}`}
+              form={form}
+              busy={busy}
+              onChange={setForm}
+              onSave={save}
+              onCancel={() => setEditing(null)}
+            />
+          ) : (
+            <div key={endpoint.name} className="rounded-[12px] bg-inset px-3 py-2.5">
+              <div className="flex items-center gap-2">
+                <span className="min-w-0 flex-1 truncate font-mono text-[13px] font-medium">
+                  {endpoint.name}
+                </span>
+                {endpoint.default && (
+                  <Badge variant="secondary" className="shrink-0 text-[10px]">
+                    default
+                  </Badge>
+                )}
+                <Badge
+                  variant={endpoint.key_configured ? "secondary" : "outline"}
+                  className="shrink-0 text-[10px]"
+                >
+                  {endpoint.key_configured ? "key set" : "no key"}
+                </Badge>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => startEdit(endpoint)}
+                  disabled={locked}
+                  aria-label={`Edit ${endpoint.name}`}
+                  className="shrink-0 text-ink-3"
+                >
+                  <PencilLine className="size-3.5" />
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setConfirmDelete(endpoint.name)}
+                  disabled={locked || endpoint.default}
+                  aria-label={`Delete ${endpoint.name}`}
+                  title={
+                    endpoint.default
+                      ? "the default endpoint cannot be deleted"
+                      : `Delete ${endpoint.name}`
+                  }
+                  className="shrink-0 text-ink-3 hover:text-destructive"
+                >
+                  <Trash2 className="size-3.5" />
+                </Button>
+              </div>
+              <p className="mt-1 truncate font-mono text-[11px] text-ink-2">{endpoint.base_url}</p>
+              <p className="mt-0.5 font-mono text-[11px] text-ink-3">
+                {endpoint.api_key_env}
+                {endpoint.thinking ? " · thinking" : ""}
+              </p>
+            </div>
+          )
+        )}
+      </div>
+
+      <ConfirmDialog
+        open={confirmDelete !== null}
+        onOpenChange={(open) => !open && !busy && setConfirmDelete(null)}
+        title={`Delete endpoint ${confirmDelete ?? ""}?`}
+        description="It will be removed from config.toml. This cannot be undone."
+        confirmLabel="Delete endpoint"
+        busy={busy}
+        onConfirm={() => {
+          const name = confirmDelete
+          setConfirmDelete(null)
+          if (name) {
+            void run(
+              () => api.deleteEndpoint(name),
+              () => {
+                toast.success(`Deleted endpoint ${name}`)
+                setEditing(null)
+              }
+            )
+          }
+        }}
+      />
+    </section>
+  )
+}
+
+function EndpointFormRow({
+  id,
+  form,
+  newEndpoint = false,
+  busy,
+  onChange,
+  onSave,
+  onCancel,
+}: {
+  id: string
+  form: EndpointForm
+  newEndpoint?: boolean
+  busy: boolean
+  onChange: (form: EndpointForm) => void
+  onSave: () => void
+  onCancel: () => void
+}) {
+  return (
+    <div className="mt-3 rounded-[12px] bg-inset px-3 py-3">
+      <div className="grid gap-3 sm:grid-cols-2">
+        {newEndpoint && (
+          <div className="flex min-w-0 flex-col gap-1.5">
+            <Label htmlFor={`${id}-name`} className="text-[12px]">
+              Name
+            </Label>
+            <Input
+              id={`${id}-name`}
+              value={form.name}
+              onChange={(e) => onChange({ ...form, name: e.target.value })}
+              placeholder="9router"
+              className="font-mono text-[13px]"
+            />
+          </div>
+        )}
+        <div className="flex min-w-0 flex-col gap-1.5">
+          <Label htmlFor={`${id}-url`} className="text-[12px]">
+            Base URL
+          </Label>
+          <Input
+            id={`${id}-url`}
+            value={form.base_url}
+            onChange={(e) => onChange({ ...form, base_url: e.target.value })}
+            placeholder="https://api.example.com/v1"
+            className="font-mono text-[13px]"
+          />
+        </div>
+        <div className="flex min-w-0 flex-col gap-1.5">
+          <Label htmlFor={`${id}-key`} className="text-[12px]">
+            API key env var
+          </Label>
+          <Input
+            id={`${id}-key`}
+            value={form.api_key_env}
+            onChange={(e) => onChange({ ...form, api_key_env: e.target.value })}
+            placeholder="EXAMPLE_API_KEY"
+            className="font-mono text-[13px]"
+          />
+        </div>
+        <label className="flex items-center gap-2 self-end pb-2 text-[13px]">
+          <input
+            type="checkbox"
+            checked={form.thinking}
+            onChange={(e) => onChange({ ...form, thinking: e.target.checked })}
+          />
+          thinking mode
+        </label>
+      </div>
+      <div className="mt-3 flex justify-end gap-2">
+        <Button type="button" variant="ghost" size="sm" onClick={onCancel} disabled={busy}>
+          Cancel
+        </Button>
+        <Button type="button" size="sm" onClick={onSave} disabled={busy}>
+          {busy ? "Saving…" : "Save endpoint"}
+        </Button>
+      </div>
     </div>
   )
 }

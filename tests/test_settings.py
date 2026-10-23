@@ -243,3 +243,267 @@ def test_auto_apply_record(isolated, tmp_path, monkeypatch):
     assert state["changed"] is False
     assert state["last_applied"]["vars"] == ["DEEPSEEK_API_KEY"]
     assert state["last_applied"]["at"] is not None
+
+
+CONFIG_TOML = (
+    "[server]\n"
+    'host = "0.0.0.0"\n'
+    "port = 4517\n"
+    "\n"
+    "[llm]\n"
+    'provider = "deepseek"\n'
+    'model = "deepseek-flash"\n'
+    "# the default reasoning budget\n"
+    'effort = "high"\n'
+    'efforts = ["low", "high", "max"]\n'
+    "request_timeout = 180\n"
+    "temperature = 0.3 # ignored while thinking mode is on\n"
+    "\n"
+    "[llm.providers.deepseek]\n"
+    'base_url = "https://api.deepseek.com"\n'
+    'api_key_env = "DEEPSEEK_API_KEY"\n'
+    "thinking = true\n"
+    "\n"
+    '[llm.providers."9router"]\n'
+    'base_url = "http://host.docker.internal:20128/v1"\n'
+    'api_key_env = "ROUTER9_API_KEY"\n'
+    "thinking = false\n"
+    "\n"
+    "[tools]\n"
+    "max_steps = -1\n"
+    "bash_timeout = 120\n"
+)
+
+
+@pytest.fixture()
+def host_config(tmp_path, monkeypatch, isolated):
+    """A temp root with a config.toml, plus a clean sig baseline. Live
+    settings are recomputed from the real files before ROOT goes back, so the
+    refreshed SETTINGS never leak into later tests."""
+    real_root = config.ROOT
+    monkeypatch.setattr(config, "ROOT", tmp_path)
+    monkeypatch.setattr(settings, "_HOST_CONFIG_SIG", None)
+    (tmp_path / "config.toml").write_text(CONFIG_TOML)
+    # the live settings must start from this file, not the real repo config
+    config.refresh_runtime()
+    yield tmp_path
+    monkeypatch.setattr(config, "ROOT", real_root)
+    config.refresh_runtime()
+
+
+def test_host_config_unmounted(isolated, tmp_path, monkeypatch):
+    real_root = config.ROOT
+    empty = tmp_path / "noroot"
+    empty.mkdir()
+    monkeypatch.setattr(config, "ROOT", empty)
+    monkeypatch.setattr(settings, "_HOST_CONFIG_SIG", None)
+    monkeypatch.setattr(settings, "_LAST_CONFIG_APPLIED", {"keys": [], "at": None})
+    assert settings.host_config_state() == {
+        "mounted": False,
+        "readable": False,
+        "writable": False,
+        "changed": False,
+        "keys": {},
+        "last_applied": {"keys": [], "at": None},
+    }
+    assert settings.reload_host_config() == []
+    with pytest.raises(ValueError):
+        settings.push_host_config({"llm.request_timeout": "99"})
+    # refresh the live settings against the real root in fixture teardown
+    monkeypatch.setattr(config, "ROOT", real_root)
+
+
+def test_host_config_push_preserves_file(host_config):
+    # an overlay override that the push supersedes
+    settings.save_runtime({"llm.request_timeout": "99"})
+    assert config.REQUEST_TIMEOUT == 99
+
+    written = settings.push_host_config({"llm.request_timeout": "42", "llm.temperature": "0.7"})
+    assert written == ["llm.request_timeout", "llm.temperature"]
+    body = (host_config / "config.toml").read_text()
+    assert "# the default reasoning budget" in body
+    assert "port = 4517" in body
+    assert "request_timeout = 42" in body
+    assert "request_timeout = 180" not in body
+    assert "temperature = 0.7 # ignored while thinking mode is on" in body
+    # the file is the source of truth again: overlay copies are gone
+    assert config.read_settings_overlay() == {}
+    assert config.REQUEST_TIMEOUT == 42
+    assert config.TEMPERATURE == 0.7
+    assert settings.runtime_status()["sources"]["llm.request_timeout"] == "file"
+    assert settings.host_config_state()["changed"] is False
+
+
+def test_host_config_push_adds_missing_keys(host_config):
+    written = settings.push_host_config({"tools.http_timeout": "75", "uploads.max_bytes": "2048"})
+    assert written == ["tools.http_timeout", "uploads.max_bytes"]
+    body = (host_config / "config.toml").read_text()
+    # the new tools key lands inside [tools], the new section at the end
+    tools_block = body.split("[tools]", 1)[1]
+    assert "http_timeout = 75" in tools_block
+    assert "bash_timeout = 120" in tools_block
+    assert "\n[uploads]\nmax_bytes = 2048\n" in body
+    assert config.HTTP_TIMEOUT == 75
+    assert config.MAX_UPLOAD_BYTES == 2048
+
+
+def test_host_config_push_collapses_multiline_values(host_config):
+    (host_config / "config.toml").write_text(
+        "[llm]\n"
+        "efforts = [\n"
+        '  "low",\n'
+        '  "high",\n'
+        "]\n"
+    )
+    written = settings.push_host_config({"llm.efforts": "low, max"})
+    assert written == ["llm.efforts"]
+    assert (host_config / "config.toml").read_text() == '[llm]\nefforts = [ "low", "max" ]\n'
+    assert config.EFFORTS == ["low", "max"]
+
+
+def test_host_config_push_handles_section_comments(host_config):
+    (host_config / "config.toml").write_text("[llm] # tuning\nrequest_timeout = 180\n")
+    written = settings.push_host_config({"llm.request_timeout": "77"})
+    assert written == ["llm.request_timeout"]
+    assert (host_config / "config.toml").read_text() == "[llm] # tuning\nrequest_timeout = 77\n"
+    assert config.REQUEST_TIMEOUT == 77
+
+
+def test_host_config_reload_applies_and_prunes_overlay(host_config):
+    settings.save_runtime({"llm.request_timeout": "99", "tools.http_timeout": "45"})
+    assert config.REQUEST_TIMEOUT == 99
+    assert settings.host_config_state()["changed"] is False
+
+    (host_config / "config.toml").write_text(
+        CONFIG_TOML.replace("request_timeout = 180", "request_timeout = 240")
+    )
+    assert settings.host_config_state()["changed"] is True
+
+    changed = settings.reload_host_config()
+    # the file defines request_timeout, so it beats the stale overlay copy;
+    # http_timeout is not in the file, so the override survives
+    assert changed == ["llm.request_timeout"]
+    assert config.REQUEST_TIMEOUT == 240
+    assert config.HTTP_TIMEOUT == 45
+    assert config.read_settings_overlay() == {"tools": {"http_timeout": 45}}
+    assert settings.host_config_state()["changed"] is False
+    # second reload: nothing changed
+    assert settings.reload_host_config() == []
+
+
+def test_host_config_auto_apply_record(host_config, monkeypatch):
+    monkeypatch.setattr(settings, "_LAST_CONFIG_APPLIED", {"keys": [], "at": None})
+    assert settings.host_config_state()["changed"] is False
+    assert settings.host_config_state()["last_applied"] == {"keys": [], "at": None}
+
+    (host_config / "config.toml").write_text(
+        CONFIG_TOML.replace("request_timeout = 180", "request_timeout = 200")
+    )
+    assert settings.host_config_state()["changed"] is True
+    changed = settings.reload_host_config()
+    settings.note_config_auto_applied(changed)
+    state = settings.host_config_state()
+    assert state["changed"] is False
+    assert state["last_applied"]["keys"] == ["llm.request_timeout"]
+    assert state["last_applied"]["at"] is not None
+
+
+def test_endpoints_status(host_config):
+    data = settings.endpoints_status()
+    assert data["mounted"] is True
+    assert data["writable"] is True
+    entries = {entry["name"]: entry for entry in data["endpoints"]}
+    assert set(entries) == {"deepseek", "9router"}
+    assert entries["deepseek"]["default"] is True
+    assert entries["deepseek"]["thinking"] is True
+    assert entries["9router"]["default"] is False
+    assert entries["9router"]["base_url"] == "http://host.docker.internal:20128/v1"
+    assert entries["9router"]["key_configured"] is False
+
+
+def test_save_endpoint_adds_new(host_config):
+    out = settings.save_endpoint(
+        {
+            "name": "local",
+            "base_url": "http://127.0.0.1:8080/v1",
+            "api_key_env": "LOCAL_API_KEY",
+            "thinking": True,
+        }
+    )
+    entries = {entry["name"]: entry for entry in out["endpoints"]}
+    assert entries["local"]["base_url"] == "http://127.0.0.1:8080/v1"
+    assert entries["local"]["thinking"] is True
+    assert entries["local"]["default"] is False
+    body = (host_config / "config.toml").read_text()
+    assert "[llm.providers.local]" in body
+    assert 'base_url = "http://127.0.0.1:8080/v1"' in body
+    assert config.PROVIDERS["local"]["api_key_env"] == "LOCAL_API_KEY"
+    # the new endpoint's key var becomes manageable in the keys section
+    assert "LOCAL_API_KEY" in settings.allowed_vars()
+
+
+def test_save_endpoint_updates_quoted_section(host_config):
+    settings.save_endpoint(
+        {
+            "name": "9router",
+            "base_url": "http://10.0.0.5:20128/v1",
+            "api_key_env": "ROUTER9_API_KEY",
+            "thinking": True,
+        }
+    )
+    body = (host_config / "config.toml").read_text()
+    # replaced in place — the quoted section is not duplicated
+    assert body.count("9router") == 1
+    assert 'base_url = "http://10.0.0.5:20128/v1"' in body
+    assert "host.docker.internal" not in body
+    assert config.PROVIDERS["9router"]["base_url"] == "http://10.0.0.5:20128/v1"
+    assert config.PROVIDERS["9router"]["thinking"] is True
+
+
+def test_save_endpoint_validation(host_config):
+    with pytest.raises(ValueError):
+        settings.save_endpoint({"name": "bad name", "base_url": "http://x", "api_key_env": "K"})
+    with pytest.raises(ValueError):
+        settings.save_endpoint({"name": "ok", "base_url": "ftp://x", "api_key_env": "K"})
+    with pytest.raises(ValueError):
+        settings.save_endpoint({"name": "ok", "base_url": "http://x", "api_key_env": "lower"})
+    assert set(config.PROVIDERS) == {"deepseek", "9router"}
+
+
+def test_delete_endpoint(host_config):
+    out = settings.delete_endpoint("9router")
+    assert {entry["name"] for entry in out["endpoints"]} == {"deepseek"}
+    body = (host_config / "config.toml").read_text()
+    assert "9router" not in body
+    assert "[llm.providers.deepseek]" in body
+    with pytest.raises(ValueError):
+        settings.delete_endpoint("deepseek")  # the default endpoint is protected
+    with pytest.raises(ValueError):
+        settings.delete_endpoint("nope")
+
+
+def test_endpoint_edits_need_writable(host_config):
+    path = host_config / "config.toml"
+    path.chmod(0o444)
+    try:
+        with pytest.raises(ValueError):
+            settings.save_endpoint(
+                {"name": "x", "base_url": "http://x:1/v1", "api_key_env": "X_KEY"}
+            )
+        with pytest.raises(ValueError):
+            settings.delete_endpoint("9router")
+    finally:
+        path.chmod(0o644)
+
+
+def test_reload_reports_endpoint_changes(host_config):
+    assert settings.host_config_state()["changed"] is False
+    edited = CONFIG_TOML.replace(
+        'base_url = "http://host.docker.internal:20128/v1"',
+        'base_url = "http://edited.internal:20128/v1"',
+    )
+    (host_config / "config.toml").write_text(edited)
+    assert settings.host_config_state()["changed"] is True
+    changed = settings.reload_host_config()
+    assert changed == ["llm.providers.9router"]
+    assert config.PROVIDERS["9router"]["base_url"] == "http://edited.internal:20128/v1"

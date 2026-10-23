@@ -161,7 +161,10 @@ def reload_keys() -> None:
 # persistence story as the key overlay: a TOML file in the data volume that is
 # deep-merged over config.toml. Only whitelisted scalar/list knobs are ever
 # written here — server binding, storage paths, and provider wiring stay
-# config.toml-only and need a recreate.
+# config.toml-only and need a recreate. When the host config.toml is mounted
+# and writable, the settings module also writes values through to it and drops
+# the overlay copies (the file becomes the single source of truth), mirroring
+# the .env flow.
 SETTINGS_OVERLAY_NAME = "settings.overlay.toml"
 
 
@@ -278,6 +281,28 @@ def host_env_signature() -> str | None:
     """Content hash of the mounted host `.env`, or None when it is not a
     readable file (not mounted, or shadowed by a directory)."""
     path = host_env_path()
+    try:
+        if not path.is_file():
+            return None
+        return hashlib.sha1(path.read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+# The host `config.toml` bind-mounted into the container (compose.yaml). Like
+# the mounted `.env` it stays visible, so the Settings UI can detect outside
+# edits and — when writable — write runtime knobs through it.
+HOST_CONFIG_NAME = "config.toml"
+
+
+def host_config_path() -> Path:
+    return ROOT / HOST_CONFIG_NAME
+
+
+def host_config_signature() -> str | None:
+    """Content hash of the mounted host `config.toml`, or None when it is not
+    a readable file (not mounted, or shadowed by a directory)."""
+    path = host_config_path()
     try:
         if not path.is_file():
             return None

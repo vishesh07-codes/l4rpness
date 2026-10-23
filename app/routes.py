@@ -99,6 +99,79 @@ def reset_settings_config():
     return settings.reset_runtime()
 
 
+@router.get("/settings/config/host")
+def settings_config_host():
+    """What the container can see of the host `config.toml` (no secrets)."""
+    return settings.host_config_state()
+
+
+class HostConfigPushUpdate(BaseModel):
+    values: dict[str, str]
+
+
+@router.post("/settings/config/host/push")
+def push_settings_config_host(update: HostConfigPushUpdate):
+    """Write staged runtime knobs through to the mounted host `config.toml`."""
+    try:
+        written = settings.push_host_config(update.values or {})
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    agent._models.clear()
+    return {
+        "written": written,
+        "runtime": settings.runtime_status(),
+        "host": settings.host_config_state(),
+    }
+
+
+@router.post("/settings/config/host/reload")
+def reload_settings_config_host():
+    """Pull the mounted host `config.toml` into the live settings (host wins
+    over conflicting Settings overrides)."""
+    changed = settings.reload_host_config()
+    agent._models.clear()
+    return {
+        "changed": changed,
+        "runtime": settings.runtime_status(),
+        "host": settings.host_config_state(),
+    }
+
+
+class EndpointUpdate(BaseModel):
+    name: str = ""
+    base_url: str = ""
+    api_key_env: str = ""
+    thinking: bool = False
+
+
+@router.get("/settings/endpoints")
+def list_settings_endpoints():
+    """Model endpoints (`llm.providers`) from the host config.toml."""
+    return settings.endpoints_status()
+
+
+@router.put("/settings/endpoints")
+def save_settings_endpoint(update: EndpointUpdate):
+    """Create or update a model endpoint in the mounted host config.toml."""
+    try:
+        saved = settings.save_endpoint(update.model_dump())
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    agent._models.clear()
+    return saved
+
+
+@router.delete("/settings/endpoints/{name}")
+def delete_settings_endpoint(name: str):
+    """Remove a model endpoint from the mounted host config.toml."""
+    try:
+        saved = settings.delete_endpoint(name)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    agent._models.clear()
+    return saved
+
+
 @router.get("/settings/host")
 def settings_host():
     """What the container can see of the host `.env` (values stay masked)."""

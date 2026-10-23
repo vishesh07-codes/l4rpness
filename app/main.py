@@ -37,21 +37,47 @@ async def _watch_host_env() -> None:
             log.info("auto-applied host .env changes: %s", ", ".join(changed))
 
 
+async def _watch_host_config() -> None:
+    """Apply outside edits to the mounted host `config.toml` within seconds,
+    so hand edits take effect without a restart or a button press. Host wins
+    over conflicting Settings overrides (single source of truth)."""
+    from . import agent, settings
+
+    while True:
+        await asyncio.sleep(5)
+        try:
+            if not settings.host_config_state()["changed"]:
+                continue
+            changed = settings.reload_host_config()
+        except Exception as exc:
+            log.warning("l4rpness: host config.toml watch failed: %s", exc)
+            continue
+        if changed:
+            agent._models.clear()
+            settings.note_config_auto_applied(changed)
+            log.info("auto-applied host config.toml changes: %s", ", ".join(changed))
+
+
 @asynccontextmanager
 async def lifespan(_app):
     db.init()
     db.recover()
     await mcp.start()
     supervisor.restore()
-    watcher = asyncio.create_task(_watch_host_env())
+    watchers = [
+        asyncio.create_task(_watch_host_env()),
+        asyncio.create_task(_watch_host_config()),
+    ]
     try:
         yield
     finally:
-        watcher.cancel()
-        try:
-            await watcher
-        except asyncio.CancelledError:
-            pass
+        for watcher in watchers:
+            watcher.cancel()
+        for watcher in watchers:
+            try:
+                await watcher
+            except asyncio.CancelledError:
+                pass
         await mcp.stop()
 
 

@@ -41,7 +41,9 @@ services:
         required: false
     volumes:
       - l4rpness-data:/app/data
-      - ./config.toml:/app/config.toml:ro
+      # the Settings UI reads this for change detection and writes runtime
+      # knobs through it; add the :ro suffix to make it read-only
+      - ./config.toml:/app/config.toml
       # the Settings UI reads this for change detection and rewrites keys
       # through it when the file is writable (touch .env first so compose
       # never mistakes it for a directory). env_file above still injects the

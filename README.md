@@ -79,7 +79,7 @@ Docker: multistage build where Node builds the frontend and Python runs the app.
     # put your DeepSeek key in .env
     docker compose up --build -d
 
-Model, effort, limits and the port live in `config.toml`. It is mounted read only, so edit it and `docker compose restart` to apply.
+Model endpoints, effort and the runtime limits live in `config.toml` and are editable on the Settings page. Endpoint edits (name, base URL, API key env var, thinking) are written straight into the file; runtime knobs apply immediately and are written back too when the container can write to the mounted file (comments and unrelated keys are preserved), and hand edits to the file are picked up automatically. The server address and port still need an edit plus `docker compose restart`.
 
 Open http://127.0.0.1:4517
 

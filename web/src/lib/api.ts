@@ -194,6 +194,42 @@ export type HostReloadResult = {
   host: HostEnvState
 }
 
+export type HostConfigState = {
+  mounted: boolean
+  readable: boolean
+  writable: boolean
+  changed: boolean
+  keys: Record<string, unknown>
+  last_applied: { keys: string[]; at: number | null }
+}
+
+export type HostConfigPushResult = {
+  written: string[]
+  runtime: RuntimeConfig
+  host: HostConfigState
+}
+
+export type HostConfigReloadResult = {
+  changed: string[]
+  runtime: RuntimeConfig
+  host: HostConfigState
+}
+
+export type Endpoint = {
+  name: string
+  base_url: string
+  api_key_env: string
+  thinking: boolean
+  default: boolean
+  key_configured: boolean
+}
+
+export type EndpointsState = {
+  endpoints: Endpoint[]
+  mounted: boolean
+  writable: boolean
+}
+
 export type AppConfig = {
   models: string[]
   default_model: string
@@ -352,6 +388,31 @@ export const api = {
     }),
   reloadHostEnv: () =>
     req<HostReloadResult>("/api/settings/host/reload", { method: "POST" }),
+  hostConfig: () => req<HostConfigState>("/api/settings/config/host"),
+  pushHostConfig: (values: Record<string, string>) =>
+    req<HostConfigPushResult>("/api/settings/config/host/push", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ values }),
+    }),
+  reloadHostConfig: () =>
+    req<HostConfigReloadResult>("/api/settings/config/host/reload", { method: "POST" }),
+  settingsEndpoints: () => req<EndpointsState>("/api/settings/endpoints"),
+  saveEndpoint: (endpoint: {
+    name: string
+    base_url: string
+    api_key_env: string
+    thinking: boolean
+  }) =>
+    req<EndpointsState>("/api/settings/endpoints", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(endpoint),
+    }),
+  deleteEndpoint: (name: string) =>
+    req<EndpointsState>(`/api/settings/endpoints/${encodeURIComponent(name)}`, {
+      method: "DELETE",
+    }),
   mcp: () => req<McpStatus>("/api/mcp"),
   saveMcp: (servers: McpServer[]) =>
     req<McpStatus>("/api/mcp", {

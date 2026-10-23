@@ -13,12 +13,19 @@ The container cannot rewrite the host `.env` (it only receives its values via
 compose `env_file` at creation), so the overlay is the writable store; values
 already present in the host `.env` keep working untouched and are reported as
 `environment` source.
+
+The runtime knobs from `config.toml` follow the same pattern: the overlay is
+the base store, and when the host file is mounted and writable,
+`push_host_config()` writes values through to it (preserving comments and
+unrelated keys) while `reload_host_config()` lets outside edits win over
+conflicting overlay copies.
 """
 
 import logging
 import os
 import re
 import time
+import tomllib
 
 from dotenv import dotenv_values
 
@@ -34,6 +41,11 @@ _HOST_SIG: str | None = config.host_env_signature()
 
 # last watcher-applied change, so the UI can announce it
 _LAST_AUTO_APPLIED: dict = {"vars": [], "at": None}
+
+# same story for the host `config.toml`: change detection and auto-apply for
+# the runtime knobs (the .env flow covers provider keys)
+_HOST_CONFIG_SIG: str | None = config.host_config_signature()
+_LAST_CONFIG_APPLIED: dict = {"keys": [], "at": None}
 
 
 def allowed_vars() -> set[str]:
@@ -359,13 +371,14 @@ def _coerce(field: dict, raw: str, efforts: list[str] | None = None):
     raise ValueError(f"unknown field {field['key']!r}")
 
 
-def save_runtime(values: dict[str, str]) -> dict:
+def _coerce_values(values: dict[str, str]) -> dict[str, object]:
+    """Validate a batch of raw runtime values against the schema. Raises
+    ValueError before anything is written; a simultaneously-saved efforts
+    list is a valid option pool for the default effort."""
     by_key = {field["key"]: field for field in RUNTIME_FIELDS}
     for key in values or {}:
         if key not in by_key:
             raise ValueError(f"refusing to store {key!r}")
-    # validate everything before writing anything; a simultaneously-saved
-    # efforts list is a valid option pool for the default effort
     pending: dict[str, object] = {}
     efforts: list[str] | None = None
     if values and "llm.efforts" in values:
@@ -375,6 +388,11 @@ def save_runtime(values: dict[str, str]) -> dict:
         if key in pending:
             continue
         pending[key] = _coerce(by_key[key], raw, efforts)
+    return pending
+
+
+def save_runtime(values: dict[str, str]) -> dict:
+    pending = _coerce_values(values)
     current = config.read_settings_overlay()
     for key, value in pending.items():
         section, _, name = key.partition(".")
@@ -572,3 +590,421 @@ def push_host_env(values: dict[str, str]) -> list[str]:
         log.info("pushed keys to host .env via settings: %s", sorted(written))
     _note_host_sig()
     return sorted(written)
+
+
+def host_config_state() -> dict:
+    """What the container can see of the host `config.toml`: is it mounted and
+    writable, has it changed since we last synced, and which managed knobs it
+    currently defines (values included — config holds no secrets)."""
+    path = config.host_config_path()
+    is_file = path.is_file()
+    sig = config.host_config_signature() if is_file else None
+    global _HOST_CONFIG_SIG
+    if sig and _HOST_CONFIG_SIG is None:
+        # first sighting of the file becomes the baseline
+        _HOST_CONFIG_SIG = sig
+    try:
+        readable = bool(is_file and os.access(path, os.R_OK))
+        writable = bool(is_file and os.access(path, os.W_OK))
+    except OSError:
+        readable = False
+        writable = False
+    keys: dict[str, object] = {}
+    if readable and sig:
+        try:
+            with path.open("rb") as fh:
+                data = tomllib.load(fh)
+        except Exception:
+            data = {}
+        if isinstance(data, dict):
+            for field in RUNTIME_FIELDS:
+                section, _, name = field["key"].partition(".")
+                group = data.get(section)
+                if isinstance(group, dict) and name in group:
+                    keys[field["key"]] = group[name]
+    return {
+        "mounted": is_file,
+        "readable": readable,
+        "writable": writable,
+        "changed": bool(sig and _HOST_CONFIG_SIG and sig != _HOST_CONFIG_SIG),
+        "keys": keys,
+        # copy: callers must not be able to mutate the module global
+        "last_applied": {"keys": list(_LAST_CONFIG_APPLIED["keys"]), "at": _LAST_CONFIG_APPLIED["at"]},
+    }
+
+
+def note_config_auto_applied(keys: list[str]) -> None:
+    """Record a watcher-applied host config change for the UI to announce."""
+    global _LAST_CONFIG_APPLIED
+    _LAST_CONFIG_APPLIED = {"keys": list(keys), "at": time.time()}
+
+
+def _note_host_config_sig() -> None:
+    global _HOST_CONFIG_SIG
+    _HOST_CONFIG_SIG = config.host_config_signature()
+
+
+def _providers_view() -> dict:
+    """Comparable snapshot of every configured endpoint, for change
+    detection in `reload_host_config`."""
+    return {
+        name: (
+            str(conf.get("base_url", "")),
+            str(conf.get("api_key_env", "")),
+            bool(conf.get("thinking", False)),
+        )
+        for name, conf in config.PROVIDERS.items()
+    }
+
+
+def reload_host_config() -> list[str]:
+    """Pull the mounted host `config.toml` into the live settings. Host wins:
+    every managed knob the file defines beats its overlay copy (which is
+    pruned) so a hand edit outside the container actually takes effect.
+    Returns the knobs and endpoints whose effective value changed."""
+    path = config.host_config_path()
+    if not path.is_file():
+        return []
+    try:
+        with path.open("rb") as fh:
+            data = tomllib.load(fh)
+    except Exception:
+        return []
+    if not isinstance(data, dict):
+        return []
+
+    before = {field["key"]: _dotted(config.SETTINGS, field["key"]) for field in RUNTIME_FIELDS}
+    before_providers = _providers_view()
+    present = set()
+    for field in RUNTIME_FIELDS:
+        section, _, name = field["key"].partition(".")
+        group = data.get(section)
+        if isinstance(group, dict) and name in group:
+            present.add(field["key"])
+
+    current = config.read_settings_overlay()
+    pruned: dict = {}
+    for section, items in current.items():
+        if not isinstance(items, dict):
+            pruned[section] = items
+            continue
+        keep = {
+            name: value
+            for name, value in items.items()
+            if f"{section}.{name}" not in present
+        }
+        if keep:
+            pruned[section] = keep
+    if pruned != current:
+        config.write_settings_overlay(pruned)
+    config.refresh_runtime()
+
+    after = {field["key"]: _dotted(config.SETTINGS, field["key"]) for field in RUNTIME_FIELDS}
+    changed = sorted(key for key in before if before[key] != after[key])
+    after_providers = _providers_view()
+    for name in sorted(set(before_providers) | set(after_providers)):
+        if before_providers.get(name) != after_providers.get(name):
+            changed.append(f"llm.providers.{name}")
+    changed.sort()
+    _note_host_config_sig()
+    if changed or pruned != current:
+        log.info(
+            "reloaded host config.toml via settings: %s",
+            ", ".join(changed) if changed else "(overrides dropped)",
+        )
+    return changed
+
+
+def _split_inline_comment(text: str) -> str:
+    """Return the `# comment` tail of a TOML line, ignoring `#` inside
+    strings."""
+    quote = ""
+    escaped = False
+    for index, char in enumerate(text):
+        if quote:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = ""
+        elif char in "\"'":
+            quote = char
+        elif char == "#":
+            return text[index:]
+    return ""
+
+
+def _toml_depth(text: str) -> int:
+    """Net open brackets ({, [) of a TOML line, outside strings and the
+    inline comment. Non-zero while a multi-line value is still open."""
+    comment = _split_inline_comment(text)
+    body = text[: len(text) - len(comment)] if comment else text
+    quote = ""
+    escaped = False
+    depth = 0
+    for char in body:
+        if quote:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = ""
+        elif char in "\"'":
+            quote = char
+        elif char in "[{":
+            depth += 1
+        elif char in "]}":
+            depth -= 1
+    return max(depth, 0)
+
+
+def _toml_section(line: str) -> str | None:
+    """The name of a `[section]` header line, or None for anything else.
+    Quoted parts are unquoted, so `[llm.providers."9router"]` and
+    `[llm.providers.9router]` resolve to the same table."""
+    stripped = line.strip()
+    comment = _split_inline_comment(stripped)
+    if comment:
+        stripped = stripped[: len(stripped) - len(comment)].rstrip()
+    if not (stripped.startswith("[") and stripped.endswith("]")):
+        return None
+    name = stripped[1:-1].strip()
+    if not name:
+        return None
+    return ".".join(part.strip().strip('"').strip("'") for part in name.split("."))
+
+
+_KEY_RE = re.compile(r'^("[^"]+"|[A-Za-z0-9_.-]+)\s*=')
+
+
+def _update_toml_file(
+    path,
+    updates: dict[str, object],
+    remove: set[str] | None = None,
+) -> None:
+    """Rewrite `key = value` lines in place for dotted-key updates,
+    preserving comments, blank lines, order, and unrelated keys; missing keys
+    are added under their section header, missing sections at the end.
+    ``remove`` drops whole sections (header plus its body). Values are written
+    single-line, so a multi-line value being replaced is consumed whole.
+    In-place (open+truncate) is deliberate: the host `config.toml` is a
+    bind-mounted file, and renames onto a mount point fail with EBUSY, so
+    temp-file-and-rename writers cannot work here."""
+    try:
+        text = path.read_text()
+    except OSError as exc:
+        raise ValueError(f"could not read host config.toml: {exc}")
+
+    removed = set(remove or ())
+    pending = dict(updates)
+    lines = text.splitlines()
+    sections: dict[str, list[str]] = {}
+    for key in pending:
+        section, _, _ = key.rpartition(".")
+        sections.setdefault(section, []).append(key)
+
+    # pass 1: which pending keys already have a line in the file?
+    found: set[str] = set()
+    section = ""
+    for line in lines:
+        header = _toml_section(line)
+        if header is not None:
+            section = header
+            continue
+        match = _KEY_RE.match(line.strip())
+        if match:
+            found.add(f"{section}.{match.group(1)}" if section else match.group(1))
+
+    # pass 2: rewrite values, insert missing keys under their headers, drop
+    # removed sections whole
+    inserted: set[str] = set()
+    out: list[str] = []
+    section = ""
+    skip_depth = 0
+    dropping = False
+    for line in lines:
+        if skip_depth:
+            # still inside the multi-line value being replaced
+            skip_depth += _toml_depth(line)
+            if skip_depth <= 0:
+                skip_depth = 0
+            continue
+        header = _toml_section(line)
+        if header is not None:
+            section = header
+            dropping = header in removed
+            if dropping:
+                continue
+            out.append(line)
+            for key in sections.get(section, ()):
+                if key not in found and key not in inserted:
+                    name = key.rpartition(".")[2]
+                    out.append(f"{name} = {config._toml_value(pending[key])}")
+                    inserted.add(key)
+            continue
+        if dropping:
+            continue
+        stripped = line.strip()
+        match = _KEY_RE.match(stripped)
+        if match:
+            key = f"{section}.{match.group(1)}" if section else match.group(1)
+            if key in pending:
+                name = match.group(1)
+                indent = line[: len(line) - len(line.lstrip())]
+                depth = _toml_depth(stripped)
+                comment = _split_inline_comment(stripped)
+                value = config._toml_value(pending.pop(key))
+                out.append(f"{indent}{name} = {value}{' ' + comment if comment else ''}")
+                if depth > 0:
+                    skip_depth = depth
+                continue
+        out.append(line)
+
+    # sections the file does not have yet go at the end
+    for section in sorted(sections):
+        rest = [key for key in sections[section] if key not in found and key not in inserted]
+        if not rest:
+            continue
+        if out and out[-1].strip():
+            out.append("")
+        if section:
+            out.append(f"[{section}]")
+        for key in rest:
+            name = key.rpartition(".")[2]
+            out.append(f"{name} = {config._toml_value(pending[key])}")
+
+    try:
+        with path.open("w") as fh:
+            fh.write("\n".join(out) + "\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+    except OSError as exc:
+        raise ValueError(f"could not write host config.toml: {exc}")
+
+
+def push_host_config(values: dict[str, str]) -> list[str]:
+    """Write staged runtime knobs through to the mounted host `config.toml`
+    (comments and unrelated keys are preserved), then drop their overlay
+    copies so the file is the single source of truth again."""
+    path = config.host_config_path()
+    if not path.is_file():
+        raise ValueError("host config.toml is not mounted in this container")
+    if not os.access(path, os.W_OK):
+        raise ValueError("host config.toml is not writable (check the file permissions)")
+    pending = _coerce_values(values)
+    if not pending:
+        return []
+    _update_toml_file(path, pending)
+
+    current = config.read_settings_overlay()
+    pruned: dict = {}
+    for section, items in current.items():
+        if not isinstance(items, dict):
+            pruned[section] = items
+            continue
+        keep = {
+            name: value
+            for name, value in items.items()
+            if f"{section}.{name}" not in pending
+        }
+        if keep:
+            pruned[section] = keep
+    if pruned != current:
+        config.write_settings_overlay(pruned)
+    config.refresh_runtime()
+    _note_host_config_sig()
+    log.info("pushed runtime config to host config.toml via settings: %s", sorted(pending))
+    return sorted(pending)
+
+
+# Model endpoints (`llm.providers`). Unlike the scalar runtime knobs these are
+# structured tables, so they live directly in the host `config.toml` with no
+# overlay: the file is the single source of truth, and editing needs it
+# mounted and writable. Saving refreshes the runtime so new endpoints, base
+# URLs and thinking flags apply without a restart.
+_ENDPOINT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+
+
+def endpoints_status() -> dict:
+    """Every configured model endpoint for the Settings UI: base URL, key
+    var, thinking flag, whether it is the default, and whether its key is
+    set (values stay masked)."""
+    host = host_config_state()
+    entries = []
+    for name, conf in config.PROVIDERS.items():
+        key_var = str(conf.get("api_key_env", ""))
+        entries.append(
+            {
+                "name": name,
+                "base_url": str(conf.get("base_url", "")),
+                "api_key_env": key_var,
+                "thinking": bool(conf.get("thinking", False)),
+                "default": name == config.PROVIDER,
+                "key_configured": bool(os.getenv(key_var, "").strip()) if key_var else False,
+            }
+        )
+    return {"endpoints": entries, "mounted": host["mounted"], "writable": host["writable"]}
+
+
+def _endpoint_values(values: dict) -> dict:
+    name = str(values.get("name", "")).strip()
+    if not _ENDPOINT_RE.match(name):
+        raise ValueError(
+            "endpoint name must start with a letter or digit and use only letters, digits, '-' or '_'"
+        )
+    base_url = str(values.get("base_url", "")).strip()
+    if not base_url.startswith(("http://", "https://")):
+        raise ValueError("base URL must start with http:// or https://")
+    api_key_env = str(values.get("api_key_env", "")).strip()
+    if not _VAR_RE.match(api_key_env):
+        raise ValueError("API key env var must look like AN_ENV_VAR")
+    return {
+        "name": name,
+        "base_url": base_url,
+        "api_key_env": api_key_env,
+        "thinking": bool(values.get("thinking")),
+    }
+
+
+def save_endpoint(values: dict) -> dict:
+    """Create or update a model endpoint in the mounted host `config.toml`."""
+    endpoint = _endpoint_values(values)
+    path = config.host_config_path()
+    if not path.is_file():
+        raise ValueError("host config.toml is not mounted in this container")
+    if not os.access(path, os.W_OK):
+        raise ValueError("host config.toml is not writable (check the file permissions)")
+    name = endpoint["name"]
+    _update_toml_file(
+        path,
+        {
+            f"llm.providers.{name}.base_url": endpoint["base_url"],
+            f"llm.providers.{name}.api_key_env": endpoint["api_key_env"],
+            f"llm.providers.{name}.thinking": endpoint["thinking"],
+        },
+    )
+    config.refresh_runtime()
+    _note_host_config_sig()
+    log.info("saved endpoint %s via settings", name)
+    return endpoints_status()
+
+
+def delete_endpoint(name: str) -> dict:
+    """Remove a model endpoint from the mounted host `config.toml`."""
+    name = str(name or "").strip()
+    if name not in config.PROVIDERS:
+        raise ValueError(f"unknown endpoint {name!r}")
+    if name == config.PROVIDER:
+        raise ValueError("this endpoint is the default; switch the default provider first")
+    path = config.host_config_path()
+    if not path.is_file():
+        raise ValueError("host config.toml is not mounted in this container")
+    if not os.access(path, os.W_OK):
+        raise ValueError("host config.toml is not writable (check the file permissions)")
+    _update_toml_file(path, {}, remove={f"llm.providers.{name}"})
+    config.refresh_runtime()
+    _note_host_config_sig()
+    log.info("deleted endpoint %s via settings", name)
+    return endpoints_status()
