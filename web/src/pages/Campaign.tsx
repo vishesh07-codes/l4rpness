@@ -1,12 +1,24 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from "react"
+import { useEffect, useRef, useState } from "react"
 import { Link, useNavigate, useParams } from "react-router-dom"
-import { ArrowLeft, Send, Trash2 } from "lucide-react"
+import {
+  ArrowDown,
+  ArrowLeft,
+  ChevronDown,
+  FileText,
+  Paperclip,
+  RefreshCw,
+  Sparkles,
+  Trash2,
+  TriangleAlert,
+} from "lucide-react"
 
+import { ThinkingShimmer } from "@/components/agents/loading-states/thinking-shimmer"
+import { MessageScroller } from "@/components/agents/message-scroller"
+import { PromptInput } from "@/components/agents/prompt-input"
 import { StatusBadge } from "@/components/StatusBadge"
-import { Markdown } from "@/components/Markdown"
-import { Pulse } from "@/components/Pulse"
-import { Button } from "@/components/ui/button"
-import { Textarea } from "@/components/ui/textarea"
+import { AssistantMessage, MessageRow, UserMessage } from "@/components/chat/Message"
+import LoadingState from "@/components/primitives/LoadingState"
+import { Badge } from "@/components/ui/badge"
 import {
   api,
   type Attachment,
@@ -24,6 +36,12 @@ const SECTIONS = [
   { key: "scope", label: "Scope" },
 ] as const
 
+const SUGGESTIONS = [
+  "Recon this target",
+  "What would you probe first?",
+  "Draft a testing plan",
+]
+
 type LiveReply = { parts: Part[]; pendingTool: string | null }
 
 export function Campaign() {
@@ -39,7 +57,10 @@ export function Campaign() {
   const [pending, setPending] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [error, setError] = useState("")
-  const endRef = useRef<HTMLDivElement>(null)
+  const [following, setFollowing] = useState(true)
+  const initialIds = useRef<Set<number> | null>(null)
+  const abortRef = useRef<AbortController | null>(null)
+  const viewportRef = useRef<HTMLElement | null>(null)
 
   useEffect(() => {
     if (!campaignId) return
@@ -48,13 +69,15 @@ export function Campaign() {
         setCampaign(c)
         setMessages(m)
         setConfigured(cfg.agent_configured)
+        initialIds.current = new Set(m.map((message) => message.id))
       })
       .catch((e: Error) => setError(e.message))
   }, [campaignId])
 
-  useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: "smooth" })
-  }, [messages, stream, pending])
+  function jumpToLatest() {
+    const viewport = viewportRef.current
+    viewport?.scrollTo({ top: viewport.scrollHeight, behavior: "smooth" })
+  }
 
   async function send() {
     const content = input.trim()
@@ -64,6 +87,9 @@ export function Campaign() {
     setError("")
     setPending(true)
     setStream({ parts: [], pendingTool: null })
+
+    const controller = new AbortController()
+    abortRef.current = controller
 
     const optimistic: Message = {
       id: -Date.now(),
@@ -91,50 +117,62 @@ export function Campaign() {
     let failure = ""
     let saved = false
     let completed = false
+    let stopped = false
 
     try {
-      await api.streamMessage(campaignId, content, (event) => {
-        if (event.type === "thinking") {
-          pushPart({ type: "thinking", text: event.text })
-        } else if (event.type === "content") {
-          pushPart({ type: "content", text: event.text })
-        } else if (event.type === "tool_start") {
-          setStream((s) => (s ? { ...s, pendingTool: event.name } : s))
-        } else if (event.type === "tool_call") {
-          pushPart({ type: "tool", id: event.id, name: event.name, args: event.args })
-          setStream((s) => (s ? { ...s, pendingTool: null } : s))
-        } else if (event.type === "tool_result") {
-          setStream((s) =>
-            s
-              ? {
-                  ...s,
-                  parts: s.parts.map((part) =>
-                    part.type === "tool" && part.id === event.id
-                      ? { ...part, output: event.output, ok: event.ok, ms: event.ms }
-                      : part
-                  ),
-                }
-              : s
-          )
-        } else if (event.type === "done") {
-          completed = true
-          setMessages((prev) => [
-            ...prev.filter((m) => m.id !== optimistic.id),
-            event.user,
-            event.assistant,
-          ])
-        } else if (event.type === "error") {
-          failure = event.detail
-          saved = event.saved ?? false
-        }
-      })
+      await api.streamMessage(
+        campaignId,
+        content,
+        (event) => {
+          if (event.type === "thinking") {
+            pushPart({ type: "thinking", text: event.text })
+          } else if (event.type === "content") {
+            pushPart({ type: "content", text: event.text })
+          } else if (event.type === "tool_start") {
+            setStream((s) => (s ? { ...s, pendingTool: event.name } : s))
+          } else if (event.type === "tool_call") {
+            pushPart({ type: "tool", id: event.id, name: event.name, args: event.args })
+            setStream((s) => (s ? { ...s, pendingTool: null } : s))
+          } else if (event.type === "tool_result") {
+            setStream((s) =>
+              s
+                ? {
+                    ...s,
+                    parts: s.parts.map((part) =>
+                      part.type === "tool" && part.id === event.id
+                        ? { ...part, output: event.output, ok: event.ok, ms: event.ms }
+                        : part
+                    ),
+                  }
+                : s
+            )
+          } else if (event.type === "done") {
+            completed = true
+            // swap the live stream for the saved message in one render, otherwise
+            // the reply (reasoning included) paints twice for a frame
+            setMessages((prev) => [
+              ...prev.filter((m) => m.id !== optimistic.id),
+              event.user,
+              event.assistant,
+            ])
+            setStream(null)
+          } else {
+            failure = event.detail
+            saved = event.saved ?? false
+          }
+        },
+        controller.signal
+      )
     } catch (e) {
-      failure = (e as Error).message
+      if ((e as Error).name === "AbortError") stopped = true
+      else failure = (e as Error).message
     }
 
-    if (!completed && !failure) failure = "connection lost before the reply finished"
+    if (!completed && !failure && !stopped) {
+      failure = "connection lost before the reply finished"
+    }
 
-    if (failure) {
+    if (stopped || failure) {
       if (saved) {
         try {
           setMessages(await api.listMessages(campaignId))
@@ -145,23 +183,23 @@ export function Campaign() {
         setMessages((prev) => prev.filter((m) => m.id !== optimistic.id))
         setInput(content)
       }
-      setError(failure)
+      if (failure) setError(failure)
     }
 
+    abortRef.current = null
     setStream(null)
     setPending(false)
   }
 
-  function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault()
-      send()
-    }
+  function stop() {
+    abortRef.current?.abort()
   }
 
   async function remove() {
     if (!campaign) return
-    if (!confirm(`Delete "${campaign.target.split("\n")[0]}"? Messages and files are removed too.`)) return
+    if (!confirm(`Delete "${campaign.target.split("\n")[0]}"? Messages and files are removed too.`)) {
+      return
+    }
 
     setDeleting(true)
     setError("")
@@ -176,8 +214,8 @@ export function Campaign() {
 
   if (!campaign) {
     return (
-      <div className="mx-auto max-w-3xl px-8 py-10 text-sm text-muted-foreground">
-        {error || "Loading…"}
+      <div className="mx-auto flex h-svh max-w-3xl items-center px-6 py-6 text-sm text-muted-foreground">
+        {error || <LoadingState label="Loading campaign" />}
       </div>
     )
   }
@@ -186,151 +224,151 @@ export function Campaign() {
   const targetFiles = attachments.filter((a) => a.field === "target")
 
   return (
-    <div className="mx-auto flex h-svh max-w-3xl flex-col px-8 py-10">
-      <Link
-        to="/"
-        className="flex w-fit items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
-      >
-        <ArrowLeft className="size-3.5" />
-        Campaigns
-      </Link>
+    <div className="mx-auto flex h-svh max-w-3xl flex-col gap-4 px-6 py-6">
+      <div className="flex flex-col gap-3">
+        <Link
+          to="/"
+          className="flex w-fit items-center gap-1 text-[13px] text-muted-foreground transition-colors hover:text-foreground"
+        >
+          <ArrowLeft className="size-3.5" strokeWidth={1.5} />
+          Campaigns
+        </Link>
 
-      <header className="mt-4 flex items-start justify-between gap-4">
-        <div className="min-w-0">
-          <h1 className="truncate font-mono text-base" title={campaign.target}>
-            {campaign.target}
-          </h1>
-          <p className="mt-1 text-xs text-muted-foreground">
-            {campaign.model} · effort {campaign.effort} · created {fmtDate(campaign.created_at)}
-          </p>
-          {targetFiles.length > 0 && (
-            <div className="mt-2 flex flex-wrap gap-2">
-              {targetFiles.map((a) => (
-                <AttachmentChip key={a.id} attachment={a} />
-              ))}
+        <header className="flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <h1 className="truncate font-mono text-sm font-medium" title={campaign.target}>
+              {campaign.target.split("\n")[0]}
+            </h1>
+            <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+              <Badge variant="secondary">{campaign.model}</Badge>
+              <Badge variant="secondary">effort · {campaign.effort}</Badge>
+              <span className="px-0.5">created {fmtDate(campaign.created_at)}</span>
             </div>
-          )}
-        </div>
-        <div className="flex shrink-0 items-center gap-1">
-          <StatusBadge status={campaign.status} />
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-8 text-muted-foreground hover:text-destructive"
-            title="Delete campaign"
-            disabled={deleting || pending}
-            onClick={remove}
-          >
-            <Trash2 className="size-4" />
-          </Button>
-        </div>
-      </header>
+            {targetFiles.length > 0 && (
+              <div className="mt-2 flex flex-wrap gap-2">
+                {targetFiles.map((a) => (
+                  <AttachmentChip key={a.id} attachment={a} />
+                ))}
+              </div>
+            )}
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <span className="flex items-center gap-1.5 text-[11px] text-ink-3">
+              <span
+                className={cn("size-1.5 rounded-full", configured ? "bg-green" : "bg-ink-3")}
+              />
+              {configured ? "ready" : "offline"}
+            </span>
+            <StatusBadge status={campaign.status} />
+            <button
+              type="button"
+              title="Delete campaign"
+              onClick={remove}
+              disabled={deleting || pending}
+              className="relative flex size-7 items-center justify-center rounded-md text-ink-3 outline-none transition-colors after:absolute after:top-1/2 after:left-1/2 after:size-9 after:-translate-1/2 hover:bg-hover hover:text-destructive focus-visible:ring-2 focus-visible:ring-ring/60 disabled:opacity-50"
+            >
+              <Trash2 className="size-3.5" strokeWidth={1.5} />
+            </button>
+          </div>
+        </header>
 
-      <div className="mt-6 grid gap-3">
-        {SECTIONS.map(({ key, label }) => {
-          const value = campaign[key].trim()
-          const files = attachments.filter((a) => a.field === key)
-          if (!value && files.length === 0) return null
-          return (
-            <div key={key} className="rounded-md border bg-muted/30 px-3 py-2.5 text-sm">
-              <div className="text-xs font-medium text-muted-foreground">{label}</div>
-              {value && <p className="mt-1 whitespace-pre-wrap">{value}</p>}
-              {files.length > 0 && (
-                <div className="mt-2 flex flex-wrap gap-2">
-                  {files.map((a) => (
-                    <AttachmentChip key={a.id} attachment={a} />
-                  ))}
-                </div>
-              )}
-            </div>
-          )
-        })}
+        <ContextPanel
+          campaign={campaign}
+          attachments={attachments}
+          defaultOpen={messages.length === 0 && !stream}
+        />
       </div>
 
-      <div className="mt-6 flex min-h-0 flex-1 flex-col rounded-lg border">
-        <div className="flex-1 space-y-4 overflow-y-auto p-4">
-          {messages.length === 0 && !stream && (
-            <p className="text-sm text-muted-foreground">
-              Ask the agent to run something against this target.
-            </p>
+      <section className="relative flex min-h-0 flex-1 flex-col">
+        <MessageScroller
+          className="min-h-0 flex-1"
+          viewportClassName="pb-4"
+          contentClassName={cn(
+            "flex min-h-full flex-col gap-4",
+            messages.length === 0 && !stream && "justify-center"
           )}
+          label="Conversation"
+          busy={pending}
+          navigation={messages.length > 4 ? "rail" : undefined}
+          viewportRef={viewportRef}
+          onFollowChange={setFollowing}
+        >
+          {messages.length === 0 && !stream && (
+            <EmptyState configured={configured} onPick={setInput} />
+          )}
+
           {messages.map((m) =>
             m.role === "user" ? (
-              <div key={m.id} className="flex justify-end">
-                <div className="max-w-[80%] whitespace-pre-wrap rounded-lg bg-muted px-3 py-2 text-sm">
-                  {m.content}
-                </div>
-              </div>
+              <MessageRow key={m.id} role="user">
+                <UserMessage content={m.content} animate={!initialIds.current?.has(m.id)} />
+              </MessageRow>
             ) : (
-              <AssistantMessage key={m.id} message={m} />
+              <MessageRow key={m.id} role="assistant">
+                <AssistantMessage parts={partsOf(m)} />
+              </MessageRow>
             )
           )}
+
           {stream && (
-            <div className="max-w-[85%]">
-              <Parts parts={stream.parts} live />
-            </div>
+            <MessageRow role="assistant">
+              <div className="flex w-full flex-col gap-3">
+                {stream.pendingTool && (
+                  <div className="text-[13px]">
+                    <ThinkingShimmer>
+                      {stream.pendingTool === "write_todos"
+                        ? "Planning…"
+                        : `Calling ${stream.pendingTool}…`}
+                    </ThinkingShimmer>
+                  </div>
+                )}
+                <AssistantMessage parts={stream.parts} live />
+              </div>
+            </MessageRow>
           )}
-          {pending && stream && (
-            <p className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Pulse />
-              {activity(stream)}
-            </p>
-          )}
-          <div ref={endRef} />
-        </div>
+        </MessageScroller>
 
-        <div className="border-t p-3">
-          {error && <p className="mb-2 text-sm text-destructive">{error}</p>}
-          {!configured && (
-            <p className="mb-2 text-sm text-muted-foreground">
-              DEEPSEEK_API_KEY is not set. Add it to .env and restart.
-            </p>
-          )}
-          <div className="flex items-end gap-2">
-            <Textarea
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={onKeyDown}
-              rows={2}
-              placeholder={configured ? "Message the agent…" : "Chat disabled"}
-              disabled={!configured || pending}
-              className="min-h-0 resize-none"
-            />
-            <Button size="icon" onClick={send} disabled={!configured || pending || !input.trim()}>
-              <Send />
-            </Button>
+        {!following && messages.length > 0 && (
+          <button
+            type="button"
+            onClick={jumpToLatest}
+            className="absolute bottom-24 left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-line bg-surface px-3 py-1.5 text-[12px] font-medium text-ink-2 shadow-raised transition-colors hover:text-ink"
+          >
+            <ArrowDown className="size-3.5" strokeWidth={1.5} />
+            Jump to latest
+          </button>
+        )}
+
+        {error && (
+          <div className="mb-3 flex items-center gap-2 rounded-[10px] border border-destructive/30 bg-destructive/5 px-3 py-2 text-[12px] text-destructive">
+            <TriangleAlert className="size-3.5 shrink-0" strokeWidth={1.5} />
+            <span className="min-w-0 flex-1">{error}</span>
+            <button
+              type="button"
+              onClick={() => send()}
+              disabled={pending}
+              className="flex shrink-0 items-center gap-1 rounded-md border border-line px-2 py-0.5 font-medium text-ink-2 transition-colors hover:bg-hover hover:text-ink disabled:opacity-50"
+            >
+              <RefreshCw className="size-3" strokeWidth={1.5} />
+              Retry
+            </button>
           </div>
+        )}
+
+        <div className="pt-1">
+          <PromptInput
+            value={input}
+            onValueChange={setInput}
+            onSubmit={send}
+            loading={pending}
+            onStop={stop}
+            disabled={!configured}
+            placeholder={configured ? "Message the agent…" : "Chat disabled"}
+            minRows={1}
+            maxRows={8}
+          />
         </div>
-      </div>
+      </section>
     </div>
-  )
-}
-
-function AssistantMessage({ message }: { message: Message }) {
-  return (
-    <div className="max-w-[85%]">
-      <Parts parts={partsOf(message)} />
-    </div>
-  )
-}
-
-function Parts({ parts, live }: { parts: Part[]; live?: boolean }) {
-  if (parts.length === 0) {
-    return live ? <p className="text-sm text-muted-foreground">Thinking…</p> : null
-  }
-
-  return (
-    <>
-      {parts.map((part, index) =>
-        part.type === "thinking" ? (
-          <ThinkingBlock key={index} text={part.text} live={live} />
-        ) : part.type === "tool" ? (
-          <ToolCallBlock key={part.id || index} call={part} />
-        ) : (
-          <Markdown key={index} text={part.text} />
-        )
-      )}
-    </>
   )
 }
 
@@ -340,7 +378,7 @@ function partsOf(message: Message): Part[] {
       const parts = JSON.parse(message.parts) as Part[]
       if (parts.length > 0) return parts
     } catch {
-      // fall back to the old columns
+      // fall back to the legacy columns
     }
   }
 
@@ -360,54 +398,111 @@ function callsOf(message: Message): ToolCall[] {
   }
 }
 
-function activity(stream: LiveReply): string {
-  if (stream.pendingTool) return `Calling ${stream.pendingTool}`
-  const last = stream.parts[stream.parts.length - 1]
-  if (last?.type === "tool" && last.output == null) return `Running ${last.name}`
-  if (last?.type === "content") return "Writing"
-  return "Thinking"
-}
-
-function ToolCallBlock({ call }: { call: ToolCall }) {
+function EmptyState({
+  configured,
+  onPick,
+}: {
+  configured: boolean
+  onPick: (value: string) => void
+}) {
   return (
-    <details className="mb-2 overflow-hidden rounded-md border bg-muted/30 text-xs">
-      <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2">
-        {call.output == null ? (
-          <Pulse />
-        ) : (
-          <span
-            className={cn("size-1.5 shrink-0 rounded-full", call.ok ? "bg-emerald-500" : "bg-destructive")}
-          />
-        )}
-        <span className="font-mono">{call.name}</span>
-        <span className="min-w-0 flex-1 truncate text-muted-foreground">
-          {JSON.stringify(call.args)}
-        </span>
-        {call.ms != null && <span className="shrink-0 text-muted-foreground">{call.ms}ms</span>}
-      </summary>
-      <pre className="max-h-64 overflow-auto whitespace-pre-wrap border-t bg-background/60 px-3 py-2 font-mono leading-relaxed">
-        {call.output || "running…"}
-      </pre>
-    </details>
+    <div className="flex flex-col items-center justify-center gap-4 px-6 text-center">
+      <div className="flex size-11 items-center justify-center rounded-full bg-accent-tint text-accent-ink">
+        <Sparkles className="size-5" />
+      </div>
+      <div>
+        <p className="text-[13px] font-medium text-balance">Ask about this target</p>
+        <p className="mt-1 text-xs text-pretty text-ink-3">
+          {configured
+            ? "Ask the agent to run something. It has bash and file tools in a per-campaign work dir."
+            : "DEEPSEEK_API_KEY is not set. Add it to .env and restart."}
+        </p>
+      </div>
+      {configured && (
+        <div className="flex flex-wrap justify-center gap-2">
+          {SUGGESTIONS.map((suggestion) => (
+            <button
+              key={suggestion}
+              type="button"
+              onClick={() => onPick(suggestion)}
+              className="rounded-full border border-line bg-surface px-3 py-1 text-[12px] text-ink-2 outline-none transition-[color,background-color,scale] duration-150 ease-out hover:bg-hover hover:text-ink focus-visible:ring-2 focus-visible:ring-ring/60 active:scale-[0.96]"
+            >
+              {suggestion}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
   )
 }
 
-function ThinkingBlock({ text, live }: { text: string; live?: boolean }) {
-  const box = useRef<HTMLDivElement>(null)
+function ContextPanel({
+  campaign,
+  attachments,
+  defaultOpen,
+}: {
+  campaign: CampaignData
+  attachments: Attachment[]
+  defaultOpen: boolean
+}) {
+  const [open, setOpen] = useState(defaultOpen)
 
-  useEffect(() => {
-    const el = box.current
-    if (el && live) el.scrollTop = el.scrollHeight
-  }, [text, live])
+  const sections = SECTIONS.map(({ key, label }) => {
+    const value = campaign[key].trim()
+    const files = attachments.filter((a) => a.field === key)
+    return { key, label, value, files }
+  }).filter((section) => section.value || section.files.length > 0)
+
+  if (sections.length === 0) return null
 
   return (
-    <div className="mb-2 rounded-md border bg-muted/40 px-3 py-2">
-      <div className="text-xs font-medium text-muted-foreground">Thinking</div>
-      <div
-        ref={box}
-        className="mt-1 max-h-72 overflow-y-auto whitespace-pre-wrap break-words text-xs leading-relaxed text-muted-foreground"
+    <div className="rounded-[12px] bg-surface shadow-hairline">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+        className="flex w-full items-center gap-2 rounded-[12px] px-3.5 py-2.5 text-left transition-colors hover:bg-hover"
       >
-        {text}
+        <FileText className="size-3.5 shrink-0 text-ink-3" />
+        <span className="text-[13px] font-medium">Brief</span>
+        <span className="text-[12px] text-ink-3">
+          {sections.length} {sections.length === 1 ? "section" : "sections"}
+        </span>
+        <ChevronDown
+          className={cn(
+            "ml-auto size-4 text-ink-3 transition-transform duration-300",
+            open && "rotate-180"
+          )}
+        />
+      </button>
+
+      <div
+        className="grid transition-[grid-template-rows,opacity] duration-300 ease-[cubic-bezier(0.23,1,0.32,1)]"
+        style={{ gridTemplateRows: open ? "1fr" : "0fr", opacity: open ? 1 : 0 }}
+      >
+        <div className="overflow-hidden">
+          <div className="grid max-h-[40vh] gap-3 overflow-y-auto border-t border-line px-3.5 py-3 [scrollbar-color:var(--line-strong)_transparent] [scrollbar-width:thin] sm:grid-cols-2">
+            {sections.map((section) => (
+              <div key={section.key} className="rounded-[10px] bg-inset px-3 py-2.5">
+                <div className="text-[11px] font-medium tracking-wide text-ink-3 uppercase">
+                  {section.label}
+                </div>
+                {section.value && (
+                  <p className="mt-1 text-[13px] leading-relaxed whitespace-pre-wrap text-ink-2">
+                    {section.value}
+                  </p>
+                )}
+                {section.files.length > 0 && (
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {section.files.map((a) => (
+                      <AttachmentChip key={a.id} attachment={a} />
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
     </div>
   )
@@ -417,8 +512,9 @@ function AttachmentChip({ attachment }: { attachment: Attachment }) {
   return (
     <a
       href={api.attachmentUrl(attachment.id)}
-      className="rounded border bg-background px-2 py-0.5 text-xs hover:bg-accent"
+      className="inline-flex items-center gap-1 rounded-[6px] border border-line bg-surface px-2 py-0.5 font-mono text-[11px] text-ink-2 transition-colors hover:bg-hover hover:text-ink"
     >
+      <Paperclip className="size-3" strokeWidth={1.5} />
       {attachment.filename}
     </a>
   )

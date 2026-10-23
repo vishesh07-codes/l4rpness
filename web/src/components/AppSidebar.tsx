@@ -9,7 +9,7 @@ export function AppSidebar() {
   const { pathname } = useLocation()
 
   return (
-    <aside className="fixed inset-y-0 left-0 z-10 flex w-56 flex-col border-r bg-muted/40">
+    <aside className="app-sidebar fixed inset-y-0 left-0 z-10 flex w-56 flex-col border-r border-neutral-300 bg-muted dark:border-neutral-700 dark:bg-black/70">
       <div className="flex h-14 items-center px-5 text-sm font-semibold tracking-tight">
         l4rpness
       </div>

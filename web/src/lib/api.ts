@@ -101,11 +101,17 @@ function parseSse(chunk: string): StreamEvent | null {
   }
 }
 
-async function streamMessage(id: number, content: string, onEvent: (event: StreamEvent) => void) {
+async function streamMessage(
+  id: number,
+  content: string,
+  onEvent: (event: StreamEvent) => void,
+  signal?: AbortSignal
+) {
   const res = await fetch(`/api/campaigns/${id}/messages`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ content }),
+    signal,
   })
   if (!res.ok || !res.body) throw new Error(await errorText(res))
 

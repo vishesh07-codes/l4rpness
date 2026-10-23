@@ -110,7 +110,7 @@ export function NewCampaign() {
             <select
               value={effort}
               onChange={(e) => setEffort(e.target.value)}
-              className="h-9 w-full rounded-md border bg-transparent px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+              className="h-9 w-full rounded-md border border-neutral-200 bg-transparent px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/50 dark:border-neutral-700"
             >
               {efforts.map((level) => (
                 <option key={level} value={level}>

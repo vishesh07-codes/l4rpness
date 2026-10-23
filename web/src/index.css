@@ -1,44 +1,80 @@
 @import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@fontsource-variable/geist";
+@import "./app/beautifui/foundation.css";
+
+@custom-variant dark (&:where(.dark, .dark *));
 
 :root {
   color-scheme: light;
   --radius: 0.625rem;
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
+  --background: var(--page);
+  --foreground: var(--ink);
+  --card: var(--surface);
+  --card-foreground: var(--ink);
+  --popover: var(--surface);
+  --popover-foreground: var(--ink);
+  --primary: var(--ink);
+  --primary-foreground: var(--surface);
+  --secondary: var(--inset);
+  --secondary-foreground: var(--ink);
+  --muted: var(--inset);
+  --muted-foreground: var(--ink-2);
+  --accent: var(--hover);
+  --accent-foreground: var(--ink);
+  --destructive: var(--red);
+  --border: var(--line);
+  --input: var(--line-strong);
+  --ring: var(--accent-ink);
+  --chart-1: var(--accent);
+  --chart-2: var(--green);
+  --chart-3: var(--orange);
+  --chart-4: var(--red);
+  --chart-5: var(--ink-2);
+  --sidebar: var(--canvas);
+  --sidebar-foreground: var(--ink);
+  --sidebar-primary: var(--accent-ink);
+  --sidebar-primary-foreground: var(--surface);
+  --sidebar-accent: var(--hover);
+  --sidebar-accent-foreground: var(--ink);
+  --sidebar-border: var(--line);
+  --sidebar-ring: var(--accent-ink);
 }
 
 .dark {
   color-scheme: dark;
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
+  --background: var(--page);
+  --foreground: var(--ink);
+  --card: var(--surface);
+  --card-foreground: var(--ink);
+  --popover: var(--surface);
+  --popover-foreground: var(--ink);
+  --primary: var(--ink);
+  --primary-foreground: var(--page);
+  --secondary: var(--inset);
+  --secondary-foreground: var(--ink);
+  --muted: var(--inset);
+  --muted-foreground: var(--ink-2);
+  --accent: var(--hover);
+  --accent-foreground: var(--ink);
+  --destructive: var(--red);
+  --border: var(--line);
+  --input: var(--line-strong);
+  --ring: var(--accent-ink);
+  --chart-1: var(--accent);
+  --chart-2: var(--green);
+  --chart-3: var(--orange);
+  --chart-4: var(--red);
+  --chart-5: var(--ink-2);
+  --sidebar: var(--canvas);
+  --sidebar-foreground: var(--ink);
+  --sidebar-primary: var(--accent-ink);
+  --sidebar-primary-foreground: var(--page);
+  --sidebar-accent: var(--hover);
+  --sidebar-accent-foreground: var(--ink);
+  --sidebar-border: var(--line);
+  --sidebar-ring: var(--accent-ink);
 }
 
 ::view-transition-old(root),
@@ -52,42 +88,6 @@
   clip-path: circle(0 at var(--theme-x) var(--theme-y));
 }
 
-.theme-icon {
-  animation-duration: 180ms;
-  animation-timing-function: ease-out;
-  animation-fill-mode: both;
-}
-
-.theme-icon-sun {
-  animation-name: spin-sun;
-}
-
-.theme-icon-moon {
-  animation-name: spin-moon;
-}
-
-@keyframes spin-sun {
-  from {
-    opacity: 0;
-    transform: rotate(-90deg) scale(0.75);
-  }
-  to {
-    opacity: 1;
-    transform: rotate(0deg) scale(1);
-  }
-}
-
-@keyframes spin-moon {
-  from {
-    opacity: 0;
-    transform: rotate(90deg) scale(0.75);
-  }
-  to {
-    opacity: 1;
-    transform: rotate(0deg) scale(1);
-  }
-}
-
 @keyframes theme-reveal {
   to {
     clip-path: circle(150vmax at var(--theme-x) var(--theme-y));
@@ -98,10 +98,60 @@
   ::view-transition-new(root) {
     animation-duration: 1ms;
   }
+}
 
-  .theme-icon {
-    animation-duration: 1ms;
+/* AgentUI components hide their own scrollbars (message scroller, prompt input). */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+.text-shimmer {
+  color: transparent;
+  background-image: linear-gradient(
+    90deg,
+    var(--ink-3) 35%,
+    var(--ink) 50%,
+    var(--ink-3) 65%
+  );
+  background-size: 200% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  animation: shimmer-text 1.4s linear infinite;
+}
+
+/* blinking caret pinned to the tail of the last streamed markdown block */
+.md-streaming > :last-child::after {
+  display: inline-block;
+  width: 2px;
+  height: 1.05em;
+  margin-left: 1.5px;
+  vertical-align: text-bottom;
+  translate: 0 -0.5px;
+  border-radius: 1px;
+  background: var(--ink);
+  content: "";
+  animation: caret-blink 1s step-end infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .text-shimmer {
+    color: var(--ink-2);
+    background-image: none;
+    animation: none;
   }
+
+  .md-streaming > :last-child::after {
+    animation: none;
+  }
+}
+
+html[data-darkreader-mode] .app-sidebar {
+  background-color: oklch(0.20 0 0) !important;
 }
 
 @theme inline {
@@ -125,16 +175,60 @@
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
+  --font-heading: var(--font-sans);
+  --font-sans: 'Geist Variable', sans-serif;
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
 }
 
 @layer base {
   * {
-    @apply border-border;
+    @apply border-border outline-ring/50;
+  }
+
+  html {
+    @apply font-sans;
+  }
+
+  html,
+  body,
+  #root {
+    min-height: 100%;
+    background-color: var(--background);
   }
 
   body {
     @apply bg-background text-foreground antialiased;
   }
+
+  main {
+    min-height: 100vh;
+    background-color: var(--background);
+  }
+}
+
+/* Beautiful UI's foundation paints a hatch texture on the page; this app
+ * reads cleaner flat, and unlayered rules beat the base layer, so opt out here. */
+body {
+  background-color: var(--background);
+  background-image: none;
+  color: var(--foreground);
 }
 
 @keyframes pulse-bar {
@@ -149,4 +243,3 @@
     opacity: 1;
   }
 }
-

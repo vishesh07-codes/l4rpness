@@ -119,3 +119,27 @@ def test_unknown_tool(work):
     out, ok, _ = asyncio.run(tools.execute("nope", {}, 1))
     assert not ok
     assert "unknown tool" in out
+
+
+def test_write_todos_reports_plan(work):
+    out, ok, _ = asyncio.run(
+        tools.execute(
+            "write_todos",
+            {
+                "todos": [
+                    {"title": "Enumerate ports", "status": "completed"},
+                    {"title": "Fingerprint services", "status": "in_progress"},
+                ]
+            },
+            1,
+        )
+    )
+    assert ok
+    assert "2 items" in out
+    assert "1 completed" in out
+
+
+def test_write_todos_requires_items(work):
+    out, ok, _ = asyncio.run(tools.execute("write_todos", {"todos": []}, 1))
+    assert not ok
+    assert "non-empty" in out

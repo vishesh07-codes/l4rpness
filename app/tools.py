@@ -64,6 +64,40 @@ SCHEMAS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "write_todos",
+            "description": (
+                "Publish or update your task plan for this campaign. Pass the full "
+                "list every time; it replaces the previous plan. Use it to track "
+                "multi-step work and keep one item in_progress."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "todos": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "title": {
+                                    "type": "string",
+                                    "description": "Short imperative task, e.g. 'Enumerate open ports'.",
+                                },
+                                "status": {
+                                    "type": "string",
+                                    "enum": ["pending", "in_progress", "completed", "cancelled"],
+                                },
+                            },
+                            "required": ["title"],
+                        },
+                    },
+                },
+                "required": ["todos"],
+            },
+        },
+    },
 ]
 
 
@@ -162,6 +196,8 @@ async def bash(args: dict, work: Path, stop=None) -> tuple[str, bool]:
             watcher.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await watcher
+        if proc.returncode is None:
+            proc.kill()
 
     if stop is not None and stop.is_set():
         note += "\n[stopped by request]"
@@ -209,7 +245,25 @@ async def write_file(args: dict, work: Path, stop=None) -> tuple[str, bool]:
     return f"wrote {len(content)} chars to {path.relative_to(work)}", True
 
 
-HANDLERS = {"bash": bash, "read_file": read_file, "write_file": write_file}
+async def write_todos(args: dict, work: Path, stop=None) -> tuple[str, bool]:
+    todos = args.get("todos")
+    if not isinstance(todos, list) or not todos:
+        raise ValueError("todos must be a non-empty list")
+
+    done = sum(
+        1
+        for todo in todos
+        if isinstance(todo, dict) and todo.get("status") == "completed"
+    )
+    return f"plan updated: {len(todos)} items, {done} completed", True
+
+
+HANDLERS = {
+    "bash": bash,
+    "read_file": read_file,
+    "write_file": write_file,
+    "write_todos": write_todos,
+}
 
 
 async def execute(name: str, args: dict, campaign_id: int, stop=None) -> tuple[str, bool, int]:

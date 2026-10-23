@@ -47,7 +47,13 @@ const components: Components = {
   th: ({ children }) => <th className="border px-2 py-1 text-left font-medium">{children}</th>,
   td: ({ children }) => <td className="border px-2 py-1 align-top">{children}</td>,
   hr: () => <hr className="my-4 border-border" />,
-  img: ({ src, alt }) => <img src={src} alt={alt} className="my-2 max-w-full rounded-md" />,
+  img: ({ src, alt }) => (
+    <img
+      src={src}
+      alt={alt}
+      className="my-2 max-w-full rounded-md outline outline-1 -outline-offset-1 outline-black/10 dark:outline-white/10"
+    />
+  ),
 }
 
 export function Markdown({ text, className }: { text: string; className?: string }) {

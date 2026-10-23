@@ -4,6 +4,7 @@ import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom"
 
 import { AppSidebar } from "@/components/AppSidebar"
 import { Button } from "@/components/ui/button"
+import { cn } from "@/lib/utils"
 import { Campaign } from "@/pages/Campaign"
 import { Dashboard } from "@/pages/Dashboard"
 import { NewCampaign } from "@/pages/NewCampaign"
@@ -18,6 +19,8 @@ export default function App() {
   useEffect(() => {
     document.documentElement.classList.toggle("dark", darkMode)
     window.localStorage.setItem("theme", darkMode ? "dark" : "light")
+    document.querySelector('meta[name="color-scheme"]')?.setAttribute("content", darkMode ? "dark" : "light")
+    document.querySelector('meta[name="theme-color"]')?.setAttribute("content", darkMode ? "#1f1f1f" : "#ffffff")
   }, [darkMode])
 
   function toggleTheme(event: MouseEvent<HTMLButtonElement>) {
@@ -37,14 +40,29 @@ export default function App() {
     <BrowserRouter>
       <AppSidebar />
       <Button
-        variant="outline"
+        variant="ghost"
         size="icon"
-        className="fixed right-4 top-4 z-50 rounded-full bg-background/80 shadow-sm backdrop-blur"
+        className="fixed right-4 top-4 z-50 rounded-full bg-background/80 shadow-sm backdrop-blur after:absolute after:top-1/2 after:left-1/2 after:size-11 after:-translate-1/2"
         onClick={toggleTheme}
         aria-label={`Switch to ${darkMode ? "light" : "dark"} mode`}
         title={`Switch to ${darkMode ? "light" : "dark"} mode`}
       >
-        {darkMode ? <Sun className="theme-icon theme-icon-sun size-4" /> : <Moon className="theme-icon theme-icon-moon size-4" />}
+        <span className="relative size-4">
+          <Sun
+            aria-hidden
+            className={cn(
+              "absolute inset-0 size-4 transition-[opacity,scale,filter] duration-300 ease-[cubic-bezier(0.2,0,0,1)]",
+              darkMode ? "scale-100 opacity-100 blur-0" : "scale-[0.25] opacity-0 blur-[4px]"
+            )}
+          />
+          <Moon
+            aria-hidden
+            className={cn(
+              "size-4 transition-[opacity,scale,filter] duration-300 ease-[cubic-bezier(0.2,0,0,1)]",
+              darkMode ? "scale-[0.25] opacity-0 blur-[4px]" : "scale-100 opacity-100 blur-0"
+            )}
+          />
+        </span>
       </Button>
       <main className="pl-56">
         <Routes>
