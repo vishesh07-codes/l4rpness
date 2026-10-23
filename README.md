@@ -2,7 +2,7 @@
 
 A local harness for black-box pentest campaigns. You point it at a target you are allowed to test, give it scope and context, and it keeps testing on its own.
 
-Current state: the shell is up (dashboard, campaigns, campaign chat). The agent cannot run tools yet, so if you ask it to scan something it will tell you it can't. That's expected for now.
+Current state: dashboard, campaigns, campaign chat, and the agent can run tools. It executes shell commands and reads and writes files in a per-campaign work directory. Everything runs in Docker on your machine.
 
 ## Where this is going
 
@@ -29,6 +29,7 @@ It does not stop by itself. It stops when you pause or kill it. Right now there 
 - Every field can take file attachments. Text files (notes, logs, HAR, OpenAPI) get their contents passed to the agent when it replies.
 - Pick the model and the effort per campaign. The model list comes from the DeepSeek API; effort is low, high or max.
 - Chat streams as it is written and replies render markdown as they arrive. Thinking is shown above every answer, always, and the full history including thinking is stored in SQLite.
+- The agent runs tools: bash for shell commands, read_file and write_file for files, all inside a per-campaign work directory. Long command output is saved to a file the model can page through. Every tool call shows up in the chat as a card you can expand.
 
 ## How it is built
 
@@ -50,7 +51,9 @@ Backend, Python and FastAPI:
 - `app/routes.py` has the API
 - `app/db.py` creates and connects to SQLite. Plain sqlite3, WAL mode, no ORM
 - `app/uploads.py` validates files, stores them, extracts text for the prompt
-- `app/agent.py` fills the prompt template and streams the DeepSeek reply, thinking included
+- `app/agent.py` runs the model and tool loop, streaming thinking, content and tool events
+- `app/tools.py` has the tools the agent can call and their limits
+- `config.toml` holds every setting, `.env` holds only the API key
 - `prompts/campaign_agent.md` is the system prompt. Edit it without touching code
 
 Frontend, React and TypeScript with Tailwind and shadcn components:
@@ -71,16 +74,22 @@ Docker: multistage build where Node builds the frontend and Python runs the app.
     # put your DeepSeek key in .env
     docker compose up --build -d
 
+Model, effort, limits and the port live in `config.toml`. It is mounted read only, so edit it and `docker compose restart` to apply.
+
 Open http://127.0.0.1:4517
 
 To wipe all campaigns, messages and uploads:
 
     docker compose down -v
 
+To get a shell inside the container (add `-u root` if you need root, or `-w /app/data/work/<id>` to land in a campaign work dir):
+
+    docker compose exec l4rpness bash
+
 ## Development
 
     uv venv && uv pip install -r requirements.txt -r requirements-dev.txt
-    .venv/bin/uvicorn app.main:app --reload
+    L4RP_RELOAD=1 .venv/bin/python -m app
 
     cd web && npm install && npm run dev
 
@@ -90,12 +99,13 @@ The Vite dev server proxies /api to port 4517.
 
     .venv/bin/pytest
 
-Eleven tests cover the API, the prompt assembly and the streaming reply. The DeepSeek call is stubbed, so tests run offline.
+26 tests cover the API, the config loader, the tools and the agent loop, all offline. The DeepSeek call is stubbed.
 
 ## Roadmap
 
 - [x] dashboard, campaigns, campaign chat
-- [ ] tools in the agent loop: shell, HTTP, files
+- [x] shell and file tools in the agent loop
+- [ ] http_request tool with response capture
 - [ ] campaign runner with supervisors that never stop and workers per task
 - [ ] coverage map and the scheduler that picks work from it
 - [ ] verifier that replays findings
