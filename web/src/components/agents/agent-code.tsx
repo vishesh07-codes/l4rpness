@@ -6,7 +6,7 @@ import {
   useEffect,
   useState,
 } from "react";
-import { createHighlighter, type Highlighter } from "shiki";
+import type { Highlighter } from "shiki";
 import { cn } from "@/lib/utils";
 
 export type AgentCodeLanguage =
@@ -45,10 +45,14 @@ const tokenCache = new Map<string, AgentCodeTokenLines>();
 
 function getAgentCodeHighlighter() {
   if (!agentCodeHighlighter) {
-    agentCodeHighlighter = createHighlighter({
-      themes: [LIGHT_THEME, DARK_THEME],
-      langs: ["bash", "diff", "json", "tsx", "typescript"],
-    });
+    // shiki is heavy; keep it out of the initial bundle and load it the first
+    // time a tool result needs syntax highlighting
+    agentCodeHighlighter = import("shiki").then(({ createHighlighter }) =>
+      createHighlighter({
+        themes: [LIGHT_THEME, DARK_THEME],
+        langs: ["bash", "diff", "json", "tsx", "typescript"],
+      }),
+    );
   }
   return agentCodeHighlighter;
 }

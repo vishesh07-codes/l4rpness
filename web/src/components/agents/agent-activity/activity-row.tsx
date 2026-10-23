@@ -10,7 +10,7 @@ import {
   Sparkles,
   SquareTerminal,
   Wrench,
-} from "lucide-react";
+} from "@/components/icons";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { EASE_OUT, SPRING_LAYOUT } from "@/lib/ease";
 import { cn } from "@/lib/utils";

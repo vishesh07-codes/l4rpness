@@ -40,8 +40,20 @@ CREATE TABLE IF NOT EXISTS attachments (
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS message_attachments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    campaign_id INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+    message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    filename TEXT NOT NULL,
+    content_type TEXT NOT NULL DEFAULT '',
+    size INTEGER NOT NULL DEFAULT 0,
+    path TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_messages_campaign ON messages(campaign_id, id);
 CREATE INDEX IF NOT EXISTS idx_attachments_campaign ON attachments(campaign_id, field);
+CREATE INDEX IF NOT EXISTS idx_message_attachments ON message_attachments(message_id, id);
 """
 
 

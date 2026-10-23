@@ -147,7 +147,7 @@ def test_invalid_tool_arguments_reported_not_executed(client, monkeypatch):
     monkeypatch.setattr(tools, "execute", fake_execute)
     campaign = create(client)
 
-    res = client.post(f"/api/campaigns/{campaign['id']}/messages", json={"content": "go"})
+    res = client.post(f"/api/campaigns/{campaign['id']}/messages", data={"content": "go"})
     assert "not valid JSON" in res.text
     assert state["executed"] == 0
 
@@ -160,7 +160,7 @@ def test_chat_streams_and_stores_messages(client, monkeypatch):
     monkeypatch.setattr(agent, "run", fake_run)
     campaign = create(client)
 
-    res = client.post(f"/api/campaigns/{campaign['id']}/messages", json={"content": "hello"})
+    res = client.post(f"/api/campaigns/{campaign['id']}/messages", data={"content": "hello"})
     assert res.status_code == 200
     assert "event: thinking" in res.text
     assert "event: content" in res.text
@@ -181,7 +181,7 @@ def test_chat_failure_keeps_partial_reply(client, monkeypatch):
     monkeypatch.setattr(agent, "run", broken_run)
     campaign = create(client)
 
-    res = client.post(f"/api/campaigns/{campaign['id']}/messages", json={"content": "hi"})
+    res = client.post(f"/api/campaigns/{campaign['id']}/messages", data={"content": "hi"})
     assert "event: error" in res.text
     assert '"saved": true' in res.text
 
@@ -198,7 +198,7 @@ def test_chat_failure_before_output_keeps_user_message(client, monkeypatch):
     monkeypatch.setattr(agent, "run", instant_failure)
     campaign = create(client)
 
-    res = client.post(f"/api/campaigns/{campaign['id']}/messages", json={"content": "hi"})
+    res = client.post(f"/api/campaigns/{campaign['id']}/messages", data={"content": "hi"})
     assert "event: error" in res.text
     assert '"saved": true' in res.text
 
@@ -225,7 +225,7 @@ def test_tool_loop_logs_calls(client, monkeypatch):
     monkeypatch.setattr(tools, "execute", fake_execute)
     campaign = create(client)
 
-    res = client.post(f"/api/campaigns/{campaign['id']}/messages", json={"content": "run it"})
+    res = client.post(f"/api/campaigns/{campaign['id']}/messages", data={"content": "run it"})
     assert "event: tool_start" in res.text
     assert "event: tool_call" in res.text
     assert "event: tool_result" in res.text
@@ -254,7 +254,7 @@ def test_tool_step_cap(client, monkeypatch):
     monkeypatch.setattr(config, "MAX_TOOL_STEPS", 2)
     campaign = create(client)
 
-    res = client.post(f"/api/campaigns/{campaign['id']}/messages", json={"content": "go"})
+    res = client.post(f"/api/campaigns/{campaign['id']}/messages", data={"content": "go"})
     assert "stopped after 2 tool steps" in res.text
 
     messages = client.get(f"/api/campaigns/{campaign['id']}/messages").json()
@@ -272,7 +272,7 @@ def test_delete_campaign(client, monkeypatch):
         files={"info_files": ("notes.txt", b"data", "text/plain")},
     )
     cid = res.json()["id"]
-    client.post(f"/api/campaigns/{cid}/messages", json={"content": "hi"})
+    client.post(f"/api/campaigns/{cid}/messages", data={"content": "hi"})
 
     upload_dir = config.UPLOAD_DIR / str(cid)
     assert upload_dir.is_dir()
@@ -375,7 +375,7 @@ def test_chat_without_key(client, monkeypatch):
     monkeypatch.setattr(config, "API_KEY", "")
     campaign = create(client)
 
-    res = client.post(f"/api/campaigns/{campaign['id']}/messages", json={"content": "hi"})
+    res = client.post(f"/api/campaigns/{campaign['id']}/messages", data={"content": "hi"})
     assert res.status_code == 400
     assert client.get(f"/api/campaigns/{campaign['id']}/messages").json() == []
 
@@ -395,7 +395,7 @@ def test_running_flag_and_409(client):
         listed = client.get("/api/campaigns").json()
         assert listed[0]["running"] is True
 
-        res = client.post(f"/api/campaigns/{campaign['id']}/messages", json={"content": "hi"})
+        res = client.post(f"/api/campaigns/{campaign['id']}/messages", data={"content": "hi"})
         assert res.status_code == 409
     finally:
         routes.RUNNING.pop(campaign["id"], None)
@@ -428,7 +428,7 @@ def test_stopped_run_stores_partial(client, monkeypatch):
     monkeypatch.setattr(agent, "run", stopped_run)
     campaign = create(client)
 
-    res = client.post(f"/api/campaigns/{campaign['id']}/messages", json={"content": "go"})
+    res = client.post(f"/api/campaigns/{campaign['id']}/messages", data={"content": "go"})
     assert "stopped by user" in res.text
     assert '"saved": true' in res.text
 
@@ -466,3 +466,56 @@ def test_agent_run_honours_stop(monkeypatch):
     events = asyncio.run(collect())
     assert events[-1] == ("stopped", None)
     assert ("content", "partial") in events
+
+
+def test_run_persists_without_a_watcher(client, monkeypatch):
+    campaign = create(client)
+
+    async def fake_run(*args, **kwargs):
+        yield "content", "kept going"
+
+    monkeypatch.setattr(agent, "run", fake_run)
+
+    async def drive():
+        run = {
+            "stop": asyncio.Event(),
+            "parts": [],
+            "pending": None,
+            "queue": asyncio.Queue(),
+            "consumer": False,
+        }
+        routes.RUNNING[campaign["id"]] = run
+        await routes._run(campaign["id"], {}, [], [], "hello", run)
+
+    asyncio.run(drive())
+
+    messages = client.get(f"/api/campaigns/{campaign['id']}/messages").json()
+    assert [m["role"] for m in messages] == ["user", "assistant"]
+    assert messages[1]["content"] == "kept going"
+    assert campaign["id"] not in routes.RUNNING
+
+
+def test_message_upload(client, monkeypatch):
+    campaign = create(client)
+
+    async def fake_run(*args, **kwargs):
+        yield "content", "ok"
+
+    monkeypatch.setattr(agent, "run", fake_run)
+
+    res = client.post(
+        f"/api/campaigns/{campaign['id']}/messages",
+        data={"content": "look at this"},
+        files={"files": ("note.txt", b"hello file", "text/plain")},
+    )
+    assert res.status_code == 200
+    assert "event: done" in res.text
+
+    messages = client.get(f"/api/campaigns/{campaign['id']}/messages").json()
+    user = messages[0]
+    assert user["role"] == "user"
+    assert len(user["attachments"]) == 1
+    assert user["attachments"][0]["filename"] == "note.txt"
+
+    stored = config.UPLOAD_DIR / user["attachments"][0]["path"]
+    assert stored.read_text() == "hello file"

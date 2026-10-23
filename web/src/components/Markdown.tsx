@@ -1,3 +1,4 @@
+import { memo } from "react"
 import ReactMarkdown, { type Components } from "react-markdown"
 import remarkBreaks from "remark-breaks"
 import remarkGfm from "remark-gfm"
@@ -37,7 +38,7 @@ const components: Components = {
     )
   },
   blockquote: ({ children }) => (
-    <blockquote className="my-2 border-l-2 pl-3 text-muted-foreground">{children}</blockquote>
+    <blockquote className="my-2 border-l-2 pl-3 text-ink-2">{children}</blockquote>
   ),
   table: ({ children }) => (
     <div className="my-2 overflow-x-auto">
@@ -56,7 +57,13 @@ const components: Components = {
   ),
 }
 
-export function Markdown({ text, className }: { text: string; className?: string }) {
+export const Markdown = memo(function Markdown({
+  text,
+  className,
+}: {
+  text: string
+  className?: string
+}) {
   return (
     <div className={cn("text-sm leading-relaxed", className)}>
       <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]} components={components}>
@@ -64,4 +71,4 @@ export function Markdown({ text, className }: { text: string; className?: string
       </ReactMarkdown>
     </div>
   )
-}
+})

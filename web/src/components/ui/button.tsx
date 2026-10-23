@@ -21,6 +21,10 @@ const buttonVariants = cva(
         sm: "h-8 rounded-md px-3",
         lg: "h-10 rounded-md px-6",
         icon: "size-9",
+        // the chat components (attachment actions) ask for these
+        "icon-sm": "size-8 rounded-md",
+        "icon-xs":
+          "relative size-6 rounded-md after:absolute after:top-1/2 after:left-1/2 after:size-9 after:-translate-1/2",
       },
     },
     defaultVariants: {

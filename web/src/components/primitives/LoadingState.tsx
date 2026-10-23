@@ -116,7 +116,7 @@ export default function LoadingState({
 
         {/* the context card follows the status text it is illustrating */}
         <div
-          className="mt-2 w-56 overflow-hidden rounded-[10px] shadow-overlay"
+          className="mt-2 w-56 overflow-hidden rounded-[12px] shadow-overlay"
           style={{ animation: "pop-in 200ms cubic-bezier(0.16,1,0.3,1) both", transformOrigin: "top left" }}
         >
           <div className="relative aspect-video w-full" style={{ background: "var(--tooltip-bg)" }}>

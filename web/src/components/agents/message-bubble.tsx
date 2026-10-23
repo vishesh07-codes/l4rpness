@@ -1,7 +1,7 @@
 "use client";
 // www.agentui.pro/components/agents/message-bubble
 
-import { ChevronDown } from "lucide-react";
+import { ChevronDown } from "@/components/icons";
 import {
   type HTMLMotionProps,
   motion,

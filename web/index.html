@@ -3,9 +3,22 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="color-scheme" content="light dark" />
-    <meta name="theme-color" content="#ffffff" />
+    <meta name="color-scheme" content="dark light" />
+    <meta name="theme-color" content="#0d0d0d" />
     <title>l4rpness</title>
+    <script>
+      // apply the saved theme before first paint so there is no flash or reflow
+      (function () {
+        try {
+          var saved = localStorage.getItem("theme")
+          // dark-first: default on unless the user explicitly picked light
+          var dark = saved ? saved === "dark" : true
+          document.documentElement.classList.toggle("dark", dark)
+          var meta = document.querySelector('meta[name="color-scheme"]')
+          if (meta) meta.setAttribute("content", dark ? "dark" : "light")
+        } catch (e) {}
+      })()
+    </script>
   </head>
   <body>
     <div id="root"></div>

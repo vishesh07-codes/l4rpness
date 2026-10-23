@@ -1,12 +1,13 @@
-import type { ReactNode } from "react"
+import { memo, type ReactNode } from "react"
 
 import { ThinkingShimmer } from "@/components/agents/loading-states/thinking-shimmer"
 import { MessageBubble, MessageBubbleContent } from "@/components/agents/message-bubble"
 import { StreamingResponse } from "@/components/agents/streaming-response"
 import { ToolResult, ToolResultOutput } from "@/components/agents/tool-result"
 import { StreamText } from "@/components/atoms/StreamText"
+import { AttachmentChip } from "@/components/Attachment"
 import { Markdown } from "@/components/Markdown"
-import type { Part } from "@/lib/api"
+import { api, type LocalFile, type MessageAttachment, type Part } from "@/lib/api"
 
 export function MessageRow({
   role,
@@ -22,15 +23,66 @@ export function MessageRow({
   )
 }
 
-export function UserMessage({ content, animate = true }: { content: string; animate?: boolean }) {
+type Preview = { key: string | number; filename: string; url?: string; image: boolean }
+
+function attachmentsOf(
+  attachments?: MessageAttachment[],
+  localFiles?: LocalFile[]
+): Preview[] {
+  if (attachments && attachments.length) {
+    return attachments.map((a) => ({
+      key: a.id,
+      filename: a.filename,
+      url: api.attachmentUrl(a.id),
+      image: a.content_type.startsWith("image/"),
+    }))
+  }
+  return (localFiles ?? []).map((file, index) => ({
+    key: index,
+    filename: file.filename,
+    url: file.preview,
+    image: Boolean(file.preview),
+  }))
+}
+
+export const UserMessage = memo(function UserMessage({
+  content,
+  attachments,
+  localFiles,
+  animate = true,
+}: {
+  content: string
+  attachments?: MessageAttachment[]
+  localFiles?: LocalFile[]
+  animate?: boolean
+}) {
+  const items = attachmentsOf(attachments, localFiles)
+
   return (
     <MessageBubble align="end" variant="tint" animateIn={animate}>
       <MessageBubbleContent>
-        <span className="whitespace-pre-wrap">{content}</span>
+        {items.length > 0 && (
+          <div className="mb-1.5 flex flex-wrap justify-end gap-2">
+            {items.map((item) =>
+              item.image && item.url ? (
+                <a key={item.key} href={item.url} target="_blank" rel="noreferrer">
+                  <img
+                    src={item.url}
+                    alt={item.filename}
+                    className="h-24 w-24 rounded-[12px] object-cover outline outline-1 -outline-offset-1 outline-black/10 dark:outline-white/10"
+                  />
+                </a>
+              ) : (
+                <AttachmentChip key={item.key} name={item.filename} href={item.url} />
+              )
+            )}
+          </div>
+        )}
+        {content && <span className="whitespace-pre-wrap break-words">{content}</span>}
       </MessageBubbleContent>
     </MessageBubble>
   )
-}
+})
 
 function ReasoningBlock({ text, live, label }: { text: string; live?: boolean; label?: boolean }) {
   return (
@@ -74,7 +126,13 @@ function ToolBlock({ part }: { part: ToolPart }) {
   )
 }
 
-export function AssistantMessage({ parts, live = false }: { parts: Part[]; live?: boolean }) {
+export const AssistantMessage = memo(function AssistantMessage({
+  parts,
+  live = false,
+}: {
+  parts: Part[]
+  live?: boolean
+}) {
   if (parts.length === 0) {
     return (
       <div className="w-full">
@@ -135,4 +193,4 @@ export function AssistantMessage({ parts, live = false }: { parts: Part[]; live?
       ) : null}
     </div>
   )
-}
+})

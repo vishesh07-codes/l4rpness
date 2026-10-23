@@ -274,17 +274,171 @@ def list_messages(campaign_id: int):
             "SELECT * FROM messages WHERE campaign_id = ? ORDER BY id",
             (campaign_id,),
         ).fetchall()
-    return [row_dict(r) for r in rows]
+        files = conn.execute(
+            "SELECT * FROM message_attachments WHERE campaign_id = ? ORDER BY id",
+            (campaign_id,),
+        ).fetchall()
+
+    by_message: dict[int, list] = {}
+    for file in files:
+        by_message.setdefault(file["message_id"], []).append(row_dict(file))
+
+    return [
+        {**row_dict(row), "attachments": by_message.get(row["id"], [])} for row in rows
+    ]
 
 
 def sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data)}\n\n"
 
 
+async def _run(campaign_id, campaign, attachments, history, content, run, files=()):
+    """The agent turn, detached from any client so closing the tab does not kill it."""
+    stop = run["stop"]
+    parts = run["parts"]
+    thinking: list = []
+    answer: list = []
+    calls: list = []
+    failure = ""
+    stopped = False
+
+    def add_text(kind: str, text: str):
+        if parts and parts[-1]["type"] == kind:
+            parts[-1]["text"] += text
+        else:
+            parts.append({"type": kind, "text": text})
+
+    def emit(name: str, data):
+        # only buffer events when a client is actually watching
+        if run["consumer"]:
+            run["queue"].put_nowait((name, data))
+
+    try:
+        async for kind, data in agent.run(campaign, attachments, history, campaign_id, stop):
+            if kind == "thinking":
+                thinking.append(data)
+                add_text("thinking", data)
+                emit("thinking", {"text": data})
+            elif kind == "content":
+                answer.append(data)
+                add_text("content", data)
+                emit("content", {"text": data})
+            elif kind == "tool_start":
+                run["pending"] = data["name"]
+                emit("tool_start", data)
+            elif kind == "tool_call":
+                calls.append({**data, "output": None, "ok": None, "ms": None})
+                parts.append({"type": "tool", **data})
+                run["pending"] = None
+                emit("tool_call", data)
+            elif kind == "stopped":
+                stopped = True
+                break
+            elif kind == "tool_result":
+                for call in calls:
+                    if call["id"] == data["id"]:
+                        call.update(output=data["output"], ok=data["ok"], ms=data["ms"])
+                for part in parts:
+                    if part["type"] == "tool" and part["id"] == data["id"]:
+                        part.update(output=data["output"], ok=data["ok"], ms=data["ms"])
+                emit("tool_result", data)
+            else:
+                answer.append(data)
+                add_text("content", data)
+                emit("content", {"text": data})
+    except Exception:
+        log.exception("agent run failed")
+        failure = "agent request failed"
+
+    reply = "".join(answer).strip()
+    has_output = bool(reply or thinking or calls)
+    if has_output and not reply:
+        reply = "(no reply text)"
+
+    user_row = assistant_row = None
+    user_attachments: list = []
+    stored = True
+    try:
+        with db.db() as conn:
+            user_cur = conn.execute(
+                "INSERT INTO messages (campaign_id, role, content) VALUES (?, 'user', ?)",
+                (campaign_id, content),
+            )
+            user_id = user_cur.lastrowid
+            for item in files:
+                conn.execute(
+                    """
+                    INSERT INTO message_attachments
+                        (campaign_id, message_id, filename, content_type, size, path)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        campaign_id,
+                        user_id,
+                        item["filename"],
+                        item["content_type"],
+                        item["size"],
+                        item["path"],
+                    ),
+                )
+            if has_output:
+                assistant_cur = conn.execute(
+                    """
+                    INSERT INTO messages (campaign_id, role, content, reasoning, tool_calls, parts)
+                    VALUES (?, 'assistant', ?, ?, ?, ?)
+                    """,
+                    (
+                        campaign_id,
+                        reply,
+                        "".join(thinking).strip(),
+                        json.dumps(calls),
+                        json.dumps(parts),
+                    ),
+                )
+                assistant_row = conn.execute(
+                    "SELECT * FROM messages WHERE id = ?", (assistant_cur.lastrowid,)
+                ).fetchone()
+            conn.execute("UPDATE campaigns SET updated_at = datetime('now') WHERE id = ?", (campaign_id,))
+            user_row = conn.execute(
+                "SELECT * FROM messages WHERE id = ?", (user_id,)
+            ).fetchone()
+            user_attachments = [
+                row_dict(a)
+                for a in conn.execute(
+                    "SELECT * FROM message_attachments WHERE message_id = ? ORDER BY id",
+                    (user_id,),
+                ).fetchall()
+            ]
+    except Exception:
+        log.exception("storing reply failed")
+        stored = False
+
+    RUNNING.pop(campaign_id, None)
+
+    if not stored:
+        emit("error", {"detail": "failed to store the reply", "saved": False})
+    elif failure:
+        emit("error", {"detail": failure, "saved": True})
+    elif stopped:
+        emit("error", {"detail": "stopped by user", "saved": True})
+    elif not has_output:
+        emit("error", {"detail": "agent returned an empty reply", "saved": True})
+    else:
+        user_dict = row_dict(user_row)
+        user_dict["attachments"] = user_attachments
+        emit("done", {"user": user_dict, "assistant": row_dict(assistant_row)})
+    emit("__end__", None)
+
+
 @router.post("/campaigns/{campaign_id}/messages")
-async def send_message(campaign_id: int, body: MessageIn):
-    content = body.content.strip()
-    if not content:
+async def send_message(
+    campaign_id: int,
+    content: str = Form(""),
+    files: list[UploadFile] = File(default=[]),
+):
+    text = content.strip()
+    items = await uploads.collect(files) if files else []
+    if not text and not items:
         raise HTTPException(400, "message is empty")
     if not config.API_KEY:
         raise HTTPException(400, "DEEPSEEK_API_KEY is not set")
@@ -302,120 +456,49 @@ async def send_message(campaign_id: int, body: MessageIn):
             (campaign_id,),
         ).fetchall()
 
+    stored = []
+    for item in items:
+        rel = uploads.store_chat(campaign_id, item)
+        stored.append(
+            {
+                "filename": item["filename"],
+                "content_type": item["content_type"],
+                "size": item["size"],
+                "path": rel,
+            }
+        )
+
     history = [{"role": r["role"], "content": r["content"]} for r in prior]
-    history.append({"role": "user", "content": content})
+    prompt = text
+    if stored:
+        context = uploads.prompt_text(stored)
+        prompt = f"{text}\n\n{context}".strip() if text else context
+    history.append({"role": "user", "content": prompt})
 
-    stop = asyncio.Event()
-    parts: list = []
-    RUNNING[campaign_id] = {"stop": stop, "parts": parts, "pending": None}
-
-    async def stream():
-        thinking = []
-        answer = []
-        calls = []
-        failure = ""
-        stopped = False
-
-        def add_text(kind: str, text: str):
-            if parts and parts[-1]["type"] == kind:
-                parts[-1]["text"] += text
-            else:
-                parts.append({"type": kind, "text": text})
-
-        try:
-            async for kind, data in agent.run(campaign, attachments, history, campaign_id, stop):
-                if kind == "thinking":
-                    thinking.append(data)
-                    add_text("thinking", data)
-                    yield sse("thinking", {"text": data})
-                elif kind == "content":
-                    answer.append(data)
-                    add_text("content", data)
-                    yield sse("content", {"text": data})
-                elif kind == "tool_start":
-                    RUNNING[campaign_id]["pending"] = data["name"]
-                    yield sse("tool_start", data)
-                elif kind == "tool_call":
-                    calls.append({**data, "output": None, "ok": None, "ms": None})
-                    parts.append({"type": "tool", **data})
-                    RUNNING[campaign_id]["pending"] = None
-                    yield sse("tool_call", data)
-                elif kind == "stopped":
-                    stopped = True
-                    break
-                elif kind == "tool_result":
-                    for call in calls:
-                        if call["id"] == data["id"]:
-                            call.update(output=data["output"], ok=data["ok"], ms=data["ms"])
-                    for part in parts:
-                        if part["type"] == "tool" and part["id"] == data["id"]:
-                            part.update(output=data["output"], ok=data["ok"], ms=data["ms"])
-                    yield sse("tool_result", data)
-                else:
-                    answer.append(data)
-                    add_text("content", data)
-                    yield sse("content", {"text": data})
-        except Exception:
-            log.exception("agent run failed")
-            failure = "agent request failed"
-
-        reply = "".join(answer).strip()
-        has_output = bool(reply or thinking or calls)
-
-        if has_output and not reply:
-            reply = "(no reply text)"
-
-        try:
-            with db.db() as conn:
-                user_cur = conn.execute(
-                    "INSERT INTO messages (campaign_id, role, content) VALUES (?, 'user', ?)",
-                    (campaign_id, content),
-                )
-                assistant_row = None
-                if has_output:
-                    assistant_cur = conn.execute(
-                        """
-                        INSERT INTO messages (campaign_id, role, content, reasoning, tool_calls, parts)
-                        VALUES (?, 'assistant', ?, ?, ?, ?)
-                        """,
-                        (
-                            campaign_id,
-                            reply,
-                            "".join(thinking).strip(),
-                            json.dumps(calls),
-                            json.dumps(parts),
-                        ),
-                    )
-                    assistant_row = conn.execute(
-                        "SELECT * FROM messages WHERE id = ?", (assistant_cur.lastrowid,)
-                    ).fetchone()
-                conn.execute("UPDATE campaigns SET updated_at = datetime('now') WHERE id = ?", (campaign_id,))
-                user_row = conn.execute("SELECT * FROM messages WHERE id = ?", (user_cur.lastrowid,)).fetchone()
-        except Exception:
-            log.exception("storing reply failed")
-            yield sse("error", {"detail": "failed to store the reply", "saved": False})
-            return
-
-        if failure:
-            yield sse("error", {"detail": failure, "saved": True})
-            return
-
-        if stopped:
-            yield sse("error", {"detail": "stopped by user", "saved": True})
-            return
-
-        if not has_output:
-            yield sse("error", {"detail": "agent returned an empty reply", "saved": True})
-            return
-
-        yield sse("done", {"user": row_dict(user_row), "assistant": row_dict(assistant_row)})
+    run = {
+        "stop": asyncio.Event(),
+        "parts": [],
+        "pending": None,
+        "queue": asyncio.Queue(),
+        "consumer": False,
+    }
+    RUNNING[campaign_id] = run
 
     async def events():
+        run["consumer"] = True
+        # start the run only once someone is watching; from here it is detached
+        # from the request, so closing the tab lets it finish in the background
+        run["task"] = asyncio.create_task(
+            _run(campaign_id, campaign, attachments, history, text, run, stored)
+        )
         try:
-            async for chunk in stream():
-                yield chunk
+            while True:
+                name, data = await run["queue"].get()
+                if name == "__end__":
+                    break
+                yield sse(name, data)
         finally:
-            RUNNING.pop(campaign_id, None)
+            run["consumer"] = False
 
     return StreamingResponse(
         events(),

@@ -26,7 +26,8 @@
   /* ink ramp */
   --ink: oklch(0.18 0 0);
   --ink-2: oklch(0.45 0 0);
-  --ink-3: oklch(0.63 0 0);
+  /* lifted from 0.63, which measured 3.1–3.5:1 against the light surfaces */
+  --ink-3: oklch(0.52 0 0);
 
   /* borders — solid and crisp, not alpha */
   --line: oklch(0.92 0 0);
@@ -37,16 +38,17 @@
   --stripe: oklch(0.405 0 0 / 0.075);
   --stripe-bg: oklch(0.97 0 0);
 
-  /* accent */
-  --accent: oklch(0.626 0.205 254.947);
-  --accent-ink: oklch(0.556 0.187 255.617);
-  --accent-tint: oklch(0.96 0.019 252.878);
+  /* accent — grok warm orange (#FF6B35), tuned for light surfaces */
+  --accent: oklch(0.645 0.192 42);
+  --accent-ink: oklch(0.585 0.178 42);
+  --accent-tint: oklch(0.955 0.03 55);
 
   /* semantic */
   --green: oklch(0.603 0.155 150.883);
   --green-tint: oklch(0.958 0.017 159.118);
-  --orange: oklch(0.689 0.179 49.902);
-  --orange-tint: oklch(0.964 0.021 67.581);
+  /* amber — held 36.8deg off the orange accent so status never reads as brand */
+  --orange: oklch(0.62 0.14 80);
+  --orange-tint: oklch(0.962 0.03 85);
   --red: oklch(0.621 0.192 23.042);
   --red-tint: oklch(0.956 0.017 17.462);
 
@@ -68,32 +70,41 @@
 }
 
 .dark {
-  --page: oklch(0.16 0 0);
-  --canvas: oklch(0.145 0 0);
+  /* grok.com — large near-black fields, slightly-lifted charcoal panels.
+   * Elevation order: canvas < page < inset < surface < hover. */
+  --page: oklch(0.155 0 0);
+  --canvas: oklch(0.135 0 0);
   --surface: oklch(0.205 0 0);
-  --inset: oklch(0.19 0 0);
-  --hover: oklch(0.25 0 0);
-  --hover-2: oklch(0.29 0 0);
+  --inset: oklch(0.175 0 0);
+  --hover: oklch(0.245 0 0);
+  --hover-2: oklch(0.285 0 0);
 
-  --ink: oklch(0.96 0 0);
-  --ink-2: oklch(0.72 0 0);
-  --ink-3: oklch(0.54 0 0);
+  /* grok text: #FCFCFC primary, #9E9E9E secondary. ink-3 is lifted to
+   * oklch(0.66) so it clears 4.5:1 on every surface it renders on
+   * (page 6.28, surface 5.76, hover 5.22) — at 0.545 it measured 3.6–3.9. */
+  --ink: oklch(0.985 0 0);
+  --ink-2: oklch(0.705 0 0);
+  --ink-3: oklch(0.66 0 0);
 
-  --line: oklch(0.27 0 0);
-  --line-strong: oklch(0.33 0 0);
-  --line-soft: oklch(0.23 0 0);
-  --field: oklch(0.24 0 0);
+  --line: oklch(0.255 0 0);
+  --line-strong: oklch(0.315 0 0);
+  --line-soft: oklch(0.215 0 0);
+  --field: oklch(0.185 0 0);
   --stripe: oklch(1 0 0 / 0.055);
-  --stripe-bg: oklch(0.17 0 0);
+  --stripe-bg: oklch(0.155 0 0);
 
-  --accent: oklch(0.68 0.173 253.301);
-  --accent-ink: oklch(0.788 0.113 248.33);
-  --accent-tint: oklch(0.68 0.173 253.301 / 0.16);
+  /* grok warm orange (#FF6B35) as the single accent */
+  --accent: oklch(0.702 0.182 43.2);
+  --accent-ink: oklch(0.77 0.155 47);
+  --accent-tint: oklch(0.702 0.182 43.2 / 0.16);
 
   --green: oklch(0.705 0.154 153.814);
   --green-tint: oklch(0.705 0.154 153.814 / 0.14);
-  --orange: oklch(0.746 0.156 55.642);
-  --orange-tint: oklch(0.746 0.156 55.642 / 0.14);
+  /* amber, not orange: the accent is orange (43.2deg) and a status hue
+   * within 15deg of it reads as the same color. 80deg puts 36.8deg between
+   * "running" and "interactive". */
+  --orange: oklch(0.78 0.15 80);
+  --orange-tint: oklch(0.78 0.15 80 / 0.14);
   --red: oklch(0.666 0.18 21.433);
   --red-tint: oklch(0.666 0.18 21.433 / 0.14);
 
@@ -151,14 +162,15 @@
   --shadow-overlay: var(--shadow-overlay);
 
   /* type */
-  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
-  --font-mono: var(--font-mono-face), ui-monospace, "SF Mono", monospace;
+  /* the real families are set in index.css (Geist / Geist Mono) */
+  --font-sans: ui-sans-serif, system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", monospace;
 
   /* radii — chips 6, controls 8, cards 10, windows 14, pills 999 */
-  --radius-chip: 6px;
-  --radius-control: 8px;
-  --radius-card: 10px;
-  --radius-window: 14px;
+  --radius-chip: 8px;
+  --radius-control: 10px;
+  --radius-card: 12px;
+  --radius-window: 16px;
 
   /* easing — strong curves; built-ins are too weak */
   --ease-out-strong: cubic-bezier(0.23, 1, 0.32, 1);
@@ -215,14 +227,6 @@ p {
 a {
   text-underline-position: from-font;
   text-decoration-skip-ink: auto;
-}
-
-/* theme switches swap every token at once — freeze transitions so the flip
- * is one clean repaint instead of hundreds of mismatched color fades */
-.theme-switching *,
-.theme-switching *::before,
-.theme-switching *::after {
-  transition: none !important;
 }
 
 /* touch: :hover sticks after a tap, so neutralize row/header hovers there */

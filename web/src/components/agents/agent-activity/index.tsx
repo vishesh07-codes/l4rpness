@@ -1,7 +1,7 @@
 "use client";
 // www.agentui.pro/components/agents/agent-activity
 
-import { ChevronDown } from "lucide-react";
+import { ChevronDown } from "@/components/icons";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
   type ReactNode,

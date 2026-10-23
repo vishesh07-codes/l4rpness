@@ -1,6 +1,7 @@
 import { useRef } from "react"
-import { Paperclip, X } from "lucide-react"
 
+import { AttachmentChip } from "@/components/Attachment"
+import { Paperclip } from "@/components/icons"
 import { Button } from "@/components/ui/button"
 
 type Props = {
@@ -27,29 +28,22 @@ export function FieldAttachments({ files, onChange, disabled }: Props) {
       />
       <Button
         type="button"
-        variant="ghost"
+        variant="outline"
         size="sm"
-        className="text-muted-foreground"
+        className="gap-1.5 text-ink-2"
         disabled={disabled}
         onClick={() => picker.current?.click()}
       >
-        <Paperclip className="size-3.5" />
+        <Paperclip className="size-3.5" strokeWidth={1.5} />
         Attach files
       </Button>
       {files.map((file, i) => (
-        <span
+        <AttachmentChip
           key={`${file.name}-${i}`}
-          className="flex items-center gap-1 rounded-md border bg-muted/50 px-2 py-1 text-xs"
-        >
-          {file.name}
-          <button
-            type="button"
-            className="text-muted-foreground hover:text-foreground"
-            onClick={() => onChange(files.filter((_, j) => j !== i))}
-          >
-            <X className="size-3" />
-          </button>
-        </span>
+          name={file.name}
+          mime={file.type}
+          onRemove={() => onChange(files.filter((_, j) => j !== i))}
+        />
       ))}
     </div>
   )

@@ -25,6 +25,19 @@ export type Campaign = {
   attachments?: Attachment[]
 }
 
+export type MessageAttachment = {
+  id: number
+  filename: string
+  content_type: string
+  size: number
+  path?: string
+}
+
+export type LocalFile = {
+  filename: string
+  preview?: string
+}
+
 export type Message = {
   id: number
   role: "user" | "assistant"
@@ -32,6 +45,8 @@ export type Message = {
   reasoning: string
   tool_calls?: string
   parts?: string
+  attachments?: MessageAttachment[]
+  localFiles?: LocalFile[]
   created_at: string
 }
 
@@ -115,13 +130,17 @@ function parseSse(chunk: string): StreamEvent | null {
 async function streamMessage(
   id: number,
   content: string,
+  files: File[],
   onEvent: (event: StreamEvent) => void,
   signal?: AbortSignal
 ) {
+  const form = new FormData()
+  form.set("content", content)
+  for (const file of files) form.append("files", file)
+
   const res = await fetch(`/api/campaigns/${id}/messages`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ content }),
+    body: form,
     signal,
   })
   if (!res.ok || !res.body) throw new Error(await errorText(res))

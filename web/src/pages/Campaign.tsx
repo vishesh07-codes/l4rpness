@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState, type ClipboardEvent } from "react"
+import { toast } from "sonner"
 import { Link, useNavigate, useParams } from "react-router-dom"
 import {
   ArrowDown,
@@ -10,8 +11,10 @@ import {
   Sparkles,
   Trash2,
   TriangleAlert,
-} from "lucide-react"
+} from "@/components/icons"
 
+import { AttachmentCard, AttachmentChip } from "@/components/Attachment"
+import { fmtSize } from "@/lib/filetype"
 import { AgentProgress } from "@/components/agents/loading-states/agent-progress"
 import { ReasoningText } from "@/components/agents/loading-states/reasoning-text"
 import { MessageScroller } from "@/components/agents/message-scroller"
@@ -20,7 +23,9 @@ import { TodoList } from "@/components/agents/todo-list"
 import { StatusBadge } from "@/components/StatusBadge"
 import { AssistantMessage, MessageRow, UserMessage } from "@/components/chat/Message"
 import LoadingState from "@/components/primitives/LoadingState"
+import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 import {
   api,
   type Attachment,
@@ -29,6 +34,8 @@ import {
   type Part,
   type ToolCall,
 } from "@/lib/api"
+import { ConfirmDialog } from "@/components/ConfirmDialog"
+import { IconAction } from "@/components/IconAction"
 import { latestTodos } from "@/lib/todos"
 import { cn, fmtDate } from "@/lib/utils"
 
@@ -57,16 +64,17 @@ export function Campaign() {
   const [stream, setStream] = useState<LiveReply | null>(null)
   const [configured, setConfigured] = useState(true)
   const [input, setInput] = useState("")
+  const [files, setFiles] = useState<File[]>([])
   const [pending, setPending] = useState(false)
+  const [stopping, setStopping] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
   const [error, setError] = useState("")
   const [following, setFollowing] = useState(true)
   const initialIds = useRef<Set<number> | null>(null)
   const abortRef = useRef<AbortController | null>(null)
   const viewportRef = useRef<HTMLElement | null>(null)
-  const stoppedRef = useRef(false)
-  const optimisticRef = useRef<number | null>(null)
-  const contentRef = useRef("")
+  const fileInput = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     if (!campaignId) return
@@ -79,6 +87,17 @@ export function Campaign() {
       })
       .catch((e: Error) => setError(e.message))
   }, [campaignId])
+
+  // Escape stops a run in flight — the composer's stop button is the visible
+  // path, this is the one people reach for
+  useEffect(() => {
+    if (!pending) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") stop()
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [pending, stopping])
 
   function jumpToLatest() {
     const viewport = viewportRef.current
@@ -113,38 +132,57 @@ export function Campaign() {
     }
   }, [campaign?.running, pending, campaignId])
 
-  const todos = useMemo(
-    () =>
-      latestTodos(
-        ...messages.map((m) => (m.role === "assistant" ? partsOf(m) : [])),
-        stream?.parts ?? []
-      ),
-    [messages, stream]
+  // only re-scan the full history when it changes, not on every streamed token
+  const messageTodos = useMemo(
+    () => latestTodos(...messages.map((m) => (m.role === "assistant" ? partsOf(m) : []))),
+    [messages]
   )
+  const streamTodos = latestTodos(stream?.parts ?? [])
+  const todos = streamTodos.length > 0 ? streamTodos : messageTodos
+
+  function addFiles(picked: File[]) {
+    if (picked.length === 0) return
+    setFiles((prev) => [...prev, ...picked].slice(0, 8))
+  }
+
+  function onPasteFiles(event: ClipboardEvent<HTMLTextAreaElement>) {
+    // only fires while the composer textarea is focused
+    const pasted = Array.from(event.clipboardData?.files ?? [])
+    if (pasted.length === 0) {
+      for (const item of Array.from(event.clipboardData?.items ?? [])) {
+        if (item.kind !== "file") continue
+        const file = item.getAsFile()
+        if (file) pasted.push(file)
+      }
+    }
+    if (pasted.length === 0) return
+    event.preventDefault()
+    addFiles(pasted)
+  }
 
   async function send() {
     const content = input.trim()
-    if (!content || pending) return
+    const sending = files
+    if ((!content && sending.length === 0) || pending) return
 
-    stoppedRef.current = false
     setInput("")
+    setFiles([])
     setError("")
     setPending(true)
     setStream({ parts: [], pendingTool: null })
 
     const controller = new AbortController()
     abortRef.current = controller
-    contentRef.current = content
 
     const optimistic: Message = {
       id: -Date.now(),
       role: "user",
       content,
       reasoning: "",
+      localFiles: sending.map((file) => ({ filename: file.name })),
       created_at: "",
     }
     setMessages((prev) => [...prev, optimistic])
-    optimisticRef.current = optimistic.id
 
     const pushPart = (part: Part) =>
       setStream((s) => {
@@ -169,8 +207,8 @@ export function Campaign() {
       await api.streamMessage(
         campaignId,
         content,
+        sending,
         (event) => {
-          if (stoppedRef.current) return
           if (event.type === "thinking") {
             pushPart({ type: "thinking", text: event.text })
           } else if (event.type === "content") {
@@ -215,71 +253,67 @@ export function Campaign() {
       else failure = (e as Error).message
     }
 
-    if (stoppedRef.current) {
-      // stop() already reset the composer and dropped the optimistic row
-    } else {
-      if (!completed && !failure && !stopped) {
-        failure = "connection lost before the reply finished"
-      }
-      if (failure && saved) {
-        try {
-          setMessages(await api.listMessages(campaignId))
-        } catch {
-          // keep the optimistic message if the refresh fails
-        }
-      } else if (failure) {
-        setMessages((prev) => prev.filter((m) => m.id !== optimistic.id))
-        setInput(content)
-      }
-      if (failure) setError(failure)
-      abortRef.current = null
-      setStream(null)
-      setPending(false)
+    if (!completed && !failure && !stopped) {
+      failure = "Connection lost before the reply finished. Retry to send it again."
     }
-    optimisticRef.current = null
+
+    if (failure && saved) {
+      // the server kept a partial reply (a user stop included) — reload it
+      try {
+        setMessages(await api.listMessages(campaignId))
+      } catch {
+        // keep the optimistic message if the refresh fails
+      }
+    } else if (failure || stopped) {
+      // nothing was saved — drop the optimistic row and give it back
+      setMessages((prev) => prev.filter((m) => m.id !== optimistic.id))
+      setInput(content)
+      setFiles(sending)
+    }
+
+    // a user stop is not an error worth surfacing
+    if (failure && failure !== "stopped by user") setError(failure)
+    abortRef.current = null
+    setStream(null)
+    setPending(false)
+    setStopping(false)
   }
 
   async function stop() {
+    if (!pending || stopping) return
+    setStopping(true)
     try {
+      // ask the server to stop; it saves the partial reply and closes the
+      // stream, which send() then picks up via the "saved" error event
       await api.stopCampaign(campaignId)
-      // the stream ends on its own, stores what arrived and reports stopped by user
     } catch {
-      stoppedRef.current = true
-      const controller = abortRef.current
+      // server unreachable — fall back to cutting the local stream
+      abortRef.current?.abort()
       abortRef.current = null
-      controller?.abort()
-
-      if (optimisticRef.current != null) {
-        const id = optimisticRef.current
-        setMessages((prev) => prev.filter((m) => m.id !== id))
-        optimisticRef.current = null
-      }
-      setInput(contentRef.current)
       setStream(null)
       setPending(false)
+      setStopping(false)
     }
   }
 
   async function remove() {
     if (!campaign) return
-    if (!confirm(`Delete "${campaign.target.split("\n")[0]}"? Messages and files are removed too.`)) {
-      return
-    }
 
     setDeleting(true)
-    setError("")
     try {
       await api.deleteCampaign(campaignId)
+      setConfirmDelete(false)
+      toast.success("Campaign deleted")
       nav("/")
     } catch (e) {
-      setError((e as Error).message)
+      toast.error("Could not delete the campaign", { description: (e as Error).message })
       setDeleting(false)
     }
   }
 
   if (!campaign) {
     return (
-      <div className="mx-auto flex h-svh max-w-3xl items-center px-6 py-6 text-sm text-muted-foreground">
+      <div className="mx-auto flex h-svh max-w-3xl items-center px-6 py-6 text-sm text-ink-2 max-md:pt-16">
         {error || <LoadingState label="Loading campaign" />}
       </div>
     )
@@ -289,11 +323,11 @@ export function Campaign() {
   const targetFiles = attachments.filter((a) => a.field === "target")
 
   return (
-    <div className="mx-auto flex h-svh max-w-3xl flex-col gap-4 px-6 py-6">
+    <div className="mx-auto flex h-svh max-w-3xl flex-col gap-4 px-6 py-6 max-md:pt-16">
       <div className="flex flex-col gap-3">
         <Link
           to="/"
-          className="flex w-fit items-center gap-1 text-[13px] text-muted-foreground transition-colors hover:text-foreground"
+          className="flex w-fit items-center gap-1 text-[13px] text-ink-2 transition-colors hover:text-foreground"
         >
           <ArrowLeft className="size-3.5" strokeWidth={1.5} />
           Campaigns
@@ -304,7 +338,7 @@ export function Campaign() {
             <h1 className="truncate font-mono text-sm font-medium" title={campaign.target}>
               {campaign.target.split("\n")[0]}
             </h1>
-            <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+            <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs text-ink-2">
               <Badge variant="secondary">{campaign.model}</Badge>
               <Badge variant="secondary">effort · {campaign.effort}</Badge>
               <span className="px-0.5">created {fmtDate(campaign.created_at)}</span>
@@ -312,7 +346,12 @@ export function Campaign() {
             {targetFiles.length > 0 && (
               <div className="mt-2 flex flex-wrap gap-2">
                 {targetFiles.map((a) => (
-                  <AttachmentChip key={a.id} attachment={a} />
+                  <AttachmentChip
+                    key={a.id}
+                    name={a.filename}
+                    mime={a.content_type}
+                    href={api.attachmentUrl(a.id)}
+                  />
                 ))}
               </div>
             )}
@@ -325,15 +364,16 @@ export function Campaign() {
               {configured ? "ready" : "offline"}
             </span>
             <StatusBadge status={campaign.status} />
-            <button
-              type="button"
-              title="Delete campaign"
-              onClick={remove}
+            <IconAction
+              variant="ghost"
+              size="icon-xs"
+              label="Delete campaign"
+              onClick={() => setConfirmDelete(true)}
               disabled={deleting || pending}
-              className="relative flex size-7 items-center justify-center rounded-md text-ink-3 outline-none transition-colors after:absolute after:top-1/2 after:left-1/2 after:size-9 after:-translate-1/2 hover:bg-hover hover:text-destructive focus-visible:ring-2 focus-visible:ring-ring/60 disabled:opacity-50"
+              className="text-ink-3 hover:text-destructive"
             >
               <Trash2 className="size-3.5" strokeWidth={1.5} />
-            </button>
+            </IconAction>
           </div>
         </header>
 
@@ -365,7 +405,12 @@ export function Campaign() {
           {messages.map((m) =>
             m.role === "user" ? (
               <MessageRow key={m.id} role="user">
-                <UserMessage content={m.content} animate={!initialIds.current?.has(m.id)} />
+                <UserMessage
+                  content={m.content}
+                  attachments={m.attachments}
+                  localFiles={m.localFiles}
+                  animate={!initialIds.current?.has(m.id)}
+                />
               </MessageRow>
             ) : (
               <MessageRow key={m.id} role="assistant">
@@ -406,19 +451,17 @@ export function Campaign() {
         )}
 
         {error && (
-          <div className="mb-3 flex items-center gap-2 rounded-[10px] border border-destructive/30 bg-destructive/5 px-3 py-2 text-[12px] text-destructive">
-            <TriangleAlert className="size-3.5 shrink-0" strokeWidth={1.5} />
-            <span className="min-w-0 flex-1">{error}</span>
-            <button
-              type="button"
-              onClick={() => send()}
-              disabled={pending}
-              className="flex shrink-0 items-center gap-1 rounded-md border border-line px-2 py-0.5 font-medium text-ink-2 transition-colors hover:bg-hover hover:text-ink disabled:opacity-50"
-            >
-              <RefreshCw className="size-3" strokeWidth={1.5} />
-              Retry
-            </button>
-          </div>
+          <Alert variant="destructive" className="mb-3">
+            <TriangleAlert />
+            <AlertTitle>Message failed</AlertTitle>
+            <AlertDescription>{error}</AlertDescription>
+            <AlertAction>
+              <Button variant="outline" size="sm" onClick={() => send()} disabled={pending}>
+                <RefreshCw className="size-3.5" strokeWidth={1.5} />
+                Retry
+              </Button>
+            </AlertAction>
+          </Alert>
         )}
 
         <div className="pt-1">
@@ -427,6 +470,19 @@ export function Campaign() {
               <TodoList items={todos} title="Plan" defaultOpen />
             </div>
           )}
+
+          {files.length > 0 && (
+            <div className="scrollbar-hide mb-2 flex gap-2 overflow-x-auto pb-1">
+              {files.map((file, index) => (
+                <PendingCard
+                  key={`${file.name}-${index}`}
+                  file={file}
+                  onRemove={() => setFiles((prev) => prev.filter((_, i) => i !== index))}
+                />
+              ))}
+            </div>
+          )}
+
           <PromptInput
             value={input}
             onValueChange={setInput}
@@ -437,27 +493,81 @@ export function Campaign() {
             placeholder={configured ? "Message the agent…" : "Chat disabled"}
             minRows={1}
             maxRows={8}
+            onPaste={onPasteFiles}
+            leadingAction={
+              <>
+                <input
+                  ref={fileInput}
+                  type="file"
+                  multiple
+                  hidden
+                  onChange={(event) => {
+                    addFiles(Array.from(event.target.files ?? []))
+                    event.target.value = ""
+                  }}
+                />
+                <IconAction
+                  variant="ghost"
+                  size="icon-sm"
+                  label="Attach files or images"
+                  description="Attach files"
+                  disabled={!configured || pending}
+                  onClick={() => fileInput.current?.click()}
+                  className="rounded-full text-ink-3 hover:text-ink"
+                >
+                  <Paperclip className="size-4" strokeWidth={1.5} />
+                </IconAction>
+                <span
+                  title={`Model · ${campaign.model} · effort ${campaign.effort}`}
+                  className="inline-flex items-center gap-1.5 rounded-full border border-line bg-inset px-2.5 py-1 font-mono text-[11px] font-medium text-ink-2"
+                >
+                  <Sparkles className="size-3 text-accent-ink" strokeWidth={1.5} />
+                  {campaign.model}
+                </span>
+              </>
+            }
           />
         </div>
       </section>
+
+      <ConfirmDialog
+        open={confirmDelete}
+        onOpenChange={setConfirmDelete}
+        title="Delete this campaign?"
+        description={`"${campaign.target.split("\n")[0]}" and all of its messages and files are removed. This cannot be undone.`}
+        confirmLabel="Delete campaign"
+        busy={deleting}
+        onConfirm={remove}
+      />
     </div>
   )
 }
 
+// messages are immutable, so parse each one's JSON once. Without this a long
+// chat re-parsed every message on every streamed token.
+const partsCache = new Map<number, Part[]>()
+
 function partsOf(message: Message): Part[] {
+  const cached = partsCache.get(message.id)
+  if (cached) return cached
+
+  let parts: Part[] = []
   if (message.parts) {
     try {
-      const parts = JSON.parse(message.parts) as Part[]
-      if (parts.length > 0) return parts
+      const parsed = JSON.parse(message.parts) as Part[]
+      if (parsed.length > 0) parts = parsed
     } catch {
       // fall back to the legacy columns
     }
   }
 
-  const parts: Part[] = []
-  if (message.reasoning) parts.push({ type: "thinking", text: message.reasoning })
-  for (const call of callsOf(message)) parts.push({ type: "tool", ...call })
-  if (message.content) parts.push({ type: "content", text: message.content })
+  if (parts.length === 0) {
+    if (message.reasoning) parts.push({ type: "thinking", text: message.reasoning })
+    for (const call of callsOf(message)) parts.push({ type: "tool", ...call })
+    if (message.content) parts.push({ type: "content", text: message.content })
+  }
+
+  partsCache.set(message.id, parts)
   return parts
 }
 
@@ -555,7 +665,7 @@ function ContextPanel({
         <div className="overflow-hidden">
           <div className="grid max-h-[40vh] gap-3 overflow-y-auto border-t border-line px-3.5 py-3 [scrollbar-color:var(--line-strong)_transparent] [scrollbar-width:thin] sm:grid-cols-2">
             {sections.map((section) => (
-              <div key={section.key} className="rounded-[10px] bg-inset px-3 py-2.5">
+              <div key={section.key} className="rounded-[12px] bg-inset px-3 py-2.5">
                 <div className="text-[11px] font-medium tracking-wide text-ink-3 uppercase">
                   {section.label}
                 </div>
@@ -567,7 +677,12 @@ function ContextPanel({
                 {section.files.length > 0 && (
                   <div className="mt-2 flex flex-wrap gap-2">
                     {section.files.map((a) => (
-                      <AttachmentChip key={a.id} attachment={a} />
+                      <AttachmentChip
+                        key={a.id}
+                        name={a.filename}
+                        mime={a.content_type}
+                        href={api.attachmentUrl(a.id)}
+                      />
                     ))}
                   </div>
                 )}
@@ -580,14 +695,24 @@ function ContextPanel({
   )
 }
 
-function AttachmentChip({ attachment }: { attachment: Attachment }) {
+// composer tray card — owns the object-URL lifecycle for image previews
+function PendingCard({ file, onRemove }: { file: File; onRemove: () => void }) {
+  const [preview, setPreview] = useState<string>()
+
+  useEffect(() => {
+    if (!file.type.startsWith("image/")) return
+    const url = URL.createObjectURL(file)
+    setPreview(url)
+    return () => URL.revokeObjectURL(url)
+  }, [file])
+
   return (
-    <a
-      href={api.attachmentUrl(attachment.id)}
-      className="inline-flex items-center gap-1 rounded-[6px] border border-line bg-surface px-2 py-0.5 font-mono text-[11px] text-ink-2 transition-colors hover:bg-hover hover:text-ink"
-    >
-      <Paperclip className="size-3" strokeWidth={1.5} />
-      {attachment.filename}
-    </a>
+    <AttachmentCard
+      name={file.name}
+      mime={file.type}
+      previewUrl={preview}
+      meta={fmtSize(file.size)}
+      onRemove={onRemove}
+    />
   )
 }

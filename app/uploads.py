@@ -10,6 +10,12 @@ TEXT_SUFFIXES = {
     ".har", ".ini", ".conf", ".cfg", ".js", ".ts", ".html", ".sql",
 }
 
+IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg", ".avif"}
+
+
+def is_image(name: str) -> bool:
+    return Path(name).suffix.lower() in IMAGE_SUFFIXES
+
 
 def _safe_name(name: str) -> str:
     name = Path(name).name
@@ -52,6 +58,21 @@ def store(campaign_id: int, field: str, item: dict) -> tuple[str, str]:
     return str(path.relative_to(config.UPLOAD_DIR)), path.name
 
 
+def store_chat(campaign_id: int, item: dict) -> str:
+    """Store a file attached to a chat message; returns the path relative to the upload dir."""
+    folder = config.UPLOAD_DIR / str(campaign_id) / "chat"
+    folder.mkdir(parents=True, exist_ok=True)
+
+    path = folder / item["filename"]
+    n = 1
+    while path.exists():
+        path = folder / f"{path.stem}-{n}{path.suffix}"
+        n += 1
+
+    path.write_bytes(item["data"])
+    return str(path.relative_to(config.UPLOAD_DIR))
+
+
 def prompt_text(rows) -> str:
     if not rows:
         return ""
@@ -60,8 +81,14 @@ def prompt_text(rows) -> str:
     parts = []
     for row in rows:
         suffix = Path(row["filename"]).suffix.lower()
+        if suffix in IMAGE_SUFFIXES:
+            parts.append(
+                f"### {row['filename']} (image, stored at {row['path']} "
+                "relative to the upload dir; inspect it with your tools)"
+            )
+            continue
         if suffix not in TEXT_SUFFIXES:
-            parts.append(f"### {row['filename']} (binary, stored but not readable yet)")
+            parts.append(f"### {row['filename']} (binary, stored at {row['path']})")
             continue
 
         try:

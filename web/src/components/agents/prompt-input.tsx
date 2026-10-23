@@ -1,7 +1,7 @@
 "use client";
 // www.agentui.pro/components/agents/prompt-input
 
-import { ArrowUp, Plus, Square } from "lucide-react";
+import { ArrowUp, Plus, Square } from "@/components/icons";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
   type FormEvent,
