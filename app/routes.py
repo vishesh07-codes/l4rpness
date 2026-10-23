@@ -29,9 +29,13 @@ def health():
 
 
 @router.get("/config")
-def app_config():
+async def app_config():
+    models = await agent.models()
+    if config.DEFAULT_MODEL not in models:
+        models = [config.DEFAULT_MODEL, *models]
+
     return {
-        "models": config.MODELS,
+        "models": models,
         "default_model": config.DEFAULT_MODEL,
         "efforts": config.EFFORTS,
         "default_effort": config.DEFAULT_EFFORT,
@@ -71,7 +75,7 @@ async def create_campaign(
 ):
     if not target.strip():
         raise HTTPException(400, "target is required")
-    if model not in config.MODELS:
+    if model not in await agent.models():
         model = config.DEFAULT_MODEL
     if effort not in config.EFFORTS:
         effort = config.DEFAULT_EFFORT

@@ -14,10 +14,9 @@ WEB_DIST = ROOT / "web" / "dist"
 
 API_KEY = os.getenv("DEEPSEEK_API_KEY", "").strip()
 BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com").strip()
-DEFAULT_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat").strip()
+DEFAULT_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-flash").strip()
 DEFAULT_EFFORT = os.getenv("DEEPSEEK_EFFORT", "high").strip()
 
-MODELS = ["deepseek-chat", "deepseek-flash", "deepseek-reasoner"]
 EFFORTS = ["low", "high", "max"]
 
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024

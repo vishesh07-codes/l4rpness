@@ -13,10 +13,15 @@ from app.main import app
 
 
 @pytest.fixture(autouse=True)
-def fresh_db():
+def fresh_db(monkeypatch):
     for suffix in ("", "-wal", "-shm"):
         Path(str(config.DB_PATH) + suffix).unlink(missing_ok=True)
     db.init()
+
+    async def fake_models():
+        return ["deepseek-chat", "deepseek-flash"]
+
+    monkeypatch.setattr(agent, "models", fake_models)
 
 
 @pytest.fixture()
@@ -56,6 +61,12 @@ def test_target_required(client):
 def test_unknown_model_falls_back(client):
     campaign = create(client, model="gpt-12")
     assert campaign["model"] == config.DEFAULT_MODEL
+
+
+def test_config_lists_models(client):
+    body = client.get("/api/config").json()
+    assert "deepseek-flash" in body["models"]
+    assert body["default_model"] in body["models"]
 
 
 def test_effort_default_and_fallback(client):

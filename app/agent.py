@@ -1,3 +1,4 @@
+import logging
 from collections.abc import AsyncIterator
 from string import Template
 from typing import Any, cast
@@ -7,7 +8,29 @@ from openai.types.chat import ChatCompletionMessageParam
 
 from . import config, uploads
 
+log = logging.getLogger("l4rpness")
+
 SYSTEM = Template((config.ROOT / "prompts" / "campaign_agent.md").read_text())
+_models: list[str] = []
+
+
+def _client() -> AsyncOpenAI:
+    return AsyncOpenAI(api_key=config.API_KEY, base_url=config.BASE_URL, timeout=180)
+
+
+async def models() -> list[str]:
+    global _models
+    if _models:
+        return _models
+
+    try:
+        page = await _client().models.list()
+    except Exception:
+        log.exception("model list failed")
+        return []
+
+    _models = sorted(model.id for model in page.data)
+    return _models
 
 
 def build_prompt(campaign, attachment_rows) -> str:
@@ -29,7 +52,7 @@ def build_prompt(campaign, attachment_rows) -> str:
 
 
 async def stream(campaign, attachment_rows, history) -> AsyncIterator[tuple[str, str]]:
-    client = AsyncOpenAI(api_key=config.API_KEY, base_url=config.BASE_URL, timeout=180)
+    client = _client()
     messages: list[ChatCompletionMessageParam] = [
         {"role": "system", "content": build_prompt(campaign, attachment_rows)}
     ]
