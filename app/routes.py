@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import shutil
@@ -10,6 +11,8 @@ from . import agent, config, db, uploads
 
 log = logging.getLogger("l4rpness")
 router = APIRouter(prefix="/api")
+
+RUNNING: dict[int, asyncio.Event] = {}
 
 
 def row_dict(row):
@@ -55,7 +58,7 @@ def list_campaigns():
             ORDER BY c.id DESC
             """
         ).fetchall()
-    return [row_dict(r) for r in rows]
+    return [{**row_dict(r), "running": r["id"] in RUNNING} for r in rows]
 
 
 @router.post("/campaigns", status_code=201)
@@ -133,6 +136,10 @@ def get_campaign(campaign_id: int):
 
 @router.delete("/campaigns/{campaign_id}")
 def delete_campaign(campaign_id: int):
+    stop = RUNNING.get(campaign_id)
+    if stop is not None:
+        stop.set()
+
     with db.db() as conn:
         load_campaign(conn, campaign_id)
         conn.execute("DELETE FROM campaigns WHERE id = ?", (campaign_id,))
@@ -140,6 +147,19 @@ def delete_campaign(campaign_id: int):
     shutil.rmtree(config.UPLOAD_DIR / str(campaign_id), ignore_errors=True)
     shutil.rmtree(config.WORK_DIR / str(campaign_id), ignore_errors=True)
     return {"deleted": campaign_id}
+
+
+@router.post("/campaigns/{campaign_id}/stop")
+def stop_campaign(campaign_id: int):
+    with db.db() as conn:
+        load_campaign(conn, campaign_id)
+
+    stop = RUNNING.get(campaign_id)
+    if stop is None:
+        return {"stopped": False}
+
+    stop.set()
+    return {"stopped": True}
 
 
 class MessageIn(BaseModel):
@@ -168,6 +188,8 @@ async def send_message(campaign_id: int, body: MessageIn):
         raise HTTPException(400, "message is empty")
     if not config.API_KEY:
         raise HTTPException(400, "DEEPSEEK_API_KEY is not set")
+    if campaign_id in RUNNING:
+        raise HTTPException(409, "campaign is already running")
 
     with db.db() as conn:
         campaign = load_campaign(conn, campaign_id)
@@ -183,11 +205,16 @@ async def send_message(campaign_id: int, body: MessageIn):
     history = [{"role": r["role"], "content": r["content"]} for r in prior]
     history.append({"role": "user", "content": content})
 
-    async def events():
+    stop = asyncio.Event()
+    RUNNING[campaign_id] = stop
+
+    async def stream():
         thinking = []
         answer = []
         calls = []
         parts = []
+        failure = ""
+        stopped = False
 
         def add_text(kind: str, text: str):
             if parts and parts[-1]["type"] == kind:
@@ -196,7 +223,7 @@ async def send_message(campaign_id: int, body: MessageIn):
                 parts.append({"type": kind, "text": text})
 
         try:
-            async for kind, data in agent.run(campaign, attachments, history, campaign_id):
+            async for kind, data in agent.run(campaign, attachments, history, campaign_id, stop):
                 if kind == "thinking":
                     thinking.append(data)
                     add_text("thinking", data)
@@ -211,6 +238,9 @@ async def send_message(campaign_id: int, body: MessageIn):
                     calls.append({**data, "output": None, "ok": None, "ms": None})
                     parts.append({"type": "tool", **data})
                     yield sse("tool_call", data)
+                elif kind == "stopped":
+                    stopped = True
+                    break
                 elif kind == "tool_result":
                     for call in calls:
                         if call["id"] == data["id"]:
@@ -225,14 +255,12 @@ async def send_message(campaign_id: int, body: MessageIn):
                     yield sse("content", {"text": data})
         except Exception:
             log.exception("agent run failed")
-            yield sse("error", {"detail": "agent request failed"})
-            return
+            failure = "agent request failed"
 
         reply = "".join(answer).strip()
-        if not reply:
-            if not calls:
-                yield sse("error", {"detail": "agent returned an empty reply"})
-                return
+        has_output = bool(reply or thinking or calls)
+
+        if has_output and not reply:
             reply = "(no reply text)"
 
         try:
@@ -241,28 +269,51 @@ async def send_message(campaign_id: int, body: MessageIn):
                     "INSERT INTO messages (campaign_id, role, content) VALUES (?, 'user', ?)",
                     (campaign_id, content),
                 )
-                assistant_cur = conn.execute(
-                    """
-                    INSERT INTO messages (campaign_id, role, content, reasoning, tool_calls, parts)
-                    VALUES (?, 'assistant', ?, ?, ?, ?)
-                    """,
-                    (
-                        campaign_id,
-                        reply,
-                        "".join(thinking).strip(),
-                        json.dumps(calls),
-                        json.dumps(parts),
-                    ),
-                )
+                assistant_row = None
+                if has_output:
+                    assistant_cur = conn.execute(
+                        """
+                        INSERT INTO messages (campaign_id, role, content, reasoning, tool_calls, parts)
+                        VALUES (?, 'assistant', ?, ?, ?, ?)
+                        """,
+                        (
+                            campaign_id,
+                            reply,
+                            "".join(thinking).strip(),
+                            json.dumps(calls),
+                            json.dumps(parts),
+                        ),
+                    )
+                    assistant_row = conn.execute(
+                        "SELECT * FROM messages WHERE id = ?", (assistant_cur.lastrowid,)
+                    ).fetchone()
                 conn.execute("UPDATE campaigns SET updated_at = datetime('now') WHERE id = ?", (campaign_id,))
                 user_row = conn.execute("SELECT * FROM messages WHERE id = ?", (user_cur.lastrowid,)).fetchone()
-                assistant_row = conn.execute("SELECT * FROM messages WHERE id = ?", (assistant_cur.lastrowid,)).fetchone()
         except Exception:
             log.exception("storing reply failed")
-            yield sse("error", {"detail": "failed to store the reply"})
+            yield sse("error", {"detail": "failed to store the reply", "saved": False})
+            return
+
+        if failure:
+            yield sse("error", {"detail": failure, "saved": True})
+            return
+
+        if stopped:
+            yield sse("error", {"detail": "stopped by user", "saved": True})
+            return
+
+        if not has_output:
+            yield sse("error", {"detail": "agent returned an empty reply", "saved": True})
             return
 
         yield sse("done", {"user": row_dict(user_row), "assistant": row_dict(assistant_row)})
+
+    async def events():
+        try:
+            async for chunk in stream():
+                yield chunk
+        finally:
+            RUNNING.pop(campaign_id, None)
 
     return StreamingResponse(
         events(),

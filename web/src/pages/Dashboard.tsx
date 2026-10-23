@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react"
 import { Link } from "react-router-dom"
-import { Plus, Trash2 } from "lucide-react"
+import { Plus, Square, Trash2 } from "lucide-react"
 
+import { Pulse } from "@/components/Pulse"
 import { StatusBadge } from "@/components/StatusBadge"
 import { Button } from "@/components/ui/button"
 import { api, type Campaign } from "@/lib/api"
@@ -12,12 +13,36 @@ export function Dashboard() {
   const [error, setError] = useState("")
   const [busy, setBusy] = useState(0)
 
-  useEffect(() => {
+  const load = () =>
     api
       .listCampaigns()
       .then(setCampaigns)
       .catch((e: Error) => setError(e.message))
+
+  useEffect(() => {
+    load()
   }, [])
+
+  const anyRunning = campaigns?.some((c) => c.running) ?? false
+
+  useEffect(() => {
+    if (!anyRunning) return
+    const timer = setInterval(load, 3000)
+    return () => clearInterval(timer)
+  }, [anyRunning])
+
+  async function stop(campaign: Campaign) {
+    setBusy(campaign.id)
+    setError("")
+    try {
+      await api.stopCampaign(campaign.id)
+      await load()
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setBusy(0)
+    }
+  }
 
   async function remove(campaign: Campaign) {
     if (!confirm(`Delete "${campaign.target.split("\n")[0]}"? Messages and files are removed too.`)) {
@@ -74,7 +99,7 @@ export function Dashboard() {
                 <th className="px-4 py-2 font-medium">Model</th>
                 <th className="px-4 py-2 font-medium">Status</th>
                 <th className="px-4 py-2 font-medium">Created</th>
-                <th className="w-10 px-4 py-2" />
+                <th className="w-20 px-4 py-2" />
               </tr>
             </thead>
             <tbody>
@@ -93,20 +118,41 @@ export function Dashboard() {
                   </td>
                   <td className="px-4 py-2.5 text-muted-foreground">{c.model}</td>
                   <td className="px-4 py-2.5">
-                    <StatusBadge status={c.status} />
+                    {c.running ? (
+                      <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                        <Pulse />
+                        running
+                      </span>
+                    ) : (
+                      <StatusBadge status={c.status} />
+                    )}
                   </td>
                   <td className="px-4 py-2.5 text-muted-foreground">{fmtDate(c.created_at)}</td>
                   <td className="px-4 py-2.5 text-right">
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="size-7 text-muted-foreground hover:text-destructive"
-                      title="Delete campaign"
-                      disabled={busy === c.id}
-                      onClick={() => remove(c)}
-                    >
-                      <Trash2 className="size-3.5" />
-                    </Button>
+                    <div className="flex items-center justify-end gap-1">
+                      {c.running && (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="size-7 text-muted-foreground"
+                          title="Stop campaign"
+                          disabled={busy === c.id}
+                          onClick={() => stop(c)}
+                        >
+                          <Square className="size-3.5" />
+                        </Button>
+                      )}
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="size-7 text-muted-foreground hover:text-destructive"
+                        title="Delete campaign"
+                        disabled={busy === c.id}
+                        onClick={() => remove(c)}
+                      >
+                        <Trash2 className="size-3.5" />
+                      </Button>
+                    </div>
                   </td>
                 </tr>
               ))}

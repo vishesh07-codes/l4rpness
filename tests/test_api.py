@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import tempfile
@@ -9,7 +10,7 @@ os.environ["DEEPSEEK_API_KEY"] = "test-key"
 import pytest
 from fastapi.testclient import TestClient
 
-from app import agent, config, db, tools
+from app import agent, config, db, routes, tools
 from app.main import app
 
 
@@ -110,7 +111,7 @@ def test_prompt_includes_attachment_text(client):
 
 
 def test_chat_streams_and_stores_messages(client, monkeypatch):
-    async def fake_run(campaign, attachments, history, campaign_id):
+    async def fake_run(campaign, attachments, history, campaign_id, stop=None):
         yield "thinking", "weighing it"
         yield "content", "ack: " + history[-1]["content"]
 
@@ -130,8 +131,8 @@ def test_chat_streams_and_stores_messages(client, monkeypatch):
     assert messages[1]["tool_calls"] == "[]"
 
 
-def test_chat_stream_failure_stores_nothing(client, monkeypatch):
-    async def broken_run(campaign, attachments, history, campaign_id):
+def test_chat_failure_keeps_partial_reply(client, monkeypatch):
+    async def broken_run(campaign, attachments, history, campaign_id, stop=None):
         yield "content", "partial"
         raise RuntimeError("boom")
 
@@ -140,7 +141,27 @@ def test_chat_stream_failure_stores_nothing(client, monkeypatch):
 
     res = client.post(f"/api/campaigns/{campaign['id']}/messages", json={"content": "hi"})
     assert "event: error" in res.text
-    assert client.get(f"/api/campaigns/{campaign['id']}/messages").json() == []
+    assert '"saved": true' in res.text
+
+    messages = client.get(f"/api/campaigns/{campaign['id']}/messages").json()
+    assert [m["role"] for m in messages] == ["user", "assistant"]
+    assert messages[1]["content"] == "partial"
+
+
+def test_chat_failure_before_output_keeps_user_message(client, monkeypatch):
+    async def instant_failure(campaign, attachments, history, campaign_id, stop=None):
+        raise RuntimeError("boom")
+        yield
+
+    monkeypatch.setattr(agent, "run", instant_failure)
+    campaign = create(client)
+
+    res = client.post(f"/api/campaigns/{campaign['id']}/messages", json={"content": "hi"})
+    assert "event: error" in res.text
+    assert '"saved": true' in res.text
+
+    messages = client.get(f"/api/campaigns/{campaign['id']}/messages").json()
+    assert [m["role"] for m in messages] == ["user"]
 
 
 def test_tool_loop_logs_calls(client, monkeypatch):
@@ -155,7 +176,7 @@ def test_tool_loop_logs_calls(client, monkeypatch):
         calls.append({"id": "c1", "name": "bash", "arguments": '{"cmd": "echo hi"}', "args": {"cmd": "echo hi"}})
         yield "content", "running"
 
-    async def fake_execute(name, args, campaign_id):
+    async def fake_execute(name, args, campaign_id, stop=None):
         return "hi\n[exit code 0]", True, 7
 
     monkeypatch.setattr(agent, "_step", fake_step)
@@ -183,7 +204,7 @@ def test_tool_step_cap(client, monkeypatch):
         calls.append({"id": "c1", "name": "bash", "arguments": "{}", "args": {}})
         yield "content", "step"
 
-    async def fake_execute(name, args, campaign_id):
+    async def fake_execute(name, args, campaign_id, stop=None):
         return "ok", True, 1
 
     monkeypatch.setattr(agent, "_step", always_calls)
@@ -199,7 +220,7 @@ def test_tool_step_cap(client, monkeypatch):
 
 
 def test_delete_campaign(client, monkeypatch):
-    async def fake_run(campaign, attachments, history, campaign_id):
+    async def fake_run(campaign, attachments, history, campaign_id, stop=None):
         yield "content", "ok"
 
     monkeypatch.setattr(agent, "run", fake_run)
@@ -230,3 +251,72 @@ def test_chat_without_key(client, monkeypatch):
     res = client.post(f"/api/campaigns/{campaign['id']}/messages", json={"content": "hi"})
     assert res.status_code == 400
     assert client.get(f"/api/campaigns/{campaign['id']}/messages").json() == []
+
+
+def test_stop_idle_campaign(client):
+    campaign = create(client)
+
+    res = client.post(f"/api/campaigns/{campaign['id']}/stop")
+    assert res.status_code == 200
+    assert res.json() == {"stopped": False}
+
+
+def test_running_flag_and_409(client):
+    campaign = create(client)
+    routes.RUNNING[campaign["id"]] = asyncio.Event()
+    try:
+        listed = client.get("/api/campaigns").json()
+        assert listed[0]["running"] is True
+
+        res = client.post(f"/api/campaigns/{campaign['id']}/messages", json={"content": "hi"})
+        assert res.status_code == 409
+    finally:
+        routes.RUNNING.pop(campaign["id"], None)
+
+
+def test_stopped_run_stores_partial(client, monkeypatch):
+    async def stopped_run(campaign, attachments, history, campaign_id, stop=None):
+        yield "content", "half"
+        yield "stopped", None
+
+    monkeypatch.setattr(agent, "run", stopped_run)
+    campaign = create(client)
+
+    res = client.post(f"/api/campaigns/{campaign['id']}/messages", json={"content": "go"})
+    assert "stopped by user" in res.text
+    assert '"saved": true' in res.text
+
+    messages = client.get(f"/api/campaigns/{campaign['id']}/messages").json()
+    assert [m["role"] for m in messages] == ["user", "assistant"]
+    assert messages[1]["content"] == "half"
+
+
+def test_agent_run_honours_stop(monkeypatch):
+    stop = asyncio.Event()
+
+    async def fake_step(http, campaign, messages, calls):
+        yield "content", "partial"
+        stop.set()
+
+    monkeypatch.setattr(agent, "_step", fake_step)
+    campaign = {
+        "target": "x",
+        "info": "",
+        "instructions": "",
+        "description": "",
+        "scope": "",
+        "model": "deepseek-flash",
+        "effort": "high",
+    }
+
+    async def collect():
+        return [
+            event
+            async for event in agent.run(
+                campaign, [], [{"role": "user", "content": "hi"}], 1, stop
+            )
+        ]
+
+    events = asyncio.run(collect())
+    assert events[-1] == ("stopped", None)
+    assert ("content", "partial") in events

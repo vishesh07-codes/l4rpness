@@ -4,6 +4,7 @@ import { ArrowLeft, Send, Trash2 } from "lucide-react"
 
 import { StatusBadge } from "@/components/StatusBadge"
 import { Markdown } from "@/components/Markdown"
+import { Pulse } from "@/components/Pulse"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import {
@@ -88,6 +89,7 @@ export function Campaign() {
       })
 
     let failure = ""
+    let saved = false
     let completed = false
 
     try {
@@ -121,8 +123,9 @@ export function Campaign() {
             event.user,
             event.assistant,
           ])
-        } else {
+        } else if (event.type === "error") {
           failure = event.detail
+          saved = event.saved ?? false
         }
       })
     } catch (e) {
@@ -132,8 +135,16 @@ export function Campaign() {
     if (!completed && !failure) failure = "connection lost before the reply finished"
 
     if (failure) {
-      setMessages((prev) => prev.filter((m) => m.id !== optimistic.id))
-      setInput(content)
+      if (saved) {
+        try {
+          setMessages(await api.listMessages(campaignId))
+        } catch {
+          // keep the optimistic message if the refresh fails
+        }
+      } else {
+        setMessages((prev) => prev.filter((m) => m.id !== optimistic.id))
+        setInput(content)
+      }
       setError(failure)
     }
 
@@ -355,20 +366,6 @@ function activity(stream: LiveReply): string {
   if (last?.type === "tool" && last.output == null) return `Running ${last.name}`
   if (last?.type === "content") return "Writing"
   return "Thinking"
-}
-
-function Pulse() {
-  return (
-    <span className="inline-flex h-3 shrink-0 items-end gap-0.5" aria-hidden>
-      {[0, 1, 2].map((i) => (
-        <span
-          key={i}
-          className="h-full w-0.5 origin-bottom rounded-sm bg-muted-foreground animate-[pulse-bar_1.1s_ease-in-out_infinite]"
-          style={{ animationDelay: `${i * 0.15}s` }}
-        />
-      ))}
-    </span>
-  )
 }
 
 function ToolCallBlock({ call }: { call: ToolCall }) {

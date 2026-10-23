@@ -21,6 +21,7 @@ export type Campaign = {
   created_at: string
   updated_at: string
   message_count?: number
+  running?: boolean
   attachments?: Attachment[]
 }
 
@@ -63,7 +64,7 @@ export type StreamEvent =
   | { type: "tool_call"; id: string; name: string; args: Record<string, unknown> }
   | { type: "tool_result"; id: string; name: string; output: string; ok: boolean; ms: number }
   | { type: "done"; user: Message; assistant: Message }
-  | { type: "error"; detail: string }
+  | { type: "error"; detail: string; saved?: boolean }
 
 export const FIELDS = ["target", "info", "instructions", "description", "scope"] as const
 export type FieldName = (typeof FIELDS)[number]
@@ -134,6 +135,8 @@ export const api = {
     req<Campaign>("/api/campaigns", { method: "POST", body: form }),
   deleteCampaign: (id: number) =>
     req<{ deleted: number }>(`/api/campaigns/${id}`, { method: "DELETE" }),
+  stopCampaign: (id: number) =>
+    req<{ stopped: boolean }>(`/api/campaigns/${id}/stop`, { method: "POST" }),
   listMessages: (id: number) => req<Message[]>(`/api/campaigns/${id}/messages`),
   streamMessage,
   attachmentUrl: (id: number) => `/api/attachments/${id}`,

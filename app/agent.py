@@ -96,7 +96,7 @@ async def _step(client, campaign, messages, calls: list) -> AsyncIterator[tuple[
         calls.append({**entry, "args": args})
 
 
-async def run(campaign, attachment_rows, history, campaign_id) -> AsyncIterator[tuple[str, Any]]:
+async def run(campaign, attachment_rows, history, campaign_id, stop=None) -> AsyncIterator[tuple[str, Any]]:
     client = _client()
     messages: list[dict] = [{"role": "system", "content": build_prompt(campaign, attachment_rows)}]
     messages += [{"role": m["role"], "content": m["content"]} for m in history]
@@ -105,16 +105,27 @@ async def run(campaign, attachment_rows, history, campaign_id) -> AsyncIterator[
     steps = 0
 
     while True:
+        if stop is not None and stop.is_set():
+            yield "stopped", None
+            return
+
         calls.clear()
         thinking: list[str] = []
         content: list[str] = []
 
         async for kind, data in _step(client, campaign, messages, calls):
+            if stop is not None and stop.is_set():
+                yield "stopped", None
+                return
             if kind == "thinking":
                 thinking.append(data)
             elif kind == "content":
                 content.append(data)
             yield kind, data
+
+        if stop is not None and stop.is_set():
+            yield "stopped", None
+            return
 
         if not calls:
             return
@@ -138,7 +149,7 @@ async def run(campaign, attachment_rows, history, campaign_id) -> AsyncIterator[
 
         for call in calls:
             yield "tool_call", {"id": call["id"], "name": call["name"], "args": call["args"]}
-            output, ok, ms = await tools.execute(call["name"], call["args"], campaign_id)
+            output, ok, ms = await tools.execute(call["name"], call["args"], campaign_id, stop)
             yield "tool_result", {"id": call["id"], "name": call["name"], "output": output, "ok": ok, "ms": ms}
             messages.append({"role": "tool", "tool_call_id": call["id"], "content": output})
 

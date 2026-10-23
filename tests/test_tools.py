@@ -97,6 +97,18 @@ def test_read_file_past_end(work):
     assert "nothing at offset 10" in out
 
 
+def test_bash_killed_on_stop(work):
+    async def scenario():
+        stop = asyncio.Event()
+        asyncio.get_running_loop().call_later(0.3, stop.set)
+        return await tools.execute("bash", {"cmd": "sleep 5"}, 1, stop)
+
+    out, ok, ms = asyncio.run(scenario())
+    assert not ok
+    assert "[stopped by request]" in out
+    assert ms < 3000
+
+
 def test_path_escape_rejected(work):
     out, ok, _ = asyncio.run(tools.execute("read_file", {"path": "../secret"}, 1))
     assert not ok

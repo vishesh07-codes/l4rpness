@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import os
 import re
 import time
@@ -106,7 +107,13 @@ def _clip(work: Path, text: str, name: str) -> str:
     )
 
 
-async def bash(args: dict, work: Path) -> tuple[str, bool]:
+async def _kill_when_stopped(proc, stop):
+    await stop.wait()
+    if proc.returncode is None:
+        proc.kill()
+
+
+async def bash(args: dict, work: Path, stop=None) -> tuple[str, bool]:
     cmd = str(args.get("cmd", "")).strip()
     if not cmd:
         raise ValueError("cmd is required")
@@ -142,6 +149,7 @@ async def bash(args: dict, work: Path) -> tuple[str, bool]:
         await proc.wait()
         return bytes(out), capped
 
+    watcher = asyncio.ensure_future(_kill_when_stopped(proc, stop)) if stop else None
     note = ""
     try:
         out, capped = await asyncio.wait_for(drain(), timeout)
@@ -149,6 +157,14 @@ async def bash(args: dict, work: Path) -> tuple[str, bool]:
         proc.kill()
         out, capped = await drain()
         note = f"\n[killed after {timeout}s]"
+    finally:
+        if watcher:
+            watcher.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await watcher
+
+    if stop is not None and stop.is_set():
+        note += "\n[stopped by request]"
 
     if capped:
         note += f"\n[output limit reached, kept the first {config.BASH_OUTPUT_BYTES:,} bytes]"
@@ -158,7 +174,7 @@ async def bash(args: dict, work: Path) -> tuple[str, bool]:
     return f"{body}\n[exit code {proc.returncode}]{note}".strip(), proc.returncode == 0 and not capped
 
 
-async def read_file(args: dict, work: Path) -> tuple[str, bool]:
+async def read_file(args: dict, work: Path, stop=None) -> tuple[str, bool]:
     path = _resolve(work, str(args.get("path", "")))
     if not path.is_file():
         raise ValueError("file not found")
@@ -184,7 +200,7 @@ async def read_file(args: dict, work: Path) -> tuple[str, bool]:
     return f"{path.relative_to(work)} (lines {offset}-{end} of {total})\n{body}{tail}", True
 
 
-async def write_file(args: dict, work: Path) -> tuple[str, bool]:
+async def write_file(args: dict, work: Path, stop=None) -> tuple[str, bool]:
     path = _resolve(work, str(args.get("path", "")))
     path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -196,7 +212,7 @@ async def write_file(args: dict, work: Path) -> tuple[str, bool]:
 HANDLERS = {"bash": bash, "read_file": read_file, "write_file": write_file}
 
 
-async def execute(name: str, args: dict, campaign_id: int) -> tuple[str, bool, int]:
+async def execute(name: str, args: dict, campaign_id: int, stop=None) -> tuple[str, bool, int]:
     work = _work_dir(campaign_id)
     handler = HANDLERS.get(name)
     if handler is None:
@@ -204,7 +220,7 @@ async def execute(name: str, args: dict, campaign_id: int) -> tuple[str, bool, i
 
     started = time.monotonic()
     try:
-        text, ok = await handler(args or {}, work)
+        text, ok = await handler(args or {}, work, stop)
     except Exception as exc:
         text, ok = f"error: {exc}", False
     ms = int((time.monotonic() - started) * 1000)
