@@ -1,10 +1,7 @@
 import asyncio
 import json
 import os
-import tempfile
-from pathlib import Path
 
-os.environ["L4RP_DATA_DIR"] = tempfile.mkdtemp()
 os.environ["DEEPSEEK_API_KEY"] = "test-key"
 
 import pytest
@@ -15,9 +12,14 @@ from app.main import app
 
 
 @pytest.fixture(autouse=True)
-def fresh_db(monkeypatch):
-    for suffix in ("", "-wal", "-shm"):
-        Path(str(config.DB_PATH) + suffix).unlink(missing_ok=True)
+def fresh_db(monkeypatch, tmp_path):
+    # Isolate every path per test: before this, uploads (and the DB) landed in
+    # the repo's data/ dir and leaked across runs, so the attachment test
+    # failed on any second run.
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(config, "DB_PATH", tmp_path / "l4rpness.db")
+    monkeypatch.setattr(config, "UPLOAD_DIR", tmp_path / "uploads")
+    monkeypatch.setattr(config, "WORK_DIR", tmp_path / "work")
     routes.RUNNING.clear()
     db.init()
 
