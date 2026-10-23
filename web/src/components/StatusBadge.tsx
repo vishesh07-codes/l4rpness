@@ -4,7 +4,9 @@ import { cn } from "@/lib/utils"
 const TONES: Record<string, string> = {
   created: "bg-ink-3",
   queued: "bg-ink-3",
+  idle: "bg-ink-3",
   running: "bg-orange",
+  interrupted: "bg-orange",
   active: "bg-green",
   done: "bg-green",
   complete: "bg-green",

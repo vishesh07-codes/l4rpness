@@ -12,6 +12,7 @@ from .routes import router
 @asynccontextmanager
 async def lifespan(_app):
     db.init()
+    db.recover()
     await mcp.start()
     yield
     await mcp.stop()

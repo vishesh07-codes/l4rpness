@@ -1,3 +1,4 @@
+import json
 import sqlite3
 from contextlib import contextmanager
 
@@ -95,3 +96,51 @@ def init():
     with db() as conn:
         conn.executescript(SCHEMA)
         migrate(conn)
+
+
+def recover():
+    """Close out runs left open by a crash or restart.
+
+    A campaign still marked running at boot cannot be running: the process
+    that owned the turn is gone. Keep whatever was checkpointed, flag the
+    dangling tool calls and the turn itself as interrupted, and hand the
+    campaign back to the user.
+    """
+    interrupted = 0
+    with db() as conn:
+        rows = conn.execute("SELECT id FROM campaigns WHERE status = 'running'").fetchall()
+        for row in rows:
+            campaign_id = row["id"]
+            last = conn.execute(
+                "SELECT * FROM messages WHERE campaign_id = ? ORDER BY id DESC LIMIT 1",
+                (campaign_id,),
+            ).fetchone()
+            if last is not None and last["role"] == "assistant":
+                parts = json.loads(last["parts"] or "[]")
+                calls = json.loads(last["tool_calls"] or "[]")
+                if not (last["content"].strip() or last["reasoning"].strip() or parts or calls):
+                    # the placeholder never saw a single token
+                    conn.execute("DELETE FROM messages WHERE id = ?", (last["id"],))
+                else:
+                    for call in calls:
+                        if call.get("output") is None:
+                            call["output"] = "interrupted by a server restart"
+                            call["ok"] = False
+                    for part in parts:
+                        if part.get("type") == "tool" and part.get("output") is None:
+                            part["output"] = "interrupted by a server restart"
+                            part["ok"] = False
+                    parts.append({"type": "notice", "text": "run interrupted by a server restart"})
+                    # the next request replays this row as history, and an
+                    # empty assistant message breaks some providers
+                    text = last["content"].strip() or "(run interrupted by a server restart)"
+                    conn.execute(
+                        "UPDATE messages SET content = ?, tool_calls = ?, parts = ? WHERE id = ?",
+                        (text, json.dumps(calls), json.dumps(parts), last["id"]),
+                    )
+            conn.execute(
+                "UPDATE campaigns SET status = 'interrupted', updated_at = datetime('now') WHERE id = ?",
+                (campaign_id,),
+            )
+            interrupted += 1
+    return interrupted

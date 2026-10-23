@@ -505,6 +505,117 @@ def test_run_persists_without_a_watcher(client, monkeypatch):
     assert campaign["id"] not in routes.RUNNING
 
 
+def test_run_sets_running_then_idle(client, monkeypatch):
+    seen = {}
+
+    async def fake_run(campaign, attachments, history, campaign_id, stop=None):
+        with db.db() as conn:
+            seen["status"] = conn.execute(
+                "SELECT status FROM campaigns WHERE id = ?", (campaign_id,)
+            ).fetchone()["status"]
+            seen["roles"] = [
+                row["role"]
+                for row in conn.execute(
+                    "SELECT role FROM messages WHERE campaign_id = ? ORDER BY id",
+                    (campaign_id,),
+                ).fetchall()
+            ]
+        yield "content", "done"
+
+    monkeypatch.setattr(agent, "run", fake_run)
+    campaign = create(client)
+
+    res = client.post(f"/api/campaigns/{campaign['id']}/messages", data={"content": "go"})
+    assert "event: done" in res.text
+    assert seen["status"] == "running"
+    assert seen["roles"] == ["user", "assistant"]
+    assert client.get(f"/api/campaigns/{campaign['id']}").json()["status"] == "idle"
+
+
+def test_run_checkpoints_mid_stream(client, monkeypatch):
+    seen = {}
+
+    async def fake_run(campaign, attachments, history, campaign_id, stop=None):
+        yield "content", "working"
+        yield "tool_call", {"id": "c1", "name": "bash", "args": {"cmd": "id"}}
+        yield "tool_result", {"id": "c1", "name": "bash", "output": "uid=0", "ok": True, "ms": 3}
+        with db.db() as conn:
+            row = conn.execute(
+                "SELECT * FROM messages WHERE campaign_id = ? AND role = 'assistant'",
+                (campaign_id,),
+            ).fetchone()
+            seen["content"] = row["content"]
+            seen["parts"] = json.loads(row["parts"])
+        yield "content", " done"
+
+    monkeypatch.setattr(agent, "run", fake_run)
+    campaign = create(client)
+
+    res = client.post(f"/api/campaigns/{campaign['id']}/messages", data={"content": "go"})
+    assert "event: done" in res.text
+
+    tool = next(part for part in seen["parts"] if part["type"] == "tool")
+    assert tool["output"] == "uid=0"
+    assert tool["ok"] is True
+    assert seen["content"] == "working"
+
+
+def test_startup_recovers_a_running_campaign(client):
+    campaign = create(client)
+    calls = [
+        {"id": "c1", "name": "bash", "args": {"cmd": "sleep 99"}, "output": None, "ok": None, "ms": None}
+    ]
+    parts = [
+        {"type": "thinking", "text": "weighing the sleep"},
+        {"type": "tool", "id": "c1", "name": "bash", "args": {"cmd": "sleep 99"}, "output": None, "ok": None, "ms": None},
+    ]
+    with db.db() as conn:
+        conn.execute(
+            "INSERT INTO messages (campaign_id, role, content) VALUES (?, 'user', 'go')",
+            (campaign["id"],),
+        )
+        conn.execute(
+            """
+            INSERT INTO messages (campaign_id, role, content, reasoning, tool_calls, parts)
+            VALUES (?, 'assistant', '', 'weighing the sleep', ?, ?)
+            """,
+            (campaign["id"], json.dumps(calls), json.dumps(parts)),
+        )
+        conn.execute("UPDATE campaigns SET status = 'running' WHERE id = ?", (campaign["id"],))
+
+    with TestClient(app) as fresh:
+        assert fresh.get(f"/api/campaigns/{campaign['id']}").json()["status"] == "interrupted"
+        messages = fresh.get(f"/api/campaigns/{campaign['id']}/messages").json()
+        saved = json.loads(messages[-1]["parts"])
+        assert saved[-1]["type"] == "notice"
+        assert "interrupted" in messages[-1]["content"]
+        tool = next(part for part in saved if part["type"] == "tool")
+        assert tool["ok"] is False
+        assert "interrupted" in tool["output"]
+
+    with TestClient(app) as again:
+        assert again.get(f"/api/campaigns/{campaign['id']}").json()["status"] == "interrupted"
+
+
+def test_recovery_drops_an_empty_placeholder(client):
+    campaign = create(client)
+    with db.db() as conn:
+        conn.execute(
+            "INSERT INTO messages (campaign_id, role, content) VALUES (?, 'user', 'go')",
+            (campaign["id"],),
+        )
+        conn.execute(
+            "INSERT INTO messages (campaign_id, role, content) VALUES (?, 'assistant', '')",
+            (campaign["id"],),
+        )
+        conn.execute("UPDATE campaigns SET status = 'running' WHERE id = ?", (campaign["id"],))
+
+    with TestClient(app) as fresh:
+        messages = fresh.get(f"/api/campaigns/{campaign['id']}/messages").json()
+        assert [m["role"] for m in messages] == ["user"]
+        assert fresh.get(f"/api/campaigns/{campaign['id']}").json()["status"] == "interrupted"
+
+
 def test_message_upload(client, monkeypatch):
     campaign = create(client)
 

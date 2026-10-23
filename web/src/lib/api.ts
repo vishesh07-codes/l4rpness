@@ -62,6 +62,7 @@ export type ToolCall = {
 export type Part =
   | { type: "thinking"; text: string }
   | { type: "content"; text: string }
+  | { type: "notice"; text: string }
   | ({ type: "tool" } & ToolCall)
 
 export type Skill = {

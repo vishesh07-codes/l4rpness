@@ -81,6 +81,7 @@ export function Campaign() {
     Promise.all([api.getCampaign(campaignId), api.listMessages(campaignId), api.config()])
       .then(([c, m, cfg]) => {
         setCampaign(c)
+        partsCache.clear()
         setMessages(m)
         setConfigured(cfg.agent_configured)
         initialIds.current = new Set(m.map((message) => message.id))
@@ -116,6 +117,7 @@ export function Campaign() {
           setStream({ parts: live.parts, pendingTool: live.pending })
         } else {
           setStream(null)
+          partsCache.clear()
           setMessages(await api.listMessages(campaignId))
           setCampaign((c) => (c ? { ...c, running: false } : c))
         }
@@ -260,6 +262,7 @@ export function Campaign() {
     if (failure && saved) {
       // the server kept a partial reply (a user stop included) — reload it
       try {
+        partsCache.clear()
         setMessages(await api.listMessages(campaignId))
       } catch {
         // keep the optimistic message if the refresh fails
@@ -402,8 +405,11 @@ export function Campaign() {
             <EmptyState configured={configured} onPick={setInput} />
           )}
 
-          {messages.map((m) =>
-            m.role === "user" ? (
+          {messages.map((m) => {
+            // an empty assistant row is the placeholder of a run that is still
+            // streaming; the live block below already renders it
+            if (m.role === "assistant" && !m.content && partsOf(m).length === 0) return null
+            return m.role === "user" ? (
               <MessageRow key={m.id} role="user">
                 <UserMessage
                   content={m.content}
@@ -417,7 +423,7 @@ export function Campaign() {
                 <AssistantMessage parts={partsOf(m)} />
               </MessageRow>
             )
-          )}
+          })}
 
           {stream && (
             <MessageRow role="assistant">
@@ -543,8 +549,8 @@ export function Campaign() {
   )
 }
 
-// messages are immutable, so parse each one's JSON once. Without this a long
-// chat re-parsed every message on every streamed token.
+// assistant rows are checkpointed while a run streams, so a row's parts can
+// change after it was first fetched — clear the cache on every refetch.
 const partsCache = new Map<number, Part[]>()
 
 function partsOf(message: Message): Part[] {

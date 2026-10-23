@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import shutil
+import time
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
@@ -324,7 +325,12 @@ def sse(event: str, data: dict) -> str:
 
 
 async def _run(campaign_id, campaign, attachments, history, content, run, files=()):
-    """The agent turn, detached from any client so closing the tab does not kill it."""
+    """The agent turn, detached from any client so closing the tab does not kill it.
+
+    The user message and an assistant placeholder are written before the model
+    starts, and the assistant row is checkpointed while parts stream in, so a
+    crash or restart mid-run leaves a recoverable transcript, not nothing.
+    """
     stop = run["stop"]
     parts = run["parts"]
     thinking: list = []
@@ -332,6 +338,10 @@ async def _run(campaign_id, campaign, attachments, history, content, run, files=
     calls: list = []
     failure = ""
     stopped = False
+    stored = True
+    user_id = None
+    assistant_id = None
+    last_flush = 0.0
 
     def add_text(kind: str, text: str):
         if parts and parts[-1]["type"] == kind:
@@ -344,51 +354,37 @@ async def _run(campaign_id, campaign, attachments, history, content, run, files=
         if run["consumer"]:
             run["queue"].put_nowait((name, data))
 
-    try:
-        async for kind, data in agent.run(campaign, attachments, history, campaign_id, stop):
-            if kind == "thinking":
-                thinking.append(data)
-                add_text("thinking", data)
-                emit("thinking", {"text": data})
-            elif kind == "content":
-                answer.append(data)
-                add_text("content", data)
-                emit("content", {"text": data})
-            elif kind == "tool_start":
-                run["pending"] = data["name"]
-                emit("tool_start", data)
-            elif kind == "tool_call":
-                calls.append({**data, "output": None, "ok": None, "ms": None})
-                parts.append({"type": "tool", **data})
-                run["pending"] = None
-                emit("tool_call", data)
-            elif kind == "stopped":
-                stopped = True
-                break
-            elif kind == "tool_result":
-                for call in calls:
-                    if call["id"] == data["id"]:
-                        call.update(output=data["output"], ok=data["ok"], ms=data["ms"])
-                for part in parts:
-                    if part["type"] == "tool" and part["id"] == data["id"]:
-                        part.update(output=data["output"], ok=data["ok"], ms=data["ms"])
-                emit("tool_result", data)
-            else:
-                answer.append(data)
-                add_text("content", data)
-                emit("content", {"text": data})
-    except Exception:
-        log.exception("agent run failed")
-        failure = "agent request failed"
+    def checkpoint(force=False):
+        nonlocal last_flush
+        if not stored or assistant_id is None:
+            return
+        now = time.monotonic()
+        if not force and now - last_flush < 1.0:
+            return
+        last_flush = now
+        try:
+            with db.db() as conn:
+                conn.execute(
+                    """
+                    UPDATE messages SET content = ?, reasoning = ?, tool_calls = ?, parts = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        "".join(answer).strip(),
+                        "".join(thinking).strip(),
+                        json.dumps(calls),
+                        json.dumps(parts),
+                        assistant_id,
+                    ),
+                )
+                conn.execute(
+                    "UPDATE campaigns SET updated_at = datetime('now') WHERE id = ?",
+                    (campaign_id,),
+                )
+        except Exception:
+            # losing a checkpoint is not worth killing the run over
+            log.exception("checkpointing the run failed")
 
-    reply = "".join(answer).strip()
-    has_output = bool(reply or thinking or calls)
-    if has_output and not reply:
-        reply = "(no reply text)"
-
-    user_row = assistant_row = None
-    user_attachments: list = []
-    stored = True
     try:
         with db.db() as conn:
             user_cur = conn.execute(
@@ -412,37 +408,110 @@ async def _run(campaign_id, campaign, attachments, history, content, run, files=
                         item["path"],
                     ),
                 )
-            if has_output:
-                assistant_cur = conn.execute(
-                    """
-                    INSERT INTO messages (campaign_id, role, content, reasoning, tool_calls, parts)
-                    VALUES (?, 'assistant', ?, ?, ?, ?)
-                    """,
-                    (
-                        campaign_id,
-                        reply,
-                        "".join(thinking).strip(),
-                        json.dumps(calls),
-                        json.dumps(parts),
-                    ),
-                )
-                assistant_row = conn.execute(
-                    "SELECT * FROM messages WHERE id = ?", (assistant_cur.lastrowid,)
-                ).fetchone()
-            conn.execute("UPDATE campaigns SET updated_at = datetime('now') WHERE id = ?", (campaign_id,))
-            user_row = conn.execute(
-                "SELECT * FROM messages WHERE id = ?", (user_id,)
-            ).fetchone()
-            user_attachments = [
-                row_dict(a)
-                for a in conn.execute(
-                    "SELECT * FROM message_attachments WHERE message_id = ? ORDER BY id",
-                    (user_id,),
-                ).fetchall()
-            ]
+            assistant_cur = conn.execute(
+                """
+                INSERT INTO messages (campaign_id, role, content, reasoning, tool_calls, parts)
+                VALUES (?, 'assistant', '', '', '[]', '[]')
+                """,
+                (campaign_id,),
+            )
+            assistant_id = assistant_cur.lastrowid
+            conn.execute(
+                "UPDATE campaigns SET status = 'running', updated_at = datetime('now') WHERE id = ?",
+                (campaign_id,),
+            )
     except Exception:
-        log.exception("storing reply failed")
+        log.exception("storing the run failed")
         stored = False
+
+    try:
+        async for kind, data in agent.run(campaign, attachments, history, campaign_id, stop):
+            if kind == "thinking":
+                thinking.append(data)
+                add_text("thinking", data)
+                emit("thinking", {"text": data})
+                checkpoint()
+            elif kind == "content":
+                answer.append(data)
+                add_text("content", data)
+                emit("content", {"text": data})
+                checkpoint()
+            elif kind == "tool_start":
+                run["pending"] = data["name"]
+                emit("tool_start", data)
+            elif kind == "tool_call":
+                calls.append({**data, "output": None, "ok": None, "ms": None})
+                parts.append({"type": "tool", **data})
+                run["pending"] = None
+                checkpoint(True)
+                emit("tool_call", data)
+            elif kind == "stopped":
+                stopped = True
+                break
+            elif kind == "tool_result":
+                for call in calls:
+                    if call["id"] == data["id"]:
+                        call.update(output=data["output"], ok=data["ok"], ms=data["ms"])
+                for part in parts:
+                    if part["type"] == "tool" and part["id"] == data["id"]:
+                        part.update(output=data["output"], ok=data["ok"], ms=data["ms"])
+                checkpoint(True)
+                emit("tool_result", data)
+            else:
+                answer.append(data)
+                add_text("content", data)
+                emit("content", {"text": data})
+                checkpoint()
+    except Exception:
+        log.exception("agent run failed")
+        failure = "agent request failed"
+
+    reply = "".join(answer).strip()
+    has_output = bool(reply or thinking or calls)
+    if has_output and not reply:
+        reply = "(no reply text)"
+
+    user_row = assistant_row = None
+    user_attachments: list = []
+    if stored:
+        try:
+            with db.db() as conn:
+                if not has_output and assistant_id is not None:
+                    conn.execute("DELETE FROM messages WHERE id = ?", (assistant_id,))
+                elif assistant_id is not None:
+                    conn.execute(
+                        """
+                        UPDATE messages SET content = ?, reasoning = ?, tool_calls = ?, parts = ?
+                        WHERE id = ?
+                        """,
+                        (
+                            reply,
+                            "".join(thinking).strip(),
+                            json.dumps(calls),
+                            json.dumps(parts),
+                            assistant_id,
+                        ),
+                    )
+                    assistant_row = conn.execute(
+                        "SELECT * FROM messages WHERE id = ?", (assistant_id,)
+                    ).fetchone()
+                conn.execute(
+                    "UPDATE campaigns SET status = 'idle', updated_at = datetime('now') WHERE id = ?",
+                    (campaign_id,),
+                )
+                user_row = conn.execute(
+                    "SELECT * FROM messages WHERE id = ?", (user_id,)
+                ).fetchone()
+                user_attachments = [
+                    row_dict(a)
+                    for a in conn.execute(
+                        "SELECT * FROM message_attachments WHERE message_id = ? ORDER BY id",
+                        (user_id,),
+                    ).fetchall()
+                ]
+        except Exception:
+            log.exception("storing reply failed")
+            stored = False
 
     RUNNING.pop(campaign_id, None)
 

@@ -167,6 +167,18 @@ export const AssistantMessage = memo(function AssistantMessage({
             />
           )
         }
+        if (part.type === "notice") {
+          return (
+            <div
+              key={`notice-${index}`}
+              className="flex items-center gap-3 text-[11px] text-ink-3"
+            >
+              <span className="h-px flex-1 bg-line" aria-hidden />
+              {part.text}
+              <span className="h-px flex-1 bg-line" aria-hidden />
+            </div>
+          )
+        }
         if (part.type === "tool") {
           // the plan is shown attached to the composer, not in the transcript
           if (part.name === "write_todos") return null
