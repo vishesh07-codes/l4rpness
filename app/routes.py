@@ -59,6 +59,11 @@ class RuntimeConfigUpdate(BaseModel):
     values: dict[str, str]
 
 
+class CampaignRuntimeUpdate(BaseModel):
+    model: str | None = None
+    effort: str | None = None
+
+
 @router.get("/settings/providers")
 def settings_providers():
     """Provider key status for the Settings UI (values stay masked)."""
@@ -73,7 +78,7 @@ def save_settings_providers(update: ProviderKeysUpdate):
         saved = settings.save(update.values or {})
     except ValueError as exc:
         raise HTTPException(400, str(exc))
-    agent._models.clear()
+    agent.reset_model_cache()
     return saved
 
 
@@ -116,7 +121,7 @@ def push_settings_config_host(update: HostConfigPushUpdate):
         written = settings.push_host_config(update.values or {})
     except ValueError as exc:
         raise HTTPException(400, str(exc))
-    agent._models.clear()
+    agent.reset_model_cache()
     return {
         "written": written,
         "runtime": settings.runtime_status(),
@@ -129,7 +134,7 @@ def reload_settings_config_host():
     """Pull the mounted host `config.toml` into the live settings (host wins
     over conflicting Settings overrides)."""
     changed = settings.reload_host_config()
-    agent._models.clear()
+    agent.reset_model_cache()
     return {
         "changed": changed,
         "runtime": settings.runtime_status(),
@@ -157,7 +162,7 @@ def save_settings_endpoint(update: EndpointUpdate):
         saved = settings.save_endpoint(update.model_dump())
     except ValueError as exc:
         raise HTTPException(400, str(exc))
-    agent._models.clear()
+    agent.reset_model_cache()
     return saved
 
 
@@ -168,7 +173,7 @@ def delete_settings_endpoint(name: str):
         saved = settings.delete_endpoint(name)
     except ValueError as exc:
         raise HTTPException(400, str(exc))
-    agent._models.clear()
+    agent.reset_model_cache()
     return saved
 
 
@@ -189,7 +194,7 @@ def push_settings_host(update: HostPushUpdate):
         written = settings.push_host_env(update.values or {})
     except ValueError as exc:
         raise HTTPException(400, str(exc))
-    agent._models.clear()
+    agent.reset_model_cache()
     return {
         "written": written,
         "providers": settings.status(),
@@ -202,7 +207,7 @@ def reload_settings_host():
     """Pull the mounted host `.env` into the live environment (host wins over
     conflicting Settings overrides)."""
     changed = settings.reload_host_env()
-    agent._models.clear()
+    agent.reset_model_cache()
     return {
         "changed": changed,
         "providers": settings.status(),
@@ -406,7 +411,55 @@ def get_campaign(campaign_id: int):
             "SELECT * FROM attachments WHERE campaign_id = ? ORDER BY field, id",
             (campaign_id,),
         ).fetchall()
-    return {**row_dict(campaign), "running": campaign_id in RUNNING, "attachments": [row_dict(a) for a in attachments]}
+    return {
+        **row_dict(campaign),
+        "running": campaign_id in RUNNING,
+        "attachments": [row_dict(a) for a in attachments],
+        # context-window usage bar on the campaign page. source is api
+        # (provider listing), table (config), or fallback (128k guess).
+        "context_window": agent.model_limit(campaign["model"]),
+        "context_window_source": agent.limit_source(campaign["model"]),
+    }
+
+
+@router.patch("/campaigns/{campaign_id}/runtime")
+def update_campaign_runtime(campaign_id: int, update: CampaignRuntimeUpdate):
+    values = update.model_dump(exclude_none=True)
+    if not values:
+        raise HTTPException(400, "model or effort is required")
+    if "model" in values:
+        wanted = (values["model"] or "").strip()
+        if not wanted:
+            raise HTTPException(400, "unknown model")
+        with db.db() as conn:
+            current = load_campaign(conn, campaign_id)["model"]
+        if wanted != current:
+            # No live provider fan-out on the save path: an unreachable
+            # provider must never block switching to a working one. Accept a
+            # cached listing hit, a known provider prefix, or a bare model id
+            # (create_campaign falls back the same way); reject empty/whitespace.
+            known_prefix = False
+            try:
+                provider, _ = agent.split_model(wanted)
+                known_prefix = provider in config.PROVIDERS
+            except Exception:
+                known_prefix = False
+            cached_hit = wanted in agent._models
+            bare_ok = "/" not in wanted
+            if not (known_prefix or cached_hit or bare_ok):
+                raise HTTPException(400, "unknown model")
+        values["model"] = wanted
+    if "effort" in values and values["effort"] not in config.EFFORTS:
+        raise HTTPException(400, "unknown effort")
+
+    with db.db() as conn:
+        load_campaign(conn, campaign_id)
+        assignments = ", ".join(f"{key} = ?" for key in values)
+        conn.execute(
+            f"UPDATE campaigns SET {assignments}, updated_at = datetime('now') WHERE id = ?",
+            (*values.values(), campaign_id),
+        )
+    return get_campaign(campaign_id)
 
 
 @router.get("/campaigns/{campaign_id}/files")
@@ -743,7 +796,7 @@ def _campaign_usage(campaign_id: int) -> dict:
     return {"in": row["usage_in"], "out": row["usage_out"], "ctx": row["last_prompt_tokens"]}
 
 
-async def _run(campaign_id, campaign, attachments, history, content, run, files=(), store_user=True, keep=False, tool_kind=None):
+async def _run(campaign_id, campaign, attachments, history, content, run, files=(), store_user=True, keep=False, tool_kind=None, include_attachments: bool = True):
     """The agent turn, detached from any client so closing the tab does not kill it.
 
     The user message and an assistant placeholder are written before the model
@@ -862,8 +915,9 @@ async def _run(campaign_id, campaign, attachments, history, content, run, files=
         stored = False
 
     try:
+        truncated_chain = False
         stream = (
-            agent.run(campaign, attachments, history, campaign_id, stop, on_tool_output=on_tool_output)
+            agent.run(campaign, attachments, history, campaign_id, stop, on_tool_output=on_tool_output, include_attachments=include_attachments)
             if tool_kind is None
             else agent.run(
                 campaign,
@@ -873,6 +927,7 @@ async def _run(campaign_id, campaign, attachments, history, content, run, files=
                 stop,
                 on_tool_output=on_tool_output,
                 tool_kind=tool_kind,
+                include_attachments=include_attachments,
             )
         )
         async for kind, data in stream:
@@ -890,7 +945,10 @@ async def _run(campaign_id, campaign, attachments, history, content, run, files=
                 run["pending"] = data["name"]
                 emit("tool_start", data)
             elif kind == "tool_call":
-                calls.append({**data, "output": None, "ok": None, "ms": None})
+                # parts carry the output text; calls keep only metadata so the
+                # same stdout is not stored twice per message (the transcript
+                # payload doubles otherwise, and the browser holds both copies)
+                calls.append({**data, "ok": None, "ms": None})
                 parts.append({"type": "tool", **data})
                 run["pending"] = None
                 checkpoint(True)
@@ -907,7 +965,15 @@ async def _run(campaign_id, campaign, attachments, history, content, run, files=
                     run["usage"] = usage
                 usage["in"] += tokens_in
                 usage["out"] += tokens_out
-                usage["ctx"] = tokens_in
+                # Fallback estimates are computed from the already-pruned
+                # history, so they can only undercount. Never let one lower
+                # the gauge: the compaction trigger reads it, and a low
+                # reading would delay compaction past the real need.
+                if data.get("estimated"):
+                    ctx_tokens = max(usage.get("ctx", 0), tokens_in)
+                else:
+                    ctx_tokens = tokens_in
+                usage["ctx"] = ctx_tokens
                 try:
                     with db.db() as conn:
                         conn.execute(
@@ -917,7 +983,7 @@ async def _run(campaign_id, campaign, attachments, history, content, run, files=
                                 last_prompt_tokens = ?
                             WHERE id = ?
                             """,
-                            (tokens_in, tokens_out, tokens_in, campaign_id),
+                            (tokens_in, tokens_out, ctx_tokens, campaign_id),
                         )
                 except Exception:
                     log.exception("storing usage failed")
@@ -925,17 +991,50 @@ async def _run(campaign_id, campaign, attachments, history, content, run, files=
             elif kind == "tool_result":
                 for call in calls:
                     if call["id"] == data["id"]:
-                        call.update(output=data["output"], ok=data["ok"], ms=data["ms"])
+                        call.update(ok=data["ok"], ms=data["ms"])
                 for part in parts:
                     if part["type"] == "tool" and part["id"] == data["id"]:
                         part.update(output=data["output"], ok=data["ok"], ms=data["ms"])
                 checkpoint(True)
                 emit("tool_result", data)
+            elif kind == "truncated":
+                # Recoverable in-chain budget stop (agent.run): ends the chain
+                # so the next chain compacts; surfaced as a warning, and the
+                # chain still counts as output so the supervisor continues.
+                # Flagged for the loop: a truncated chain is NOT success — it
+                # must force recovery, never silently continue.
+                truncated_chain = True
+                answer.append(data)
+                add_text("content", data)
+                emit("notice", {"text": data})
+                checkpoint()
             else:
                 answer.append(data)
                 add_text("content", data)
                 emit("content", {"text": data})
                 checkpoint()
+    except agent.ContextTooLargeError as exc:
+        # Oversized prompt: the provider rejected before any usage chunk, so
+        # the gauge would otherwise stay stale and the next chain would replay
+        # the identical oversized history. Pin the gauge to the trigger so the
+        # compact check fires before retry.
+        log.warning("agent run exceeded context window: %s", exc)
+        failure = "context too large for model window"
+        try:
+            try:
+                model_name = campaign["model"]
+            except (KeyError, IndexError, TypeError):
+                model_name = ""
+            trigger = agent.compact_trigger(model_name or "")
+            with db.db() as conn:
+                if trigger is not None:
+                    conn.execute(
+                        "UPDATE campaigns SET last_prompt_tokens = ?, updated_at = datetime('now') WHERE id = ?",
+                        (trigger, campaign_id),
+                    )
+        except Exception:
+            log.exception("forcing compaction gauge failed")
+        emit("notice", {"text": "context too large — compacting before retry…"})
     except Exception:
         log.exception("agent run failed")
         failure = "agent request failed"
@@ -996,6 +1095,7 @@ async def _run(campaign_id, campaign, attachments, history, content, run, files=
         emit("chain_end", {"seq": run.get("seq", 0)})
         return {
             "ok": stored and has_output and not failure and not stopped,
+            "truncated": truncated_chain,
             "stopped": stopped,
             "empty": not has_output,
             "error": failure,

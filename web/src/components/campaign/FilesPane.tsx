@@ -1,15 +1,21 @@
-import { Fragment, useEffect, useMemo, useState } from "react"
+import { Fragment, useEffect, useMemo, useState } from "react";
 
-import Editor from "@monaco-editor/react"
-import type { editor } from "monaco-editor"
+import Editor from "@monaco-editor/react";
+import type { editor } from "monaco-editor";
 
-import { Markdown } from "@/components/Markdown"
-import { ChevronRight, FileText, Folder, RefreshCw, Search } from "@/components/icons"
-import { SegmentedControl } from "@/components/ui/segmented"
-import { Skeleton } from "@/components/ui/skeleton"
-import { api, type WorkFile, type WorkFileContent } from "@/lib/api"
-import { fmtSize } from "@/lib/filetype"
-import { cn } from "@/lib/utils"
+import { Markdown } from "@/components/Markdown";
+import {
+  ChevronRight,
+  FileText,
+  Folder,
+  RefreshCw,
+  Search,
+} from "@/components/icons";
+import { SegmentedControl } from "@/components/ui/segmented";
+import { Skeleton } from "@/components/ui/skeleton";
+import { api, type WorkFile, type WorkFileContent } from "@/lib/api";
+import { fmtSize } from "@/lib/filetype";
+import { cn } from "@/lib/utils";
 
 const MONACO_OPTIONS: editor.IStandaloneEditorConstructionOptions = {
   readOnly: true,
@@ -25,52 +31,62 @@ const MONACO_OPTIONS: editor.IStandaloneEditorConstructionOptions = {
   wordWrap: "off",
   padding: { top: 8, bottom: 8 },
   scrollbar: { verticalScrollbarSize: 8, horizontalScrollbarSize: 8 },
-}
+};
 
 type TreeNode = {
-  name: string
-  path: string
-  type: "file" | "dir"
-  size: number
-  children: TreeNode[]
-}
+  name: string;
+  path: string;
+  type: "file" | "dir";
+  size: number;
+  children: TreeNode[];
+};
 
 /** Fold the flat file list into a nested tree (dirs first, then files). */
 function buildTree(files: WorkFile[]): TreeNode[] {
-  const root: TreeNode = { name: "", path: "", type: "dir", size: 0, children: [] }
-  const index = new Map<string, TreeNode>([["", root]])
+  const root: TreeNode = {
+    name: "",
+    path: "",
+    type: "dir",
+    size: 0,
+    children: [],
+  };
+  const index = new Map<string, TreeNode>([["", root]]);
 
   for (const file of files) {
-    const parts = file.path.split("/")
-    let parent = root
-    let acc = ""
+    const parts = file.path.split("/");
+    let parent = root;
+    let acc = "";
     parts.forEach((part, i) => {
-      acc = acc ? `${acc}/${part}` : part
-      let node = index.get(acc)
+      acc = acc ? `${acc}/${part}` : part;
+      let node = index.get(acc);
       if (!node) {
-        const isFile = i === parts.length - 1 && file.type === "file"
+        const isFile = i === parts.length - 1 && file.type === "file";
         node = {
           name: part,
           path: acc,
           type: isFile ? "file" : "dir",
           size: isFile ? file.size : 0,
           children: [],
-        }
-        index.set(acc, node)
-        parent.children.push(node)
+        };
+        index.set(acc, node);
+        parent.children.push(node);
       }
-      parent = node
-    })
+      parent = node;
+    });
   }
 
   const sortNodes = (nodes: TreeNode[]) => {
     nodes.sort((a, b) =>
-      a.type === b.type ? a.name.localeCompare(b.name) : a.type === "dir" ? -1 : 1
-    )
-    nodes.forEach((n) => sortNodes(n.children))
-  }
-  sortNodes(root.children)
-  return root.children
+      a.type === b.type
+        ? a.name.localeCompare(b.name)
+        : a.type === "dir"
+          ? -1
+          : 1,
+    );
+    nodes.forEach((n) => sortNodes(n.children));
+  };
+  sortNodes(root.children);
+  return root.children;
 }
 
 function TreeItems({
@@ -81,35 +97,39 @@ function TreeItems({
   selected,
   onOpen,
 }: {
-  nodes: TreeNode[]
-  depth: number
-  expanded: Set<string>
-  onToggle: (path: string) => void
-  selected: string | null
-  onOpen: (path: string) => void
+  nodes: TreeNode[];
+  depth: number;
+  expanded: Set<string>;
+  onToggle: (path: string) => void;
+  selected: string | null;
+  onOpen: (path: string) => void;
 }) {
   return (
     <>
       {nodes.map((node) => {
-        const pad = 6 + depth * 12
+        const pad = 6 + depth * 12;
         if (node.type === "dir") {
-          const open = expanded.has(node.path)
+          const open = expanded.has(node.path);
           return (
             <Fragment key={node.path}>
               <button
                 type="button"
                 onClick={() => onToggle(node.path)}
+                aria-expanded={open}
                 className="flex w-full items-center gap-1.5 rounded-md py-1 pr-1.5 text-left text-[12px] text-ink-2 outline-none transition-colors hover:bg-hover/60 hover:text-ink focus-visible:ring-2 focus-visible:ring-ring/60"
                 style={{ paddingLeft: pad }}
               >
                 <ChevronRight
                   className={cn(
                     "size-3.5 shrink-0 text-ink-3 transition-transform",
-                    open && "rotate-90"
+                    open && "rotate-90",
                   )}
                   strokeWidth={1.5}
                 />
-                <Folder className="size-3.5 shrink-0 text-ink-3" strokeWidth={1.5} />
+                <Folder
+                  className="size-3.5 shrink-0 text-ink-3"
+                  strokeWidth={1.5}
+                />
                 <span className="min-w-0 flex-1 truncate">{node.name}</span>
               </button>
               {open && (
@@ -123,7 +143,7 @@ function TreeItems({
                 />
               )}
             </Fragment>
-          )
+          );
         }
         return (
           <button
@@ -134,20 +154,25 @@ function TreeItems({
               "flex w-full items-center gap-1.5 rounded-md py-1 pr-1.5 text-left text-[12px] outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/60",
               selected === node.path
                 ? "material-key text-ink"
-                : "text-ink-2 hover:bg-hover/60 hover:text-ink"
+                : "text-ink-2 hover:bg-hover/60 hover:text-ink",
             )}
             style={{ paddingLeft: pad + 14 }}
           >
-            <FileText className="size-3.5 shrink-0 text-ink-3" strokeWidth={1.5} />
-            <span className="min-w-0 flex-1 truncate font-mono">{node.name}</span>
+            <FileText
+              className="size-3.5 shrink-0 text-ink-3"
+              strokeWidth={1.5}
+            />
+            <span className="min-w-0 flex-1 truncate font-mono">
+              {node.name}
+            </span>
             <span className="shrink-0 font-mono text-[10px] tabular-nums text-ink-3">
               {fmtSize(node.size)}
             </span>
           </button>
-        )
+        );
       })}
     </>
-  )
+  );
 }
 
 /**
@@ -158,81 +183,90 @@ function TreeItems({
 export function FilesPane({
   campaignId,
   files,
+  filesError,
   onRefresh,
   selected,
   onSelect,
 }: {
-  campaignId: number
-  files: WorkFile[] | null
-  onRefresh: () => void
-  selected: string | null
-  onSelect: (path: string) => void
+  campaignId: number;
+  files: WorkFile[] | null;
+  filesError?: string;
+  onRefresh: () => void;
+  selected: string | null;
+  onSelect: (path: string) => void;
 }) {
-  const [content, setContent] = useState<WorkFileContent | null>(null)
-  const [loading, setLoading] = useState(false)
-  const [contentError, setContentError] = useState("")
-  const [preview, setPreview] = useState(false)
-  const [query, setQuery] = useState("")
-  const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  const [content, setContent] = useState<WorkFileContent | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [contentError, setContentError] = useState("");
+  const [preview, setPreview] = useState(false);
+  const [query, setQuery] = useState("");
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
   // Monaco is heavy; load its chunk (and configure its workers) only once the
   // files pane is actually mounted, not with the Campaign route.
-  const [monacoReady, setMonacoReady] = useState(false)
+  const [monacoReady, setMonacoReady] = useState(false);
 
   useEffect(() => {
-    let active = true
-    import("@/lib/monaco").then(() => active && setMonacoReady(true))
+    let active = true;
+    import("@/lib/monaco").then(() => active && setMonacoReady(true));
     return () => {
-      active = false
-    }
-  }, [])
+      active = false;
+    };
+  }, []);
 
   // expand folders by default, except dotted ones (build artifacts)
   useEffect(() => {
-    if (!files) return
+    if (!files) return;
     setExpanded(
-      new Set(files.filter((f) => f.type === "dir" && !f.name.startsWith(".")).map((f) => f.path))
-    )
-  }, [files])
+      new Set(
+        files
+          .filter((f) => f.type === "dir" && !f.name.startsWith("."))
+          .map((f) => f.path),
+      ),
+    );
+  }, [files]);
 
   useEffect(() => {
     if (!selected) {
-      setContent(null)
-      return
+      setContent(null);
+      return;
     }
-    let active = true
-    setContent(null)
-    setContentError("")
-    setPreview(false)
-    setLoading(true)
+    let active = true;
+    setContent(null);
+    setContentError("");
+    setPreview(false);
+    setLoading(true);
     api
       .readWorkFile(campaignId, selected)
       .then((c) => active && setContent(c))
       .catch((e: Error) => active && setContentError(e.message))
-      .finally(() => active && setLoading(false))
+      .finally(() => active && setLoading(false));
     return () => {
-      active = false
-    }
-  }, [campaignId, selected])
+      active = false;
+    };
+  }, [campaignId, selected, files]);
 
   function toggle(path: string) {
     setExpanded((prev) => {
-      const next = new Set(prev)
-      if (next.has(path)) next.delete(path)
-      else next.add(path)
-      return next
-    })
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
   }
 
   const tree = useMemo(() => {
-    if (!files) return []
-    const q = query.trim().toLowerCase()
-    return buildTree(q ? files.filter((f) => f.path.toLowerCase().includes(q)) : files)
-  }, [files, query])
+    if (!files) return [];
+    const q = query.trim().toLowerCase();
+    return buildTree(
+      q ? files.filter((f) => f.path.toLowerCase().includes(q)) : files,
+    );
+  }, [files, query]);
 
   const isDark =
-    typeof document !== "undefined" && document.documentElement.classList.contains("dark")
-  const isBinary = content?.content.includes("\u0000") ?? false
-  const isMarkdown = /\.(md|markdown)$/i.test(content?.path ?? "")
+    typeof document !== "undefined" &&
+    document.documentElement.classList.contains("dark");
+  const isBinary = content?.content.includes("\u0000") ?? false;
+  const isMarkdown = /\.(md|markdown)$/i.test(content?.path ?? "");
 
   return (
     <div className="flex min-h-0 flex-1 gap-2">
@@ -269,12 +303,32 @@ export function FilesPane({
           {files === null ? (
             <div className="flex flex-col gap-1.5 p-1.5" aria-hidden>
               {[0, 1, 2, 3, 4].map((i) => (
-                <Skeleton key={i} className="h-3.5 rounded" style={{ width: `${80 - i * 10}%` }} />
+                <Skeleton
+                  key={i}
+                  className="h-3.5 rounded"
+                  style={{ width: `${80 - i * 10}%` }}
+                />
               ))}
+            </div>
+          ) : filesError ? (
+            <div
+              className="flex flex-col gap-2 p-2.5 text-[12px] text-ink-3"
+              role="alert"
+            >
+              <p>Could not load workspace files.</p>
+              <button
+                type="button"
+                onClick={onRefresh}
+                className="w-fit rounded-md px-2 py-1 text-ink-2 outline-none hover:bg-hover hover:text-ink focus-visible:ring-2 focus-visible:ring-ring/60"
+              >
+                Retry
+              </button>
             </div>
           ) : tree.length === 0 ? (
             <p className="p-2.5 text-[12px] text-pretty text-ink-3">
-              {query ? "No files match." : "No files yet. Outputs the agent writes here show up."}
+              {query
+                ? "No files match."
+                : "No files yet. Outputs the agent writes here show up."}
             </p>
           ) : (
             <TreeItems
@@ -296,7 +350,11 @@ export function FilesPane({
         ) : loading ? (
           <div className="flex flex-col gap-2 p-3" aria-hidden>
             {[0, 1, 2, 3, 4].map((i) => (
-              <Skeleton key={i} className="h-3 rounded" style={{ width: `${85 - i * 8}%` }} />
+              <Skeleton
+                key={i}
+                className="h-3 rounded"
+                style={{ width: `${85 - i * 8}%` }}
+              />
             ))}
           </div>
         ) : content ? (
@@ -307,9 +365,16 @@ export function FilesPane({
                   <span key={i} className="flex items-center gap-1.5">
                     {i > 0 && <span className="text-ink-3">/</span>}
                     {i === all.length - 1 && (
-                      <FileText className="size-3.5 text-ink-3" strokeWidth={1.5} />
+                      <FileText
+                        className="size-3.5 text-ink-3"
+                        strokeWidth={1.5}
+                      />
                     )}
-                    <span className={i === all.length - 1 ? "text-ink" : "text-ink-3"}>
+                    <span
+                      className={
+                        i === all.length - 1 ? "text-ink" : "text-ink-3"
+                      }
+                    >
                       {segment}
                     </span>
                   </span>
@@ -337,7 +402,9 @@ export function FilesPane({
               </a>
             </div>
             {isBinary ? (
-              <p className="p-3 text-[12px] text-ink-3">Binary file — open raw to download.</p>
+              <p className="p-3 text-[12px] text-ink-3">
+                Binary file — open raw to download.
+              </p>
             ) : isMarkdown && preview ? (
               <div className="min-h-0 flex-1 overflow-y-auto p-4">
                 <Markdown text={content.content} />
@@ -345,6 +412,7 @@ export function FilesPane({
             ) : monacoReady ? (
               <div className="min-h-0 flex-1">
                 <Editor
+                  key={content.path}
                   height="100%"
                   path={content.path}
                   value={content.content}
@@ -355,7 +423,11 @@ export function FilesPane({
             ) : (
               <div className="flex flex-col gap-2 p-3" aria-hidden>
                 {[0, 1, 2, 3, 4].map((i) => (
-                  <Skeleton key={i} className="h-3 rounded" style={{ width: `${85 - i * 8}%` }} />
+                  <Skeleton
+                    key={i}
+                    className="h-3 rounded"
+                    style={{ width: `${85 - i * 8}%` }}
+                  />
                 ))}
               </div>
             )}
@@ -366,9 +438,11 @@ export function FilesPane({
             )}
           </>
         ) : (
-          <p className="p-3 text-[12px] text-ink-3">{contentError || "Could not load this file."}</p>
+          <p className="p-3 text-[12px] text-ink-3">
+            {contentError || "Could not load this file."}
+          </p>
         )}
       </div>
     </div>
-  )
+  );
 }

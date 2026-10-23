@@ -18,11 +18,13 @@ CORE_SCHEMAS = [
     {
         "type": "function",
         "function": {
-            "name": "bash",
-            "description": (
-                "Run a shell command in the campaign work directory. "
-                "Long output is saved to a file and the result says where."
-            ),
+                "name": "bash",
+                "description": (
+                    "Run a shell command in the campaign work directory. "
+                    "The command starts there; avoid cd or pushd outside it "
+                    "(advisory check only — absolute-path I/O is not blocked). "
+                    "Long output is saved to a file and the result says where."
+                ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -298,7 +300,17 @@ def schemas_for(kind: str | None = None, mode: str | dict | None = None) -> list
             schemas += [s for s in SUPERVISOR_SCHEMAS if s["function"]["name"] != "complete_engagement"]
     elif kind == "generator":
         schemas += GENERATOR_SCHEMAS
-    return schemas + mcp.schemas()
+    exposed = schemas + mcp.schemas()
+    if kind == "generator":
+        # Presentation layer: generators are only offered read-only MCP tools.
+        # execute() enforces the same set, so this filtering is never the
+        # only control.
+        exposed = [
+            s for s in exposed
+            if not mcp.is_tool(s["function"]["name"])
+            or s["function"]["name"] in MCP_GENERATOR_TOOLS
+        ]
+    return exposed
 
 
 def allowed_for(kind: str | None = None, mode: str | dict | None = None) -> set[str] | None:
@@ -308,7 +320,7 @@ def allowed_for(kind: str | None = None, mode: str | dict | None = None) -> set[
             return CORE_TOOLS | SUPERVISOR_TOOLS
         return (CORE_TOOLS | SUPERVISOR_TOOLS) - {"complete_engagement"}
     if kind == "generator":
-        return CORE_TOOLS | GENERATOR_TOOLS
+        return CORE_TOOLS | GENERATOR_TOOLS | set(MCP_GENERATOR_TOOLS)
     return None
 
 
@@ -384,7 +396,10 @@ def _clip(work: Path, text: str, name: str) -> str:
     path = _spill(work, text, name)
     return (
         text[: config.TOOL_OUTPUT_CHARS]
-        + f"\n[output truncated: {len(text):,} chars total, full output saved to {path}]"
+        + f"\n[output truncated: {len(text):,} chars total, full output saved to {path}. "
+        "Do not page the whole file into context: skim it with read_file "
+        "(offset/limit), or spawn a hypothesis generator to triage it and "
+        "report back only the relevant lines.]"
     )
 
 
@@ -425,6 +440,20 @@ async def bash(args: dict, work: Path, stop=None, on_output=None) -> tuple[str, 
         got = ", ".join(sorted(args)) or "none"
         raise ValueError(
             f'cmd is required: call bash with {{"cmd": "the shell command"}} (got keys: {got})'
+        )
+
+    # Cost-saving nudge, not a security boundary: bash starts in the campaign
+    # work directory, and absolute-path I/O outside it is otherwise allowed.
+    # This only catches the common cd/pushd-away spelling mistakes.
+    if re.search(
+        r"(?:^|[;&|\n(]\s*)(?:cd|pushd)\s+(?:--\s+)?(?:/|~|\.\.?(?:/|\s|$))",
+        cmd,
+    ):
+        return (
+            f"error: bash starts in the campaign work directory ({work}); "
+            "prefer relative paths (this check is advisory — absolute-path "
+            "tool I/O outside the work dir is not blocked)",
+            False,
         )
 
     try:
@@ -509,7 +538,9 @@ async def bash(args: dict, work: Path, stop=None, on_output=None) -> tuple[str, 
 
     text = bytes(out).decode(errors="replace")
     body = _clip(work, text, cmd)
-    return f"{body}\n[exit code {proc.returncode}]{note}".strip(), proc.returncode == 0 and not capped
+    return (
+        f"[campaign work directory: {work}]\n{body}\n[exit code {proc.returncode}]{note}"
+    ).strip(), proc.returncode == 0 and not capped
 
 
 async def read_file(args: dict, work: Path, stop=None) -> tuple[str, bool]:
@@ -582,8 +613,94 @@ async def skill(args: dict, work: Path, stop=None) -> tuple[str, bool]:
     return header + loaded["body"], True
 
 
+RECONNAISSANCE_TOOLS = {
+    "bash",
+    "read_file",
+    "frank_codebase_identify",
+    "frank_dns_lookup",
+    "frank_net_scan",
+    "frank_web_fetch",
+    "frank_web_search",
+    "frank_web_answer",
+    "frank_method_search",
+}
+
+MCP_WORKDIR_PATH_TOOLS = {
+    "frank_codebase_identify",
+    "frank_scan_vulns",
+    "frank_scan_secrets",
+    "frank_audit_deps",
+}
+
+# MCP tools a generator worker may invoke. Read-only triage only: the active
+# network scanner stays supervisor-side. Schema filtering is presentation;
+# execute() enforces this same set, so exposure can never become permission.
+MCP_GENERATOR_TOOLS = frozenset({
+    "frank_codebase_identify",
+    "frank_scan_vulns",
+    "frank_scan_secrets",
+    "frank_audit_deps",
+    "frank_web_fetch",
+    "frank_web_search",
+    "frank_web_answer",
+    "frank_method_search",
+    "frank_dns_lookup",
+})
+
+
+def _reconnaissance_observed(campaign_id: int) -> bool:
+    with db.db() as conn:
+        rows = conn.execute(
+            "SELECT tool_calls, parts FROM messages WHERE campaign_id = ? AND role = 'assistant'",
+            (campaign_id,),
+        ).fetchall()
+
+    for row in rows:
+        try:
+            calls = json.loads(row["tool_calls"] or "[]")
+        except json.JSONDecodeError:
+            calls = []
+        try:
+            parts = json.loads(row["parts"] or "[]")
+        except json.JSONDecodeError:
+            parts = []
+        successful_ids = {
+            part.get("id")
+            for part in parts
+            if isinstance(part, dict)
+            and part.get("type") == "tool"
+            and part.get("ok") is True
+        }
+        for call in calls:
+            if (
+                isinstance(call, dict)
+                and call.get("name") in RECONNAISSANCE_TOOLS
+                and (call.get("ok") is True or call.get("id") in successful_ids)
+            ):
+                return True
+    return False
+
+
+def _mcp_args(name: str, args: dict, work: Path) -> dict:
+    if name not in MCP_WORKDIR_PATH_TOOLS:
+        return args
+    value = _str_arg(args, "path", "target", "dir", "directory") or "."
+    try:
+        resolved = _resolve([work], value)
+    except ValueError as exc:
+        raise ValueError(f"{exc}; retry with a work-dir-relative path") from exc
+    return {**args, "path": str(resolved)}
+
+
 async def spawn_hypothesis_generator(args: dict, campaign_id: int, stop=None) -> tuple[str, bool]:
     from . import generator
+
+    if not _reconnaissance_observed(campaign_id):
+        return (
+            "error: reconnaissance is required before spawning generators; inspect the target "
+            "or codebase with bash, read_file, or an MCP reconnaissance tool first",
+            False,
+        )
 
     focus = str(args.get("focus", "")).strip()
     gen_id = generator.spawn(campaign_id, focus)
@@ -839,13 +956,25 @@ async def execute(
 ) -> tuple[str, bool, int]:
     work = _work_dir(campaign_id)
 
-    # per-agent permission layer: a run may only call the tools it was given
-    if allow is not None and name not in allow and not mcp.is_tool(name):
-        return f"error: tool {name} is not available in this context", False, 0
+    # Per-agent permission layer: a run may only call the tools it was given.
+    # Schema filtering is presentation only — this check is the enforcement,
+    # including for MCP tools. Supervisor contexts (allow contains
+    # spawn_hypothesis_generator) may use any connected MCP tool; generator
+    # contexts are confined to MCP_GENERATOR_TOOLS.
+    if allow is not None and name not in allow:
+        if not mcp.is_tool(name):
+            return f"error: tool {name} is not available in this context", False, 0
+        is_supervisor = "spawn_hypothesis_generator" in allow
+        if not is_supervisor and name not in MCP_GENERATOR_TOOLS:
+            return f"error: tool {name} is not available in this context", False, 0
 
     if mcp.is_tool(name):
         started = time.monotonic()
-        text, ok = await mcp.call(name, args or {})
+        try:
+            mcp_args = _mcp_args(name, args or {}, work)
+        except Exception as exc:
+            return f"error: {exc}", False, 0
+        text, ok = await mcp.call(name, mcp_args)
         ms = int((time.monotonic() - started) * 1000)
         return _clip(work, text, name), ok, ms
 

@@ -128,11 +128,27 @@ def test_generator_prompt_has_no_run_mode():
     prompt = generator._system_prompt(base, [], "xss")
     assert "complete_engagement" not in prompt
     assert "Run mode:" not in prompt
+    assert "A continuous campaign is never" not in prompt
     assert "generator_done" in prompt
 
 
+def test_supervisor_goal_prompt_does_not_forbid_completion():
+    base = {
+        "target": "t",
+        "info": "",
+        "instructions": "goal",
+        "description": "",
+        "scope": "",
+        "mode": "goal",
+    }
+    prompt = agent.build_prompt(base, [], tool_kind="supervisor")
+    assert "A continuous campaign is never" in prompt
+    assert "may call" in prompt
+    assert "Run mode: until goal" in prompt
+
+
 def test_supervisor_goal_completes(monkeypatch):
-    async def fake_run(campaign_id, campaign, attachments, history, content, run, files=(), store_user=True, keep=False, tool_kind=None):
+    async def fake_run(campaign_id, campaign, attachments, history, content, run, files=(), store_user=True, keep=False, tool_kind=None, include_attachments=True):
         # goal campaigns are offered the completion tool
         names = _names(tools.schemas_for(tool_kind, campaign["mode"]))
         assert "complete_engagement" in names
@@ -163,7 +179,7 @@ def test_supervisor_goal_completes(monkeypatch):
 def test_supervisor_continuous_ignores_complete(monkeypatch):
     chains: list = []
 
-    async def fake_run(campaign_id, campaign, attachments, history, content, run, files=(), store_user=True, keep=False, tool_kind=None):
+    async def fake_run(campaign_id, campaign, attachments, history, content, run, files=(), store_user=True, keep=False, tool_kind=None, include_attachments=True):
         names = _names(tools.schemas_for(tool_kind, campaign["mode"]))
         assert "complete_engagement" not in names
         chains.append(1)

@@ -27,6 +27,8 @@ export type Campaign = {
   usage_in?: number
   usage_out?: number
   last_prompt_tokens?: number
+  context_window?: number
+  context_window_source?: "api" | "table" | "fallback"
 }
 
 export type MessageAttachment = {
@@ -327,6 +329,12 @@ export const api = {
   config: () => req<AppConfig>("/api/config"),
   listCampaigns: () => req<Campaign[]>("/api/campaigns"),
   getCampaign: (id: number) => req<Campaign>(`/api/campaigns/${id}`),
+  updateCampaignRuntime: (id: number, values: { model?: string; effort?: string }) =>
+    req<Campaign>(`/api/campaigns/${id}/runtime`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(values),
+    }),
   createCampaign: (form: FormData) =>
     req<Campaign>("/api/campaigns", { method: "POST", body: form }),
   deleteCampaign: (id: number) =>

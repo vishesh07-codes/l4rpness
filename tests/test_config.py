@@ -16,12 +16,12 @@ def test_defaults_when_no_file(tmp_path):
         "prompts/supervisor_policy.md",
     ]
     assert settings["agent"]["seed_history"] == "prompts/seed_history.json"
-    assert settings["tools"]["max_steps"] == -1
+    assert settings["tools"]["max_steps"] == 50
     assert settings["tools"]["bash_output_bytes"] == 10 * 1024 * 1024
     assert settings["tools"]["read_max_lines"] == 2000
     assert settings["tools"]["http_timeout"] == 30
     assert settings["supervisor"]["error_backoff_seconds"] == 30
-    assert settings["supervisor"]["compact_at_tokens"] == 950000
+    assert settings["supervisor"]["compact_at_tokens"] == 0
     assert settings["supervisor"]["compact_keep_messages"] == 8
 
 

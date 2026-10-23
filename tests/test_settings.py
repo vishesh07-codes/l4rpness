@@ -509,3 +509,35 @@ def test_reload_reports_endpoint_changes(host_config):
     changed = settings.reload_host_config()
     assert changed == ["llm.providers.9router"]
     assert config.PROVIDERS["9router"]["base_url"] == "http://edited.internal:20128/v1"
+
+
+def test_update_toml_multiline_replace_preserves_rest(tmp_path):
+    import tomllib
+
+    path = tmp_path / "config.toml"
+    path.write_text('[llm]\nefforts = [\n"low",\n]\nmodel = "x"\n[other]\nkey = 1\n')
+    settings._update_toml_file(path, {"llm.efforts": ["high"]})
+    body = path.read_text()
+    assert 'model = "x"' in body
+    assert "[other]" in body
+    assert "key = 1" in body
+    # result is still valid TOML with the new value applied
+    assert tomllib.loads(body)["llm"]["efforts"] == ["high"]
+
+
+def test_update_toml_array_table_not_shadowed(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text('[[bin]]\nname = "a"\n')
+    with pytest.raises(ValueError):
+        settings._update_toml_file(path, {"bin.key": 1})
+    # original untouched
+    assert path.read_text() == '[[bin]]\nname = "a"\n'
+
+
+def test_update_toml_quoted_key_updates_in_place(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text('[llm.providers."9router"]\nbase_url = "x"\n')
+    settings._update_toml_file(path, {"llm.providers.9router.base_url": "y"})
+    body = path.read_text()
+    assert body.count("base_url") == 1
+    assert 'base_url = "y"' in body

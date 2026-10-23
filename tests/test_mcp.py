@@ -11,6 +11,9 @@ from fastapi.testclient import TestClient
 
 from app import config, mcp
 from app.main import app
+# conftest replaces mcp.stop with a no-op for every test; keep a direct
+# reference to the real teardown so the ordering can be exercised
+from app.mcp import stop as _real_stop
 
 
 @pytest.fixture(autouse=True)
@@ -21,6 +24,7 @@ def clean_state(tmp_path, monkeypatch):
     mcp._catalog.clear()
     mcp._routes.clear()
     mcp._errors.clear()
+    mcp._reconnect_locks.clear()
     return tmp_path
 
 
@@ -32,8 +36,16 @@ def client():
 
 def test_defaults_without_file():
     servers = mcp.definitions()
-    assert servers[0]["name"] == "frank"
-    assert "net_scan" in servers[0]["tools"]
+    assert [server["name"] for server in servers] == ["frank", "playwright"]
+
+    frank = servers[0]
+    assert "net_scan" in frank["tools"]
+
+    playwright = servers[1]
+    assert playwright["command"][0] == "playwright-mcp"
+    assert "--headless" in playwright["command"]
+    assert "--no-sandbox" in playwright["command"]
+    assert playwright["tools"] == []
 
 
 def test_save_and_load():
@@ -76,6 +88,46 @@ def test_call_routes_to_server():
     assert text == "1.2.3.4"
 
 
+def test_call_allows_concurrent_calls_per_server():
+    mcp.save([{"name": "frank", "command": ["python", "/frank/server.py"], "tools": ["dns_lookup"]}])
+    mcp._catalog["frank"] = [
+        SimpleNamespace(name="dns_lookup", description="dns", inputSchema={"type": "object", "properties": {}})
+    ]
+    mcp.schemas()
+
+    started = 0
+    gate = asyncio.Event()
+
+    class FakeSession:
+        async def call_tool(self, name, arguments):
+            nonlocal started
+            started += 1
+            if started == 2:
+                gate.set()
+            await gate.wait()
+            return SimpleNamespace(
+                content=[SimpleNamespace(type="text", text=f"ok:{arguments['label']}")],
+                isError=False,
+            )
+
+    mcp._sessions["frank"] = FakeSession()
+
+    async def invoke(label):
+        return await mcp.call("frank_dns_lookup", {"label": label})
+
+    async def run_case():
+        task1 = asyncio.create_task(invoke("first"))
+        await asyncio.sleep(0)
+        task2 = asyncio.create_task(invoke("second"))
+        await asyncio.sleep(0.05)
+        assert started == 2
+        gate.set()
+        return await asyncio.gather(task1, task2)
+
+    results = asyncio.run(run_case())
+    assert [text for text, ok in results if ok] == ["ok:first", "ok:second"]
+
+
 def test_call_unknown_tool():
     text, ok = asyncio.run(mcp.call("frank_nope", {}))
     assert not ok
@@ -111,7 +163,27 @@ def test_tool_error_is_not_ok():
 
     text, ok = asyncio.run(mcp.call("frank_net_scan", {"host": "example.com"}))
     assert not ok
-    assert text == "scan failed"
+    assert text.startswith("scan failed")
+
+
+def test_stop_closes_sessions_in_reverse_order():
+    # the stdio sessions nest anyio cancel scopes; tearing them down in
+    # insertion order raises and leaves the rest of the teardown broken
+    closed: list[str] = []
+
+    class FakeStack:
+        def __init__(self, name):
+            self.name = name
+
+        async def aclose(self):
+            closed.append(self.name)
+
+    mcp._stacks.clear()
+    mcp._stacks["first"] = FakeStack("first")
+    mcp._stacks["second"] = FakeStack("second")
+
+    asyncio.run(_real_stop())
+    assert closed == ["second", "first"]
 
 
 def test_mcp_endpoints(client, tmp_path):

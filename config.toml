@@ -20,6 +20,16 @@ base_url = "http://178.83.181.199:8888/v1"
 api_key_env = "ROUTER9_API_KEY"
 thinking = false
 
+# Context windows the provider API cannot report (9router reports its own
+# live via /v1/models; DeepSeek's /v1/models is id-only, so these come from
+# https://api-docs.deepseek.com/quick_start/pricing — "CONTEXT LENGTH 1M").
+# Unknown models fall back to 128k. Used for the auto compaction trigger.
+[llm.limits]
+"deepseek-flash" = 1000000
+"deepseek-v4-pro" = 1000000
+"deepseek-chat" = 1000000
+"deepseek-reasoner" = 1000000
+
 [storage]
 data_dir = "data"
 
@@ -37,7 +47,7 @@ file_char_cap = 50000
 total_char_cap = 120000
 
 [tools]
-max_steps = -1 # -1 means no cap
+max_steps = 50 # per-chain tool steps; the supervisor rolls into the next chain after
 bash_timeout = 120
 bash_output_bytes = 10485760
 output_chars = 20000
@@ -51,8 +61,10 @@ error_backoff_seconds = 30
 
 # whenever the last request carried more than this many context tokens, fold
 # the older turns into a rolling memory summary, keeping the newest messages
-# verbatim (0 disables compaction)
-compact_at_tokens = 950000
+# verbatim. 0 (default) derives the trigger per campaign model: 80% of
+# (context window - 20k reserve). Positive pins an explicit threshold.
+# Negative disables compaction.
+compact_at_tokens = 0
 compact_keep_messages = 8
 
 [hypotheses]

@@ -24,6 +24,7 @@ conflicting overlay copies.
 import logging
 import os
 import re
+import stat
 import time
 import tomllib
 
@@ -46,6 +47,13 @@ _LAST_AUTO_APPLIED: dict = {"vars": [], "at": None}
 # the runtime knobs (the .env flow covers provider keys)
 _HOST_CONFIG_SIG: str | None = config.host_config_signature()
 _LAST_CONFIG_APPLIED: dict = {"keys": [], "at": None}
+
+
+def _writable_file(path) -> bool:
+    try:
+        return path.is_file() and bool(path.stat().st_mode & (stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH))
+    except OSError:
+        return False
 
 
 def allowed_vars() -> set[str]:
@@ -187,9 +195,9 @@ RUNTIME_FIELDS = [
         "key": "supervisor.compact_at_tokens",
         "section": "supervisor",
         "label": "Compact above (tokens)",
-        "hint": "0 disables compaction.",
+        "hint": "0 auto-derives 80% of the model window minus 20k reserve; negative disables.",
         "kind": "int",
-        "min": 0,
+        "min": -1,
         "max": 2000000,
     },
     {
@@ -439,7 +447,7 @@ def host_state() -> dict:
         _HOST_SIG = sig
     try:
         readable = bool(is_file and os.access(path, os.R_OK))
-        writable = bool(is_file and os.access(path, os.W_OK))
+        writable = _writable_file(path)
     except OSError:
         readable = False
         writable = False
@@ -557,7 +565,7 @@ def push_host_env(values: dict[str, str]) -> list[str]:
     path = config.host_env_path()
     if not path.is_file():
         raise ValueError("host .env is not mounted in this container")
-    if not os.access(path, os.W_OK):
+    if not _writable_file(path):
         raise ValueError("host .env is not writable (check the file permissions)")
     allowed = allowed_vars()
     staged = {}
@@ -605,7 +613,7 @@ def host_config_state() -> dict:
         _HOST_CONFIG_SIG = sig
     try:
         readable = bool(is_file and os.access(path, os.R_OK))
-        writable = bool(is_file and os.access(path, os.W_OK))
+        writable = _writable_file(path)
     except OSError:
         readable = False
         writable = False
@@ -668,13 +676,15 @@ def reload_host_config() -> list[str]:
     try:
         with path.open("rb") as fh:
             data = tomllib.load(fh)
-    except Exception:
+    except Exception as exc:
+        log.warning("l4rpness: host config.toml is invalid TOML, ignoring: %s", exc)
         return []
     if not isinstance(data, dict):
         return []
 
     before = {field["key"]: _dotted(config.SETTINGS, field["key"]) for field in RUNTIME_FIELDS}
     before_providers = _providers_view()
+    before_limits = dict(config.LIMITS or {})
     present = set()
     for field in RUNTIME_FIELDS:
         section, _, name = field["key"].partition(".")
@@ -705,6 +715,8 @@ def reload_host_config() -> list[str]:
     for name in sorted(set(before_providers) | set(after_providers)):
         if before_providers.get(name) != after_providers.get(name):
             changed.append(f"llm.providers.{name}")
+    if dict(config.LIMITS or {}) != before_limits:
+        changed.append("llm.limits")
     changed.sort()
     _note_host_config_sig()
     if changed or pruned != current:
@@ -735,9 +747,13 @@ def _split_inline_comment(text: str) -> str:
     return ""
 
 
-def _toml_depth(text: str) -> int:
-    """Net open brackets ({, [) of a TOML line, outside strings and the
-    inline comment. Non-zero while a multi-line value is still open."""
+def _toml_net_depth(text: str) -> int:
+    """Raw net bracket depth of a TOML line (may go negative).
+
+    Unlike `_toml_depth`, the closing brackets count: a `]`/`}` line yields
+    -1 so multi-line skip accounting can return to zero. Quote and `#`
+    comment handling matches `_toml_depth` exactly.
+    """
     comment = _split_inline_comment(text)
     body = text[: len(text) - len(comment)] if comment else text
     quote = ""
@@ -757,23 +773,42 @@ def _toml_depth(text: str) -> int:
             depth += 1
         elif char in "]}":
             depth -= 1
-    return max(depth, 0)
+    return depth
+
+
+def _toml_depth(text: str) -> int:
+    """Net open brackets ({, [) of a TOML line, outside strings and the
+    inline comment. Non-zero while a multi-line value is still open."""
+    return max(_toml_net_depth(text), 0)
 
 
 def _toml_section(line: str) -> str | None:
     """The name of a `[section]` header line, or None for anything else.
-    Quoted parts are unquoted, so `[llm.providers."9router"]` and
+
+    `[[array-table]]` headers return None so they are preserved verbatim and
+    never collide with a `[section]` of a similar name. Quoted parts are
+    unquoted, so `[llm.providers."9router"]` and
     `[llm.providers.9router]` resolve to the same table."""
     stripped = line.strip()
     comment = _split_inline_comment(stripped)
     if comment:
         stripped = stripped[: len(stripped) - len(comment)].rstrip()
+    if stripped.startswith("[[") and stripped.endswith("]]"):
+        return None
     if not (stripped.startswith("[") and stripped.endswith("]")):
         return None
     name = stripped[1:-1].strip()
     if not name:
         return None
     return ".".join(part.strip().strip('"').strip("'") for part in name.split("."))
+
+
+def _norm_key(raw: str) -> str:
+    """Unquote a TOML key for comparison (`"9router"` -> `9router`)."""
+    raw = raw.strip()
+    if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in "\"'":
+        return raw[1:-1]
+    return raw
 
 
 _KEY_RE = re.compile(r'^("[^"]+"|[A-Za-z0-9_.-]+)\s*=')
@@ -806,16 +841,31 @@ def _update_toml_file(
         sections.setdefault(section, []).append(key)
 
     # pass 1: which pending keys already have a line in the file?
+    # Array-table headers ([[x]]) are preserved verbatim and tracked so a
+    # later append never emits a conflicting [x] table.
     found: set[str] = set()
+    array_tables: set[str] = set()
     section = ""
     for line in lines:
+        stripped_probe = line.strip()
+        comment_probe = _split_inline_comment(stripped_probe)
+        if comment_probe:
+            stripped_probe = stripped_probe[: len(stripped_probe) - len(comment_probe)].rstrip()
+        if stripped_probe.startswith("[[") and stripped_probe.endswith("]]"):
+            inner = stripped_probe[2:-2].strip()
+            if inner:
+                array_tables.add(
+                    ".".join(p.strip().strip('"').strip("'") for p in inner.split("."))
+                )
+            continue
         header = _toml_section(line)
         if header is not None:
             section = header
             continue
         match = _KEY_RE.match(line.strip())
         if match:
-            found.add(f"{section}.{match.group(1)}" if section else match.group(1))
+            norm = _norm_key(match.group(1))
+            found.add(f"{section}.{norm}" if section else norm)
 
     # pass 2: rewrite values, insert missing keys under their headers, drop
     # removed sections whole
@@ -827,7 +877,7 @@ def _update_toml_file(
     for line in lines:
         if skip_depth:
             # still inside the multi-line value being replaced
-            skip_depth += _toml_depth(line)
+            skip_depth += _toml_net_depth(line)
             if skip_depth <= 0:
                 skip_depth = 0
             continue
@@ -849,11 +899,12 @@ def _update_toml_file(
         stripped = line.strip()
         match = _KEY_RE.match(stripped)
         if match:
-            key = f"{section}.{match.group(1)}" if section else match.group(1)
+            norm = _norm_key(match.group(1))
+            key = f"{section}.{norm}" if section else norm
             if key in pending:
                 name = match.group(1)
                 indent = line[: len(line) - len(line.lstrip())]
-                depth = _toml_depth(stripped)
+                depth = _toml_net_depth(stripped)
                 comment = _split_inline_comment(stripped)
                 value = config._toml_value(pending.pop(key))
                 out.append(f"{indent}{name} = {value}{' ' + comment if comment else ''}")
@@ -862,11 +913,16 @@ def _update_toml_file(
                 continue
         out.append(line)
 
-    # sections the file does not have yet go at the end
+    # sections the file does not have yet go at the end (never shadowing an
+    # existing [[array-table]] of the same name)
     for section in sorted(sections):
         rest = [key for key in sections[section] if key not in found and key not in inserted]
         if not rest:
             continue
+        if section in array_tables:
+            raise ValueError(
+                f"refusing to write [{section}]: file already contains [[{section}]]"
+            )
         if out and out[-1].strip():
             out.append("")
         if section:
@@ -875,9 +931,17 @@ def _update_toml_file(
             name = key.rpartition(".")[2]
             out.append(f"{name} = {config._toml_value(pending[key])}")
 
+    new_text = "\n".join(out) + "\n"
+    try:
+        import tomllib
+
+        tomllib.loads(new_text)
+    except Exception as exc:
+        raise ValueError(f"refusing to write invalid host config.toml: {exc}")
+
     try:
         with path.open("w") as fh:
-            fh.write("\n".join(out) + "\n")
+            fh.write(new_text)
             fh.flush()
             os.fsync(fh.fileno())
     except OSError as exc:
@@ -891,7 +955,7 @@ def push_host_config(values: dict[str, str]) -> list[str]:
     path = config.host_config_path()
     if not path.is_file():
         raise ValueError("host config.toml is not mounted in this container")
-    if not os.access(path, os.W_OK):
+    if not _writable_file(path):
         raise ValueError("host config.toml is not writable (check the file permissions)")
     pending = _coerce_values(values)
     if not pending:
@@ -913,7 +977,10 @@ def push_host_config(values: dict[str, str]) -> list[str]:
             pruned[section] = keep
     if pruned != current:
         config.write_settings_overlay(pruned)
-    config.refresh_runtime()
+    try:
+        config.refresh_runtime()
+    except Exception as exc:
+        raise ValueError(f"host config.toml is invalid TOML: {exc}")
     _note_host_config_sig()
     log.info("pushed runtime config to host config.toml via settings: %s", sorted(pending))
     return sorted(pending)
@@ -976,7 +1043,7 @@ def save_endpoint(values: dict) -> dict:
     path = config.host_config_path()
     if not path.is_file():
         raise ValueError("host config.toml is not mounted in this container")
-    if not os.access(path, os.W_OK):
+    if not _writable_file(path):
         raise ValueError("host config.toml is not writable (check the file permissions)")
     name = endpoint["name"]
     _update_toml_file(
@@ -987,7 +1054,10 @@ def save_endpoint(values: dict) -> dict:
             f"llm.providers.{name}.thinking": endpoint["thinking"],
         },
     )
-    config.refresh_runtime()
+    try:
+        config.refresh_runtime()
+    except Exception as exc:
+        raise ValueError(f"host config.toml is invalid TOML: {exc}")
     _note_host_config_sig()
     log.info("saved endpoint %s via settings", name)
     return endpoints_status()
@@ -1003,10 +1073,13 @@ def delete_endpoint(name: str) -> dict:
     path = config.host_config_path()
     if not path.is_file():
         raise ValueError("host config.toml is not mounted in this container")
-    if not os.access(path, os.W_OK):
+    if not _writable_file(path):
         raise ValueError("host config.toml is not writable (check the file permissions)")
     _update_toml_file(path, {}, remove={f"llm.providers.{name}"})
-    config.refresh_runtime()
+    try:
+        config.refresh_runtime()
+    except Exception as exc:
+        raise ValueError(f"host config.toml is invalid TOML: {exc}")
     _note_host_config_sig()
     log.info("deleted endpoint %s via settings", name)
     return endpoints_status()

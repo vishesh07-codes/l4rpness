@@ -201,7 +201,9 @@ def test_generator_status_and_spotlight():
 
 
 def test_backlog_line():
-    assert supervisor._backlog_line(1) == ""
+    line = supervisor._backlog_line(1)
+    assert "none yet" in line
+    assert "spawn_hypothesis_generator" in line
 
     allow = tools.allowed_for("generator")
     asyncio.run(tools.execute("hypothesis_generate", {"title": "T1"}, 1, allow=allow))

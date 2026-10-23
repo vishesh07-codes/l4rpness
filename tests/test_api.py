@@ -78,6 +78,43 @@ def test_config_lists_models(client):
 def test_effort_default_and_fallback(client):
     assert create(client)["effort"] == config.DEFAULT_EFFORT
     assert create(client, effort="max")["effort"] == "max"
+
+
+def test_runtime_patch_accepts_known_prefix_without_listing(client, monkeypatch):
+    campaign = create(client)
+    # Empty live listing must not block configuration changes.
+    monkeypatch.setattr(agent, "_models", [])
+    res = client.patch(
+        f"/api/campaigns/{campaign['id']}/runtime", json={"model": "deepseek/deepseek-chat"}
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["model"] == "deepseek/deepseek-chat"
+
+
+def test_runtime_patch_accepts_unchanged_model_when_listing_empty(client, monkeypatch):
+    campaign = create(client)
+    monkeypatch.setattr(agent, "_models", [])
+    res = client.patch(
+        f"/api/campaigns/{campaign['id']}/runtime", json={"model": campaign["model"]}
+    )
+    assert res.status_code == 200, res.text
+
+
+def test_runtime_patch_rejects_unknown_effort_and_empty(client):
+    campaign = create(client)
+    assert (
+        client.patch(
+            f"/api/campaigns/{campaign['id']}/runtime", json={"effort": "bogus"}
+        ).status_code
+        == 400
+    )
+    assert client.patch(f"/api/campaigns/{campaign['id']}/runtime", json={}).status_code == 400
+    assert (
+        client.patch(
+            f"/api/campaigns/{campaign['id']}/runtime", json={"model": "   "}
+        ).status_code
+        == 400
+    )
     assert create(client, effort="ultra")["effort"] == config.DEFAULT_EFFORT
 
 
@@ -156,7 +193,7 @@ def test_invalid_tool_arguments_reported_not_executed(client, monkeypatch):
 
 
 def test_chat_streams_and_stores_messages(client, monkeypatch):
-    async def fake_run(campaign, attachments, history, campaign_id, stop=None, on_tool_output=None):
+    async def fake_run(campaign, attachments, history, campaign_id, stop=None, on_tool_output=None, include_attachments=True):
         yield "thinking", "weighing it"
         yield "content", "ack: " + history[-1]["content"]
 
@@ -177,7 +214,7 @@ def test_chat_streams_and_stores_messages(client, monkeypatch):
 
 
 def test_chat_failure_keeps_partial_reply(client, monkeypatch):
-    async def broken_run(campaign, attachments, history, campaign_id, stop=None, on_tool_output=None):
+    async def broken_run(campaign, attachments, history, campaign_id, stop=None, on_tool_output=None, include_attachments=True):
         yield "content", "partial"
         raise RuntimeError("boom")
 
@@ -194,7 +231,7 @@ def test_chat_failure_keeps_partial_reply(client, monkeypatch):
 
 
 def test_chat_failure_before_output_keeps_user_message(client, monkeypatch):
-    async def instant_failure(campaign, attachments, history, campaign_id, stop=None, usage=None, on_tool_output=None):
+    async def instant_failure(campaign, attachments, history, campaign_id, stop=None, usage=None, on_tool_output=None, include_attachments=True):
         raise RuntimeError("boom")
         yield
 
@@ -238,10 +275,13 @@ def test_tool_loop_logs_calls(client, monkeypatch):
     calls = json.loads(messages[1]["tool_calls"])
     assert calls[0]["name"] == "bash"
     assert calls[0]["ok"] is True
-    assert "hi" in calls[0]["output"]
+    # output text lives in parts only; tool_calls keeps metadata so the
+    # transcript does not store every stdout twice
+    assert "output" not in calls[0]
 
     parts = json.loads(messages[1]["parts"])
     assert [p["type"] for p in parts] == ["content", "tool", "content"]
+    assert "hi" in next(p for p in parts if p["type"] == "tool")["output"]
 
 
 def test_tool_step_cap(client, monkeypatch):
@@ -265,7 +305,7 @@ def test_tool_step_cap(client, monkeypatch):
 
 
 def test_delete_campaign(client, monkeypatch):
-    async def fake_run(campaign, attachments, history, campaign_id, stop=None, on_tool_output=None):
+    async def fake_run(campaign, attachments, history, campaign_id, stop=None, on_tool_output=None, include_attachments=True):
         yield "content", "ok"
 
     monkeypatch.setattr(agent, "run", fake_run)
@@ -448,7 +488,7 @@ def test_live_snapshot(client):
 
 
 def test_stopped_run_stores_partial(client, monkeypatch):
-    async def stopped_run(campaign, attachments, history, campaign_id, stop=None, usage=None, on_tool_output=None):
+    async def stopped_run(campaign, attachments, history, campaign_id, stop=None, usage=None, on_tool_output=None, include_attachments=True):
         yield "content", "half"
         yield "stopped", None
 
@@ -525,7 +565,7 @@ def test_run_persists_without_a_watcher(client, monkeypatch):
 def test_run_sets_running_then_idle(client, monkeypatch):
     seen = {}
 
-    async def fake_run(campaign, attachments, history, campaign_id, stop=None, on_tool_output=None):
+    async def fake_run(campaign, attachments, history, campaign_id, stop=None, on_tool_output=None, include_attachments=True):
         with db.db() as conn:
             seen["status"] = conn.execute(
                 "SELECT status FROM campaigns WHERE id = ?", (campaign_id,)
@@ -552,7 +592,7 @@ def test_run_sets_running_then_idle(client, monkeypatch):
 def test_run_checkpoints_mid_stream(client, monkeypatch):
     seen = {}
 
-    async def fake_run(campaign, attachments, history, campaign_id, stop=None, on_tool_output=None):
+    async def fake_run(campaign, attachments, history, campaign_id, stop=None, on_tool_output=None, include_attachments=True):
         yield "content", "working"
         yield "tool_call", {"id": "c1", "name": "bash", "args": {"cmd": "id"}}
         yield "tool_result", {"id": "c1", "name": "bash", "output": "uid=0", "ok": True, "ms": 3}
@@ -770,7 +810,7 @@ def test_resume_endpoint(client, monkeypatch):
 def test_tool_output_streams_live(client, monkeypatch):
     seen = {}
 
-    async def fake_run(campaign, attachments, history, campaign_id, stop=None, on_tool_output=None):
+    async def fake_run(campaign, attachments, history, campaign_id, stop=None, on_tool_output=None, include_attachments=True):
         assert on_tool_output is not None
         yield "tool_call", {"id": "c1", "name": "bash", "args": {"cmd": "scan"}}
         on_tool_output("c1", "first ")
@@ -886,7 +926,7 @@ def test_generator_and_hypothesis_endpoints(client):
 
 
 def test_usage_is_tracked_and_streamed(client, monkeypatch):
-    async def fake_run(campaign, attachments, history, campaign_id, stop=None, on_tool_output=None):
+    async def fake_run(campaign, attachments, history, campaign_id, stop=None, on_tool_output=None, include_attachments=True):
         yield "usage", {"prompt_tokens": 1200, "completion_tokens": 300}
         yield "content", "step one"
         yield "usage", {"prompt_tokens": 5000, "completion_tokens": 100}

@@ -2,7 +2,7 @@ import asyncio
 
 import pytest
 
-from app import config, tools
+from app import config, db, tools
 
 
 @pytest.fixture()
@@ -42,6 +42,20 @@ def test_bash_missing_command_error_names_the_keys(work):
     assert not ok
     assert "cmd is required" in out
     assert "timeout" in out
+
+
+@pytest.mark.parametrize("command", ["cd /app && pwd", "pushd /tmp", "cd .. && pwd"])
+def test_bash_rejects_workspace_escape_commands(work, command):
+    out, ok, _ = asyncio.run(tools.execute("bash", {"cmd": command}, 1))
+    assert not ok
+    assert "campaign work directory" in out
+    assert "advisory" in out
+
+
+def test_bash_reports_campaign_work_dir(work):
+    out, ok, _ = asyncio.run(tools.execute("bash", {"cmd": "pwd"}, 1))
+    assert ok
+    assert f"[campaign work directory: {work / '1'}]" in out
 
 
 def test_bash_long_output_spills_to_file(work, monkeypatch):
@@ -232,6 +246,34 @@ def test_execute_routes_mcp_tools(work, monkeypatch):
     assert ok
     assert "row1" in out
     assert "row2" in out
+
+
+def test_mcp_code_tools_receive_campaign_work_dir(work, monkeypatch):
+    seen = {}
+
+    async def fake_call(name, args):
+        seen.update(args)
+        return "identified", True
+
+    monkeypatch.setattr(tools.mcp, "is_tool", lambda name: name == "frank_codebase_identify")
+    monkeypatch.setattr(tools.mcp, "call", fake_call)
+
+    out, ok, _ = asyncio.run(tools.execute("frank_codebase_identify", {}, 7))
+    assert ok
+    assert out == "identified"
+    assert seen["path"] == str(work / "7")
+
+
+def test_generator_spawn_requires_recon(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(config, "DB_PATH", tmp_path / "l4rpness.db")
+    db.init()
+    with db.db() as conn:
+        conn.execute("INSERT INTO campaigns (id, target, model) VALUES (7, 't', 'm')")
+
+    out, ok = asyncio.run(tools.spawn_hypothesis_generator({"focus": "auth"}, 7))
+    assert not ok
+    assert "reconnaissance is required" in out
 
 
 def test_path_escape_rejected(work):

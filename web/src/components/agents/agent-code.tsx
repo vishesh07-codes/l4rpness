@@ -4,6 +4,7 @@ import {
   type CSSProperties,
   Fragment,
   useEffect,
+  useRef,
   useState,
 } from "react";
 import type { Highlighter } from "shiki";
@@ -72,6 +73,12 @@ export function useAgentCodeTokens(
   const highlightable = code.length <= HIGHLIGHT_MAX_CHARS;
   const key = highlightable ? tokenCacheKey(code, language) : "";
   const cached = highlightable ? tokenCache.get(key) : undefined;
+  // streaming output grows per token batch and every intermediate version is
+  // a cache miss, so an unthrottled hook re-tokenizes the whole block per
+  // chunk (O(n^2) highlighting). Hold the previous pass until the code has
+  // settled: new lines render plain meanwhile, the transcript refetch on
+  // chain end remounts with final text for the definitive pass.
+  const lastPass = useRef<{ code: string; at: number } | null>(null);
   const [result, setResult] = useState<{
     key: string;
     code: string;
@@ -86,6 +93,9 @@ export function useAgentCodeTokens(
       setResult({ key, code, language, lines: current });
       return;
     }
+
+    const prev = lastPass.current;
+    if (prev && code.startsWith(prev.code) && Date.now() - prev.at < 1500) return;
 
     let cancelled = false;
     getAgentCodeHighlighter().then((highlighter) => {
@@ -111,6 +121,7 @@ export function useAgentCodeTokens(
         if (oldest !== undefined) tokenCache.delete(oldest);
       }
       tokenCache.set(key, lines);
+      lastPass.current = { code, at: Date.now() };
       setResult({ key, code, language, lines });
     });
     return () => {

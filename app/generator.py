@@ -99,7 +99,7 @@ def _store_message(generator_id: int, content: str, parts: list) -> dict:
 
 
 def _system_prompt(campaign, attachments, focus: str) -> str:
-    base = agent.build_prompt(campaign, attachments, include_run_mode=False)
+    base = agent.build_prompt(campaign, attachments, include_run_mode=False, tool_kind="generator")
     try:
         extra = PROMPT_FILE.read_text()
     except OSError:
@@ -159,8 +159,8 @@ async def _run(campaign_id: int, generator_id: int, focus: str) -> None:
             {
                 "role": "user",
                 "content": (
-                    "Generate the hypotheses now. Study the target with your tools first if it "
-                    "helps, file each hypothesis with hypothesis_generate, then call generator_done."
+                    "Generate the hypotheses now. Study the target with your tools first; "
+                    "file each hypothesis with hypothesis_generate, then call generator_done."
                 ),
             },
         ]

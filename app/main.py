@@ -32,7 +32,7 @@ async def _watch_host_env() -> None:
             log.warning("l4rpness: host .env watch failed: %s", exc)
             continue
         if changed:
-            agent._models.clear()
+            agent.reset_model_cache()
             settings.note_auto_applied(changed)
             log.info("auto-applied host .env changes: %s", ", ".join(changed))
 
@@ -53,7 +53,7 @@ async def _watch_host_config() -> None:
             log.warning("l4rpness: host config.toml watch failed: %s", exc)
             continue
         if changed:
-            agent._models.clear()
+            agent.reset_model_cache()
             settings.note_config_auto_applied(changed)
             log.info("auto-applied host config.toml changes: %s", ", ".join(changed))
 

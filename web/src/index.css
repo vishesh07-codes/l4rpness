@@ -168,9 +168,11 @@ html.theme-transition::view-transition-new(root) {
 }
 
 html.theme-transition::view-transition-new(root) {
-  -webkit-mask-image: url("./assets/badapple/badapple-mask.webp"),
+  -webkit-mask-image:
+    url("./assets/badapple/badapple-mask.webp"),
     radial-gradient(circle at 50% 50%, #000 52%, transparent 72%);
-  mask-image: url("./assets/badapple/badapple-mask.webp"),
+  mask-image:
+    url("./assets/badapple/badapple-mask.webp"),
     radial-gradient(circle at 50% 50%, #000 52%, transparent 72%);
   -webkit-mask-repeat: no-repeat;
   mask-repeat: no-repeat;
@@ -236,8 +238,16 @@ html.theme-transition::view-transition-new(root) {
   pointer-events: none;
   background-color: var(--background);
   background-image:
-    radial-gradient(55rem 55rem at 8% -12%, var(--glass-glow-1), transparent 60%),
-    radial-gradient(45rem 45rem at 105% -5%, var(--glass-glow-2), transparent 55%);
+    radial-gradient(
+      55rem 55rem at 8% -12%,
+      var(--glass-glow-1),
+      transparent 60%
+    ),
+    radial-gradient(
+      45rem 45rem at 105% -5%,
+      var(--glass-glow-2),
+      transparent 55%
+    );
 }
 
 /* #root/main must be transparent or they paint over the fixed backdrop */
@@ -257,16 +267,21 @@ main {
   }
 
   /* chrome only (sidebar, headers): this is the expensive one */
-  @supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  @supports (
+    (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))
+  ) {
     .glass {
       background-color: var(--glass-bg);
-      -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+      -webkit-backdrop-filter: blur(var(--glass-blur))
+        saturate(var(--glass-saturate));
       backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
     }
 
     .glass-strong {
-      -webkit-backdrop-filter: blur(calc(var(--glass-blur) * 1.6)) saturate(var(--glass-saturate));
-      backdrop-filter: blur(calc(var(--glass-blur) * 1.6)) saturate(var(--glass-saturate));
+      -webkit-backdrop-filter: blur(calc(var(--glass-blur) * 1.6))
+        saturate(var(--glass-saturate));
+      backdrop-filter: blur(calc(var(--glass-blur) * 1.6))
+        saturate(var(--glass-saturate));
     }
   }
 
@@ -474,8 +489,8 @@ html[data-darkreader-mode] .app-sidebar {
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
   --font-heading: var(--font-sans);
-  --font-sans: 'Geist Variable', ui-sans-serif, system-ui, sans-serif;
-  --font-mono: 'Geist Mono Variable', ui-monospace, 'SF Mono', monospace;
+  --font-sans: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono Variable", ui-monospace, "SF Mono", monospace;
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -520,6 +535,21 @@ html[data-darkreader-mode] .app-sidebar {
   main {
     min-height: 100vh;
     background-color: var(--background);
+  }
+
+  /* Campaign owns its scroll regions; keep the app shell from adding a second
+   * document scrollbar while dashboard-like pages retain natural height. */
+  main:has(.campaign-page) {
+    height: 100svh;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  html:has(.campaign-page),
+  body:has(.campaign-page),
+  #root:has(.campaign-page) {
+    height: 100%;
+    overflow: hidden;
   }
 }
 

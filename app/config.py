@@ -19,6 +19,7 @@ DEFAULTS = {
         "efforts": ["low", "high", "max"],
         "request_timeout": 180,
         "temperature": 0.3,
+        "limits": {},
         "providers": {
             "deepseek": {
                 "base_url": "https://api.deepseek.com",
@@ -40,7 +41,7 @@ DEFAULTS = {
         "total_char_cap": 120_000,
     },
     "tools": {
-        "max_steps": -1,
+        "max_steps": 50,
         "bash_timeout": 120,
         "bash_output_bytes": 10 * 1024 * 1024,
         "output_chars": 20_000,
@@ -49,7 +50,7 @@ DEFAULTS = {
     },
     "supervisor": {
         "error_backoff_seconds": 30,
-        "compact_at_tokens": 950000,
+        "compact_at_tokens": 0,
         "compact_keep_messages": 8,
     },
     "hypotheses": {
@@ -79,6 +80,7 @@ SERVER_PORT = SETTINGS["server"]["port"]
 PROVIDERS = SETTINGS["llm"]["providers"]
 PROVIDER = SETTINGS["llm"]["provider"]
 PROVIDER_CONF = PROVIDERS.get(PROVIDER, {})
+LIMITS = SETTINGS["llm"].get("limits", {}) or {}
 
 data_dir = os.getenv("L4RP_DATA_DIR") or SETTINGS["storage"]["data_dir"]
 DATA_DIR = Path(data_dir)
@@ -228,7 +230,7 @@ def refresh_runtime() -> None:
     runtime-safe constant, so Settings saves apply without a restart.
     Server binding, storage paths, and provider wiring are intentionally
     left alone (they need a recreate)."""
-    global SETTINGS, PROVIDERS, PROVIDER, PROVIDER_CONF
+    global SETTINGS, PROVIDERS, PROVIDER, PROVIDER_CONF, LIMITS
     global BASE_URL, THINKING, API_KEY, CONFIGURED
     global DEFAULT_MODEL, DEFAULT_EFFORT, EFFORTS, REQUEST_TIMEOUT, TEMPERATURE
     global SUPERVISOR_BACKOFF, COMPACT_AT_TOKENS, COMPACT_KEEP_MESSAGES
@@ -241,6 +243,7 @@ def refresh_runtime() -> None:
     PROVIDERS = SETTINGS["llm"]["providers"]
     PROVIDER = SETTINGS["llm"]["provider"]
     PROVIDER_CONF = PROVIDERS.get(PROVIDER, {})
+    LIMITS = SETTINGS["llm"].get("limits", {}) or {}
     BASE_URL = PROVIDER_CONF.get("base_url", "https://api.deepseek.com")
     THINKING = bool(PROVIDER_CONF.get("thinking", False))
     DEFAULT_MODEL = SETTINGS["llm"]["model"]

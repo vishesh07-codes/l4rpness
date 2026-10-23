@@ -309,6 +309,11 @@ export function ToolResult({
       >
         <div className="pl-6 pt-1.5">
           <div className="overflow-hidden rounded-xl bg-muted/80">
+          {/* output highlighting fans a long result out to hundreds of token
+              spans, so it only renders while open: completed tools collapse
+              by default, and mounting their highlights anyway is what grew
+              the transcript to tens of thousands of invisible nodes */}
+          {currentOpen ? (
           <div
             ref={viewportRef}
             role="log"
@@ -318,6 +323,7 @@ export function ToolResult({
           >
             <div className={cn("p-3", contentClassName)}>{children}</div>
           </div>
+          ) : null}
 
             {canCopy || onRetry ? (
               <div className="flex items-center gap-0.5 px-2 pb-1.5">
