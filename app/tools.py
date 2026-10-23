@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import os
 import re
+import signal
 import time
 from itertools import islice
 from pathlib import Path
@@ -141,10 +142,17 @@ def _clip(work: Path, text: str, name: str) -> str:
     )
 
 
+def _kill_tree(proc) -> None:
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+
+
 async def _kill_when_stopped(proc, stop):
     await stop.wait()
     if proc.returncode is None:
-        proc.kill()
+        _kill_tree(proc)
 
 
 async def bash(args: dict, work: Path, stop=None) -> tuple[str, bool]:
@@ -164,6 +172,7 @@ async def bash(args: dict, work: Path, stop=None) -> tuple[str, bool]:
         env=env,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
+        start_new_session=True,
     )
     assert proc.stdout is not None
     stdout = proc.stdout
@@ -188,7 +197,7 @@ async def bash(args: dict, work: Path, stop=None) -> tuple[str, bool]:
     try:
         out, capped = await asyncio.wait_for(drain(), timeout)
     except asyncio.TimeoutError:
-        proc.kill()
+        _kill_tree(proc)
         out, capped = await drain()
         note = f"\n[killed after {timeout}s]"
     finally:
@@ -197,7 +206,7 @@ async def bash(args: dict, work: Path, stop=None) -> tuple[str, bool]:
             with contextlib.suppress(asyncio.CancelledError):
                 await watcher
         if proc.returncode is None:
-            proc.kill()
+            _kill_tree(proc)
 
     if stop is not None and stop.is_set():
         note += "\n[stopped by request]"

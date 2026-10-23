@@ -101,11 +101,12 @@ def test_bash_killed_on_stop(work):
     async def scenario():
         stop = asyncio.Event()
         asyncio.get_running_loop().call_later(0.3, stop.set)
-        return await tools.execute("bash", {"cmd": "sleep 5"}, 1, stop)
+        return await tools.execute("bash", {"cmd": "sleep 10; echo late"}, 1, stop)
 
     out, ok, ms = asyncio.run(scenario())
     assert not ok
     assert "[stopped by request]" in out
+    assert "late" not in out
     assert ms < 3000
 
 
