@@ -33,12 +33,14 @@ export function UserMessage({ content, animate = true }: { content: string; anim
   )
 }
 
-function ReasoningBlock({ text, live }: { text: string; live?: boolean }) {
+function ReasoningBlock({ text, live, label }: { text: string; live?: boolean; label?: boolean }) {
   return (
     <div className="border-l-2 border-line pl-3">
-      <div className="mb-1 text-[11px] font-medium text-ink-3">
-        {live ? <ThinkingShimmer>Reasoning</ThinkingShimmer> : "Reasoning"}
-      </div>
+      {label && (
+        <div className="mb-1 text-[11px] font-medium text-ink-3">
+          {live ? <ThinkingShimmer>Reasoning</ThinkingShimmer> : "Reasoning"}
+        </div>
+      )}
       <div className="text-[13px] leading-relaxed whitespace-pre-wrap text-ink-2">
         {live ? <StreamText live text={text} /> : text}
       </div>
@@ -113,11 +115,26 @@ export function AssistantMessage({ parts, live = false }: { parts: Part[]; live?
     -1
   )
 
+  // reasoning runs once per tool step, so label the first block only and shimmer the active one
+  const firstThinkingIndex = parts.findIndex((part) => part.type === "thinking")
+  const lastThinkingIndex = parts.reduce(
+    (latest, part, index) => (part.type === "thinking" ? index : latest),
+    -1
+  )
+
   return (
     <div className="group/response flex w-full flex-col gap-3">
       {parts.map((part, index) => {
         if (part.type === "thinking") {
-          return <ReasoningBlock key={`thinking-${index}`} text={part.text} live={live} />
+          const streaming = live && index === lastThinkingIndex
+          return (
+            <ReasoningBlock
+              key={`thinking-${index}`}
+              text={part.text}
+              live={streaming}
+              label={index === firstThinkingIndex || streaming}
+            />
+          )
         }
         if (part.type === "tool") {
           if (part.name === "write_todos") {
