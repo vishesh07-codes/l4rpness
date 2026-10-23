@@ -65,7 +65,8 @@ def prompt_text(rows) -> str:
             continue
 
         try:
-            text = (config.UPLOAD_DIR / row["path"]).read_text(errors="replace")
+            with (config.UPLOAD_DIR / row["path"]).open(errors="replace") as fh:
+                text = fh.read(config.FILE_CHAR_CAP + 1)
         except OSError:
             continue
 
