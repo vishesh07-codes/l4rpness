@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS campaigns (
     model TEXT NOT NULL,
     effort TEXT NOT NULL DEFAULT 'high',
     status TEXT NOT NULL DEFAULT 'created',
+    auto_running INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -84,6 +85,8 @@ def _columns(conn, table):
 def migrate(conn):
     if "effort" not in _columns(conn, "campaigns"):
         conn.execute("ALTER TABLE campaigns ADD COLUMN effort TEXT NOT NULL DEFAULT 'high'")
+    if "auto_running" not in _columns(conn, "campaigns"):
+        conn.execute("ALTER TABLE campaigns ADD COLUMN auto_running INTEGER NOT NULL DEFAULT 0")
     if "reasoning" not in _columns(conn, "messages"):
         conn.execute("ALTER TABLE messages ADD COLUMN reasoning TEXT NOT NULL DEFAULT ''")
     if "tool_calls" not in _columns(conn, "messages"):

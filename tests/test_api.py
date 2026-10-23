@@ -10,7 +10,7 @@ os.environ["DEEPSEEK_API_KEY"] = "test-key"
 import pytest
 from fastapi.testclient import TestClient
 
-from app import agent, config, db, routes, tools
+from app import agent, config, db, routes, supervisor, tools
 from app.main import app
 
 
@@ -18,6 +18,7 @@ from app.main import app
 def fresh_db(monkeypatch):
     for suffix in ("", "-wal", "-shm"):
         Path(str(config.DB_PATH) + suffix).unlink(missing_ok=True)
+    routes.RUNNING.clear()
     db.init()
 
     async def fake_models():
@@ -25,6 +26,8 @@ def fresh_db(monkeypatch):
 
     monkeypatch.setattr(agent, "models", fake_models)
     monkeypatch.setattr(config, "SEED_HISTORY", None)
+    # campaigns auto-start the supervisor in production; tests drive it by hand
+    monkeypatch.setattr(supervisor, "start", lambda campaign_id: False)
 
 
 @pytest.fixture()
@@ -139,7 +142,7 @@ def test_invalid_tool_arguments_reported_not_executed(client, monkeypatch):
         })
         yield "content", "calling"
 
-    async def fake_execute(name, args, campaign_id, stop=None):
+    async def fake_execute(name, args, campaign_id, stop=None, on_output=None):
         state["executed"] += 1
         return "should not run", True, 1
 
@@ -153,7 +156,7 @@ def test_invalid_tool_arguments_reported_not_executed(client, monkeypatch):
 
 
 def test_chat_streams_and_stores_messages(client, monkeypatch):
-    async def fake_run(campaign, attachments, history, campaign_id, stop=None):
+    async def fake_run(campaign, attachments, history, campaign_id, stop=None, on_tool_output=None):
         yield "thinking", "weighing it"
         yield "content", "ack: " + history[-1]["content"]
 
@@ -174,7 +177,7 @@ def test_chat_streams_and_stores_messages(client, monkeypatch):
 
 
 def test_chat_failure_keeps_partial_reply(client, monkeypatch):
-    async def broken_run(campaign, attachments, history, campaign_id, stop=None):
+    async def broken_run(campaign, attachments, history, campaign_id, stop=None, on_tool_output=None):
         yield "content", "partial"
         raise RuntimeError("boom")
 
@@ -191,7 +194,7 @@ def test_chat_failure_keeps_partial_reply(client, monkeypatch):
 
 
 def test_chat_failure_before_output_keeps_user_message(client, monkeypatch):
-    async def instant_failure(campaign, attachments, history, campaign_id, stop=None, usage=None):
+    async def instant_failure(campaign, attachments, history, campaign_id, stop=None, usage=None, on_tool_output=None):
         raise RuntimeError("boom")
         yield
 
@@ -218,7 +221,7 @@ def test_tool_loop_logs_calls(client, monkeypatch):
         calls.append({"id": "c1", "name": "bash", "arguments": '{"cmd": "echo hi"}', "args": {"cmd": "echo hi"}})
         yield "content", "running"
 
-    async def fake_execute(name, args, campaign_id, stop=None):
+    async def fake_execute(name, args, campaign_id, stop=None, on_output=None):
         return "hi\n[exit code 0]", True, 7
 
     monkeypatch.setattr(agent, "_step", fake_step)
@@ -246,7 +249,7 @@ def test_tool_step_cap(client, monkeypatch):
         calls.append({"id": "c1", "name": "bash", "arguments": "{}", "args": {}})
         yield "content", "step"
 
-    async def fake_execute(name, args, campaign_id, stop=None):
+    async def fake_execute(name, args, campaign_id, stop=None, on_output=None):
         return "ok", True, 1
 
     monkeypatch.setattr(agent, "_step", always_calls)
@@ -262,7 +265,7 @@ def test_tool_step_cap(client, monkeypatch):
 
 
 def test_delete_campaign(client, monkeypatch):
-    async def fake_run(campaign, attachments, history, campaign_id, stop=None):
+    async def fake_run(campaign, attachments, history, campaign_id, stop=None, on_tool_output=None):
         yield "content", "ok"
 
     monkeypatch.setattr(agent, "run", fake_run)
@@ -352,7 +355,9 @@ def test_skills_endpoints(client, monkeypatch, tmp_path):
     assert res.status_code == 400
 
 
-def test_seed_history_creates_messages(client, monkeypatch, tmp_path):
+def test_new_campaign_starts_empty(client, monkeypatch, tmp_path):
+    # the supervisor owns the first turn; campaigns are never seeded with
+    # fabricated assistant history
     path = tmp_path / "seed.json"
     path.write_text(json.dumps([
         {"role": "user", "content": "Begin {{target}}."},
@@ -366,9 +371,7 @@ def test_seed_history_creates_messages(client, monkeypatch, tmp_path):
 
     campaign = create(client, target="seed.example")
     messages = client.get(f"/api/campaigns/{campaign['id']}/messages").json()
-    assert [m["role"] for m in messages] == ["user", "assistant"]
-    assert messages[0]["content"] == "Begin seed.example."
-    assert "Initialized seed.example." in messages[1]["parts"]
+    assert messages == []
 
 
 def test_split_model():
@@ -398,6 +401,20 @@ def test_stop_idle_campaign(client):
     assert res.json() == {"stopped": False}
 
 
+def test_steer_stores_message_for_the_supervisor(client):
+    campaign = create(client)
+
+    res = client.post(
+        f"/api/campaigns/{campaign['id']}/steer", data={"content": "try the admin panel"}
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["role"] == "user"
+    assert res.json()["content"] == "try the admin panel"
+
+    messages = client.get(f"/api/campaigns/{campaign['id']}/messages").json()
+    assert [m["content"] for m in messages] == ["try the admin panel"]
+
+
 def test_running_flag_and_409(client):
     campaign = create(client)
     routes.RUNNING[campaign["id"]] = {"stop": asyncio.Event(), "parts": [], "pending": None}
@@ -414,7 +431,7 @@ def test_running_flag_and_409(client):
 def test_live_snapshot(client):
     campaign = create(client)
     idle = client.get(f"/api/campaigns/{campaign['id']}/live").json()
-    assert idle == {"running": False, "parts": [], "pending": None}
+    assert idle == {"running": False, "parts": [], "pending": None, "seq": 0}
 
     routes.RUNNING[campaign["id"]] = {
         "stop": asyncio.Event(),
@@ -431,7 +448,7 @@ def test_live_snapshot(client):
 
 
 def test_stopped_run_stores_partial(client, monkeypatch):
-    async def stopped_run(campaign, attachments, history, campaign_id, stop=None, usage=None):
+    async def stopped_run(campaign, attachments, history, campaign_id, stop=None, usage=None, on_tool_output=None):
         yield "content", "half"
         yield "stopped", None
 
@@ -508,7 +525,7 @@ def test_run_persists_without_a_watcher(client, monkeypatch):
 def test_run_sets_running_then_idle(client, monkeypatch):
     seen = {}
 
-    async def fake_run(campaign, attachments, history, campaign_id, stop=None):
+    async def fake_run(campaign, attachments, history, campaign_id, stop=None, on_tool_output=None):
         with db.db() as conn:
             seen["status"] = conn.execute(
                 "SELECT status FROM campaigns WHERE id = ?", (campaign_id,)
@@ -535,7 +552,7 @@ def test_run_sets_running_then_idle(client, monkeypatch):
 def test_run_checkpoints_mid_stream(client, monkeypatch):
     seen = {}
 
-    async def fake_run(campaign, attachments, history, campaign_id, stop=None):
+    async def fake_run(campaign, attachments, history, campaign_id, stop=None, on_tool_output=None):
         yield "content", "working"
         yield "tool_call", {"id": "c1", "name": "bash", "args": {"cmd": "id"}}
         yield "tool_result", {"id": "c1", "name": "bash", "output": "uid=0", "ok": True, "ms": 3}
@@ -614,6 +631,173 @@ def test_recovery_drops_an_empty_placeholder(client):
         messages = fresh.get(f"/api/campaigns/{campaign['id']}/messages").json()
         assert [m["role"] for m in messages] == ["user"]
         assert fresh.get(f"/api/campaigns/{campaign['id']}").json()["status"] == "interrupted"
+
+
+def test_live_events_fan_out_to_subscribers(client, monkeypatch):
+    campaign = create(client)
+    queue: asyncio.Queue = asyncio.Queue()
+    run = {
+        "stop": asyncio.Event(),
+        "parts": [],
+        "pending": None,
+        "queue": asyncio.Queue(),
+        "consumer": False,
+        "subscribers": {queue},
+        "seq": 0,
+    }
+    routes.RUNNING[campaign["id"]] = run
+
+    async def fake_run(*args, **kwargs):
+        yield "content", "live text"
+
+    monkeypatch.setattr(agent, "run", fake_run)
+
+    async def drive():
+        await routes._run(campaign["id"], {}, [], [], "go", run)
+
+    asyncio.run(drive())
+
+    names = []
+    while not queue.empty():
+        names.append(queue.get_nowait()[0])
+    assert "content" in names
+    assert "done" in names
+    assert names[-1] == "__end__"
+
+
+def test_supervised_chain_end_bumps_seq(client, monkeypatch):
+    campaign = create(client)
+    queue: asyncio.Queue = asyncio.Queue()
+    run = {
+        "stop": asyncio.Event(),
+        "parts": [],
+        "pending": None,
+        "queue": asyncio.Queue(),
+        "consumer": False,
+        "subscribers": {queue},
+        "supervised": True,
+        "seq": 0,
+    }
+    routes.RUNNING[campaign["id"]] = run
+
+    async def fake_run(*args, **kwargs):
+        yield "content", "chain"
+
+    monkeypatch.setattr(agent, "run", fake_run)
+
+    async def drive():
+        await routes._run(campaign["id"], {}, [], [], "", run, store_user=False, keep=True)
+
+    asyncio.run(drive())
+
+    names = []
+    while not queue.empty():
+        names.append(queue.get_nowait()[0])
+    assert "chain_end" in names
+    assert "__end__" not in names
+    assert run["seq"] == 1
+
+
+def test_close_run_notifies_subscribers(client):
+    campaign = create(client)
+    queue: asyncio.Queue = asyncio.Queue()
+    routes.RUNNING[campaign["id"]] = {
+        "stop": asyncio.Event(),
+        "parts": [],
+        "pending": None,
+        "queue": asyncio.Queue(),
+        "consumer": False,
+        "subscribers": {queue},
+    }
+
+    routes.close_run(campaign["id"])
+    assert queue.get_nowait() == ("closed", {})
+
+
+async def _first_sse_chunk(response) -> str:
+    iterator = response.body_iterator.__aiter__()
+    chunk = await getattr(iterator, "__anext__")()
+    close = getattr(iterator, "aclose", None)
+    if close is not None:
+        await close()
+    return str(chunk)
+
+
+def test_stream_endpoint_snapshots_live_parts(client):
+    campaign = create(client)
+    routes.RUNNING[campaign["id"]] = {
+        "stop": asyncio.Event(),
+        "parts": [{"type": "content", "text": "hello"}],
+        "pending": None,
+        "queue": asyncio.Queue(),
+        "consumer": False,
+        "subscribers": set(),
+        "seq": 3,
+    }
+
+    async def drive():
+        return await _first_sse_chunk(await routes.stream_campaign(campaign["id"]))
+
+    chunk = asyncio.run(drive())
+    assert "event: snapshot" in chunk
+    assert '"text": "hello"' in chunk
+    assert '"seq": 3' in chunk
+
+
+def test_stream_endpoint_idles_when_not_running(client):
+    campaign = create(client)
+
+    async def drive():
+        return await _first_sse_chunk(await routes.stream_campaign(campaign["id"]))
+
+    chunk = asyncio.run(drive())
+    assert "event: idle" in chunk
+
+
+def test_resume_endpoint(client, monkeypatch):
+    campaign = create(client)
+
+    monkeypatch.setattr(supervisor, "start", lambda campaign_id: True)
+    res = client.post(f"/api/campaigns/{campaign['id']}/resume")
+    assert res.status_code == 200
+    assert res.json()["status"] == "running"
+
+    monkeypatch.setattr(supervisor, "start", lambda campaign_id: False)
+    res = client.post(f"/api/campaigns/{campaign['id']}/resume")
+    assert res.status_code == 400
+
+
+def test_tool_output_streams_live(client, monkeypatch):
+    seen = {}
+
+    async def fake_run(campaign, attachments, history, campaign_id, stop=None, on_tool_output=None):
+        assert on_tool_output is not None
+        yield "tool_call", {"id": "c1", "name": "bash", "args": {"cmd": "scan"}}
+        on_tool_output("c1", "first ")
+        seen["live"] = routes.RUNNING[campaign_id]["parts"][0].get("output")
+        on_tool_output("c1", "second")
+        yield "tool_result", {
+            "id": "c1",
+            "name": "bash",
+            "output": "first second\n[exit code 0]",
+            "ok": True,
+            "ms": 7,
+        }
+
+    monkeypatch.setattr(agent, "run", fake_run)
+    campaign = create(client)
+
+    res = client.post(f"/api/campaigns/{campaign['id']}/messages", data={"content": "go"})
+    assert "event: tool_output" in res.text
+    assert '"chunk": "first "' in res.text
+    # while the tool still runs, the live view already shows the output
+    assert seen["live"] == "first "
+
+    messages = client.get(f"/api/campaigns/{campaign['id']}/messages").json()
+    parts = json.loads(messages[1]["parts"])
+    tool = next(part for part in parts if part["type"] == "tool")
+    assert tool["output"] == "first second\n[exit code 0]"
+    assert tool["ok"] is True
 
 
 def test_message_upload(client, monkeypatch):

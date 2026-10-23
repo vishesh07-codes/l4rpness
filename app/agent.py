@@ -154,11 +154,18 @@ async def _step(client, campaign, messages, calls: list) -> AsyncIterator[tuple[
         calls.append({**entry, "args": args, "raw": raw, "parse_error": parse_error})
 
 
-async def run(campaign, attachment_rows, history, campaign_id, stop=None) -> AsyncIterator[tuple[str, Any]]:
+async def run(campaign, attachment_rows, history, campaign_id, stop=None, on_tool_output=None) -> AsyncIterator[tuple[str, Any]]:
     provider, _ = split_model(campaign["model"])
     client = _client(provider)
     messages: list[dict] = [{"role": "system", "content": build_prompt(campaign, attachment_rows)}]
-    messages += [{"role": m["role"], "content": m["content"]} for m in history]
+    for message in history:
+        # chat history is role/content; the supervisor replays tool calls too
+        entry = {
+            key: message[key]
+            for key in ("role", "content", "tool_calls", "tool_call_id")
+            if key in message
+        }
+        messages.append(entry)
 
     calls: list[dict] = []
     steps = 0
@@ -216,7 +223,13 @@ async def run(campaign, attachment_rows, history, campaign_id, stop=None) -> Asy
                 )
                 ok, ms = False, 0
             else:
-                output, ok, ms = await tools.execute(call["name"], call["args"], campaign_id, stop)
+                def stream_chunk(chunk: str, call_id=call["id"]):
+                    if on_tool_output is not None:
+                        on_tool_output(call_id, chunk)
+
+                output, ok, ms = await tools.execute(
+                    call["name"], call["args"], campaign_id, stop, on_output=stream_chunk
+                )
             yield "tool_result", {"id": call["id"], "name": call["name"], "output": output, "ok": ok, "ms": ms}
             messages.append({"role": "tool", "tool_call_id": call["id"], "content": output})
 

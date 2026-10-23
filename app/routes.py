@@ -8,7 +8,7 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
-from . import agent, config, db, mcp, seed, skills, uploads
+from . import agent, config, db, mcp, skills, supervisor, uploads
 
 log = logging.getLogger("l4rpness")
 router = APIRouter(prefix="/api")
@@ -214,32 +214,13 @@ async def create_campaign(
                         (campaign_id, field, name, item["content_type"], item["size"], path),
                     )
 
-            for message in seed.messages(target.strip()):
-                role = str(message.get("role", ""))
-                body = str(message.get("content", ""))
-                if role == "user":
-                    conn.execute(
-                        "INSERT INTO messages (campaign_id, role, content) VALUES (?, 'user', ?)",
-                        (campaign_id, body),
-                    )
-                elif role == "assistant":
-                    conn.execute(
-                        """
-                        INSERT INTO messages (campaign_id, role, content, reasoning, tool_calls, parts)
-                        VALUES (?, 'assistant', ?, ?, ?, ?)
-                        """,
-                        (
-                            campaign_id,
-                            body,
-                            str(message.get("reasoning", "")),
-                            json.dumps(message.get("tool_calls", [])),
-                            json.dumps(message.get("parts", [])),
-                        ),
-                    )
     except OSError:
         if campaign_id:
             shutil.rmtree(config.UPLOAD_DIR / str(campaign_id), ignore_errors=True)
         raise HTTPException(500, "failed to store uploads")
+
+    if not supervisor.start(campaign_id):
+        log.warning("campaign %d created but the supervisor did not start", campaign_id)
 
     return get_campaign(campaign_id)
 
@@ -256,7 +237,8 @@ def get_campaign(campaign_id: int):
 
 
 @router.delete("/campaigns/{campaign_id}")
-def delete_campaign(campaign_id: int):
+async def delete_campaign(campaign_id: int):
+    supervisor.stop(campaign_id)
     run = RUNNING.get(campaign_id)
     if run is not None:
         run["stop"].set()
@@ -271,16 +253,16 @@ def delete_campaign(campaign_id: int):
 
 
 @router.post("/campaigns/{campaign_id}/stop")
-def stop_campaign(campaign_id: int):
+async def stop_campaign(campaign_id: int):
     with db.db() as conn:
         load_campaign(conn, campaign_id)
 
+    stopped = supervisor.stop(campaign_id)
     run = RUNNING.get(campaign_id)
-    if run is None:
-        return {"stopped": False}
-
-    run["stop"].set()
-    return {"stopped": True}
+    if run is not None:
+        run["stop"].set()
+        stopped = True
+    return {"stopped": stopped}
 
 
 @router.get("/campaigns/{campaign_id}/live")
@@ -290,8 +272,62 @@ def live_campaign(campaign_id: int):
 
     run = RUNNING.get(campaign_id)
     if run is None:
-        return {"running": False, "parts": [], "pending": None}
-    return {"running": True, "parts": run["parts"], "pending": run["pending"]}
+        return {"running": False, "parts": [], "pending": None, "seq": 0}
+    return {"running": True, "parts": run["parts"], "pending": run["pending"], "seq": run.get("seq", 0)}
+
+
+@router.get("/campaigns/{campaign_id}/stream")
+async def stream_campaign(campaign_id: int):
+    """Push every event of the live run to the browser as it happens.
+
+    A snapshot of the in-flight turn is queued in the same tick as the
+    subscription, so a client that connects mid-stream loses nothing.
+    """
+    with db.db() as conn:
+        load_campaign(conn, campaign_id)
+
+    async def events():
+        run = RUNNING.get(campaign_id)
+        if run is None:
+            yield sse("idle", {})
+            return
+
+        mine: asyncio.Queue = asyncio.Queue()
+        subscribers = run.setdefault("subscribers", set())
+        subscribers.add(mine)
+        try:
+            yield sse("snapshot", {
+                "parts": run["parts"],
+                "pending": run["pending"],
+                "seq": run.get("seq", 0),
+            })
+            while True:
+                try:
+                    name, data = await asyncio.wait_for(mine.get(), timeout=15)
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"
+                    continue
+                if name in ("__end__", "closed"):
+                    break
+                yield sse(name, data)
+        finally:
+            subscribers.discard(mine)
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.post("/campaigns/{campaign_id}/resume")
+async def resume_campaign(campaign_id: int):
+    with db.db() as conn:
+        load_campaign(conn, campaign_id)
+
+    if not supervisor.start(campaign_id):
+        raise HTTPException(400, "the supervisor did not start; check the provider API key")
+    return {"status": "running", "campaign_id": campaign_id}
 
 
 class MessageIn(BaseModel):
@@ -324,12 +360,25 @@ def sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data)}\n\n"
 
 
-async def _run(campaign_id, campaign, attachments, history, content, run, files=()):
+def close_run(campaign_id: int) -> None:
+    """Tell every SSE subscriber that the run is over."""
+    run = RUNNING.get(campaign_id)
+    if run is None:
+        return
+    for queue in list(run.get("subscribers") or ()):
+        queue.put_nowait(("closed", {}))
+
+
+async def _run(campaign_id, campaign, attachments, history, content, run, files=(), store_user=True, keep=False):
     """The agent turn, detached from any client so closing the tab does not kill it.
 
     The user message and an assistant placeholder are written before the model
     starts, and the assistant row is checkpointed while parts stream in, so a
     crash or restart mid-run leaves a recoverable transcript, not nothing.
+
+    ``store_user=False`` is the supervisor mode: the trigger comes from the
+    caller's history and no user row is written. ``keep=True`` keeps the run
+    alive after the chain so the supervisor can start the next one.
     """
     stop = run["stop"]
     parts = run["parts"]
@@ -350,8 +399,11 @@ async def _run(campaign_id, campaign, attachments, history, content, run, files=
             parts.append({"type": kind, "text": text})
 
     def emit(name: str, data):
-        # only buffer events when a client is actually watching
-        if run["consumer"]:
+        # live subscribers (the campaign page SSE) get every event as it happens
+        for queue in list(run.get("subscribers") or ()):
+            queue.put_nowait((name, data))
+        # the client that posted a chat message reads its own buffered queue
+        if run.get("consumer"):
             run["queue"].put_nowait((name, data))
 
     def checkpoint(force=False):
@@ -385,29 +437,40 @@ async def _run(campaign_id, campaign, attachments, history, content, run, files=
             # losing a checkpoint is not worth killing the run over
             log.exception("checkpointing the run failed")
 
+    def on_tool_output(call_id: str, chunk: str):
+        # live chunks land in the part immediately so /live shows the command
+        # talking back while it still runs; the finished output replaces this
+        for part in parts:
+            if part.get("type") == "tool" and part.get("id") == call_id:
+                part["output"] = (part.get("output") or "") + chunk
+                break
+        emit("tool_output", {"id": call_id, "chunk": chunk})
+        checkpoint()
+
     try:
         with db.db() as conn:
-            user_cur = conn.execute(
-                "INSERT INTO messages (campaign_id, role, content) VALUES (?, 'user', ?)",
-                (campaign_id, content),
-            )
-            user_id = user_cur.lastrowid
-            for item in files:
-                conn.execute(
-                    """
-                    INSERT INTO message_attachments
-                        (campaign_id, message_id, filename, content_type, size, path)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        campaign_id,
-                        user_id,
-                        item["filename"],
-                        item["content_type"],
-                        item["size"],
-                        item["path"],
-                    ),
+            if store_user:
+                user_cur = conn.execute(
+                    "INSERT INTO messages (campaign_id, role, content) VALUES (?, 'user', ?)",
+                    (campaign_id, content),
                 )
+                user_id = user_cur.lastrowid
+                for item in files:
+                    conn.execute(
+                        """
+                        INSERT INTO message_attachments
+                            (campaign_id, message_id, filename, content_type, size, path)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            campaign_id,
+                            user_id,
+                            item["filename"],
+                            item["content_type"],
+                            item["size"],
+                            item["path"],
+                        ),
+                    )
             assistant_cur = conn.execute(
                 """
                 INSERT INTO messages (campaign_id, role, content, reasoning, tool_calls, parts)
@@ -425,7 +488,9 @@ async def _run(campaign_id, campaign, attachments, history, content, run, files=
         stored = False
 
     try:
-        async for kind, data in agent.run(campaign, attachments, history, campaign_id, stop):
+        async for kind, data in agent.run(
+            campaign, attachments, history, campaign_id, stop, on_tool_output=on_tool_output
+        ):
             if kind == "thinking":
                 thinking.append(data)
                 add_text("thinking", data)
@@ -492,26 +557,40 @@ async def _run(campaign_id, campaign, attachments, history, content, run, files=
                             assistant_id,
                         ),
                     )
-                    assistant_row = conn.execute(
-                        "SELECT * FROM messages WHERE id = ?", (assistant_id,)
+                    if not keep:
+                        assistant_row = conn.execute(
+                            "SELECT * FROM messages WHERE id = ?", (assistant_id,)
+                        ).fetchone()
+                if not keep:
+                    conn.execute(
+                        "UPDATE campaigns SET status = 'idle', updated_at = datetime('now') WHERE id = ?",
+                        (campaign_id,),
+                    )
+                    user_row = conn.execute(
+                        "SELECT * FROM messages WHERE id = ?", (user_id,)
                     ).fetchone()
-                conn.execute(
-                    "UPDATE campaigns SET status = 'idle', updated_at = datetime('now') WHERE id = ?",
-                    (campaign_id,),
-                )
-                user_row = conn.execute(
-                    "SELECT * FROM messages WHERE id = ?", (user_id,)
-                ).fetchone()
-                user_attachments = [
-                    row_dict(a)
-                    for a in conn.execute(
-                        "SELECT * FROM message_attachments WHERE message_id = ? ORDER BY id",
-                        (user_id,),
-                    ).fetchall()
-                ]
+                    user_attachments = [
+                        row_dict(a)
+                        for a in conn.execute(
+                            "SELECT * FROM message_attachments WHERE message_id = ? ORDER BY id",
+                            (user_id,),
+                        ).fetchall()
+                    ]
         except Exception:
             log.exception("storing reply failed")
             stored = False
+
+    if keep:
+        if stored:
+            run["seq"] = int(run.get("seq") or 0) + 1
+        # tells watchers to roll this chain's saved message into the transcript
+        emit("chain_end", {"seq": run.get("seq", 0)})
+        return {
+            "ok": stored and has_output and not failure and not stopped,
+            "stopped": stopped,
+            "empty": not has_output,
+            "error": failure,
+        }
 
     RUNNING.pop(campaign_id, None)
 
@@ -541,6 +620,8 @@ async def send_message(
     if not text and not items:
         raise HTTPException(400, "message is empty")
     if campaign_id in RUNNING:
+        if supervisor.is_running(campaign_id):
+            raise HTTPException(409, "campaign runs autonomously; send a steer instead")
         raise HTTPException(409, "campaign is already running")
 
     with db.db() as conn:
@@ -606,6 +687,55 @@ async def send_message(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache"},
     )
+
+
+@router.post("/campaigns/{campaign_id}/steer")
+async def steer_campaign(
+    campaign_id: int,
+    content: str = Form(""),
+    files: list[UploadFile] = File(default=[]),
+):
+    """Queue an operator message for the supervisor.
+
+    The message is stored right away and lands in the model context when the
+    next chain starts. If the loop was stopped, steering resumes it.
+    """
+    text = content.strip()
+    items = await uploads.collect(files) if files else []
+    if not text and not items:
+        raise HTTPException(400, "message is empty")
+
+    with db.db() as conn:
+        load_campaign(conn, campaign_id)
+        cur = conn.execute(
+            "INSERT INTO messages (campaign_id, role, content) VALUES (?, 'user', ?)",
+            (campaign_id, text),
+        )
+        message_id = cur.lastrowid
+        for item in items:
+            rel = uploads.store_chat(campaign_id, item)
+            conn.execute(
+                """
+                INSERT INTO message_attachments
+                    (campaign_id, message_id, filename, content_type, size, path)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (campaign_id, message_id, item["filename"], item["content_type"], item["size"], rel),
+            )
+        conn.execute("UPDATE campaigns SET updated_at = datetime('now') WHERE id = ?", (campaign_id,))
+        row = conn.execute("SELECT * FROM messages WHERE id = ?", (message_id,)).fetchone()
+        attachments = [
+            row_dict(a)
+            for a in conn.execute(
+                "SELECT * FROM message_attachments WHERE message_id = ? ORDER BY id",
+                (message_id,),
+            ).fetchall()
+        ]
+
+    if not supervisor.start(campaign_id):
+        log.warning("steer stored for campaign %d but the supervisor did not start", campaign_id)
+
+    return {**row_dict(row), "attachments": attachments}
 
 
 @router.get("/attachments/{attachment_id}")

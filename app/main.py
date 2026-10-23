@@ -1,3 +1,4 @@
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
@@ -5,8 +6,12 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.gzip import GZipMiddleware
 
-from . import config, db, mcp
+from . import config, db, mcp, supervisor
 from .routes import router
+
+# the app logs to "l4rpness"; without a handler only warnings+ show (python's
+# last-resort handler), so bring INFO up on the console
+logging.basicConfig(level=logging.INFO, format="%(levelname)s:     %(name)s: %(message)s")
 
 
 @asynccontextmanager
@@ -14,6 +19,7 @@ async def lifespan(_app):
     db.init()
     db.recover()
     await mcp.start()
+    supervisor.restore()
     yield
     await mcp.stop()
 

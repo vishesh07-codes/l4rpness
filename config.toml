@@ -27,7 +27,7 @@ data_dir = "data"
 dirs = ["skills"]
 
 [agent]
-instructions = ["AGENTS.md", "prompts/operator_policy.md"]
+instructions = ["AGENTS.md", "prompts/operator_policy.md", "prompts/supervisor_policy.md"]
 seed_history = "prompts/seed_history.json"
 
 [uploads]
@@ -43,3 +43,8 @@ bash_output_bytes = 10485760
 output_chars = 20000
 read_max_lines = 2000
 http_timeout = 30
+
+[supervisor]
+# pause before retrying a chain that errored or came back empty (doubles up
+# to 120s); successful chains roll straight into the next chain
+error_backoff_seconds = 30

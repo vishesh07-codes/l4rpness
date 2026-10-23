@@ -65,6 +65,16 @@ async def _connect(spec: dict) -> ClientSession:
     command = spec.get("command")
 
     if command:
+        # fail before spawning anything if a referenced file is missing, so we
+        # do not leave a half-open stdio client behind (used to raise a cancel
+        # scope error on shutdown). Frank lives at /frank inside the image.
+        missing = next(
+            (arg for arg in command[1:] if arg.startswith("/") and not os.path.exists(arg)),
+            None,
+        )
+        if missing:
+            raise ValueError(f"server file not found: {missing}")
+
         env = {**os.environ, **(spec.get("env") or {})}
         params = StdioServerParameters(command=command[0], args=list(command[1:]), env=env)
         read, write = await stack.enter_async_context(stdio_client(params))
@@ -90,6 +100,7 @@ async def _connect(spec: dict) -> ClientSession:
 async def start() -> None:
     for spec in definitions():
         name = spec["name"]
+        log.info("mcp server %s: starting %s", name, spec.get("command") or spec.get("url"))
         try:
             session = await _connect(spec)
             listing = await session.list_tools()

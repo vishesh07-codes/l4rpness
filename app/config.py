@@ -28,7 +28,7 @@ DEFAULTS = {
     "storage": {"data_dir": "data"},
     "skills": {"dirs": ["skills"]},
     "agent": {
-        "instructions": ["AGENTS.md", "prompts/operator_policy.md"],
+        "instructions": ["AGENTS.md", "prompts/operator_policy.md", "prompts/supervisor_policy.md"],
         "seed_history": "prompts/seed_history.json",
     },
     "uploads": {
@@ -44,6 +44,9 @@ DEFAULTS = {
         "output_chars": 20_000,
         "read_max_lines": 2000,
         "http_timeout": 30,
+    },
+    "supervisor": {
+        "error_backoff_seconds": 30,
     },
 }
 
@@ -109,6 +112,8 @@ MAX_UPLOAD_BYTES = SETTINGS["uploads"]["max_bytes"]
 MAX_FILES_PER_FIELD = SETTINGS["uploads"]["max_files_per_field"]
 FILE_CHAR_CAP = SETTINGS["uploads"]["file_char_cap"]
 TOTAL_CHAR_CAP = SETTINGS["uploads"]["total_char_cap"]
+
+SUPERVISOR_BACKOFF = SETTINGS["supervisor"]["error_backoff_seconds"]
 
 MAX_TOOL_STEPS = SETTINGS["tools"]["max_steps"]
 BASH_TIMEOUT = SETTINGS["tools"]["bash_timeout"]

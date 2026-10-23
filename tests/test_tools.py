@@ -89,6 +89,34 @@ def test_bash_output_is_capped(work, monkeypatch):
     assert out.count("z") <= 5000
 
 
+def test_bash_streams_output_live(work, monkeypatch):
+    monkeypatch.setattr(config, "TOOL_OUTPUT_CHARS", 100)
+    chunks: list[str] = []
+
+    out, ok, _ = asyncio.run(
+        tools.execute("bash", {"cmd": "python3 -c \"print('q' * 500)\""}, 1, on_output=chunks.append)
+    )
+
+    assert ok
+    assert chunks, "expected live chunks while the command runs"
+    # live output obeys the same char cap as the model-facing output
+    assert "".join(chunks) == "q" * 100
+    assert "output truncated" in out
+
+
+def test_bash_streaming_decodes_multibyte(work):
+    chunks: list[str] = []
+    asyncio.run(
+        tools.execute(
+            "bash",
+            {"cmd": "python3 -c \"print('héllo wörld')\""},
+            1,
+            on_output=chunks.append,
+        )
+    )
+    assert "héllo wörld" in "".join(chunks)
+
+
 def test_read_file_past_end(work):
     asyncio.run(tools.execute("write_file", {"path": "short.txt", "content": "a\nb\nc"}, 1))
 

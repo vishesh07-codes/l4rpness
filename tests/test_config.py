@@ -10,12 +10,17 @@ def test_defaults_when_no_file(tmp_path):
     assert settings["llm"]["model"] == "deepseek-flash"
     assert settings["llm"]["temperature"] == 0.3
     assert settings["uploads"]["max_files_per_field"] == 5
-    assert settings["agent"]["instructions"] == ["AGENTS.md", "prompts/operator_policy.md"]
+    assert settings["agent"]["instructions"] == [
+        "AGENTS.md",
+        "prompts/operator_policy.md",
+        "prompts/supervisor_policy.md",
+    ]
     assert settings["agent"]["seed_history"] == "prompts/seed_history.json"
     assert settings["tools"]["max_steps"] == -1
     assert settings["tools"]["bash_output_bytes"] == 10 * 1024 * 1024
     assert settings["tools"]["read_max_lines"] == 2000
     assert settings["tools"]["http_timeout"] == 30
+    assert settings["supervisor"]["error_backoff_seconds"] == 30
 
 
 def test_file_overrides_defaults(tmp_path):

@@ -1,4 +1,5 @@
 import asyncio
+import codecs
 import contextlib
 import os
 import re
@@ -184,7 +185,7 @@ async def _kill_when_stopped(proc, stop):
         _kill_tree(proc)
 
 
-async def bash(args: dict, work: Path, stop=None) -> tuple[str, bool]:
+async def bash(args: dict, work: Path, stop=None, on_output=None) -> tuple[str, bool]:
     cmd = str(args.get("cmd", "")).strip()
     if not cmd:
         raise ValueError("cmd is required")
@@ -209,6 +210,8 @@ async def bash(args: dict, work: Path, stop=None) -> tuple[str, bool]:
     async def drain() -> tuple[bytes, bool]:
         out = bytearray()
         capped = False
+        decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        streamed = 0
         while True:
             block = await stdout.read(65536)
             if not block:
@@ -218,6 +221,16 @@ async def bash(args: dict, work: Path, stop=None) -> tuple[str, bool]:
                 out.extend(block[:room])
             if len(block) > room:
                 capped = True
+            if on_output is not None:
+                text = decoder.decode(block)
+                if text and streamed < config.TOOL_OUTPUT_CHARS:
+                    piece = text[: config.TOOL_OUTPUT_CHARS - streamed]
+                    streamed += len(piece)
+                    on_output(piece)
+        if on_output is not None:
+            tail = decoder.decode(b"", final=True)
+            if tail and streamed < config.TOOL_OUTPUT_CHARS:
+                on_output(tail[: config.TOOL_OUTPUT_CHARS - streamed])
         await proc.wait()
         return bytes(out), capped
 
@@ -316,7 +329,7 @@ HANDLERS = {
 }
 
 
-async def execute(name: str, args: dict, campaign_id: int, stop=None) -> tuple[str, bool, int]:
+async def execute(name: str, args: dict, campaign_id: int, stop=None, on_output=None) -> tuple[str, bool, int]:
     work = _work_dir(campaign_id)
 
     if mcp.is_tool(name):
@@ -331,7 +344,10 @@ async def execute(name: str, args: dict, campaign_id: int, stop=None) -> tuple[s
 
     started = time.monotonic()
     try:
-        text, ok = await handler(args or {}, work, stop)
+        if name == "bash":
+            text, ok = await handler(args or {}, work, stop, on_output)
+        else:
+            text, ok = await handler(args or {}, work, stop)
     except Exception as exc:
         text, ok = f"error: {exc}", False
     ms = int((time.monotonic() - started) * 1000)
