@@ -7,7 +7,7 @@ import time
 from itertools import islice
 from pathlib import Path
 
-from . import config
+from . import config, skills
 
 SCHEMAS = [
     {
@@ -34,10 +34,27 @@ SCHEMAS = [
     {
         "type": "function",
         "function": {
+            "name": "skill",
+            "description": (
+                "Load a skill by name and follow it. "
+                "The available skills and when to use them are listed in the system prompt."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Skill name from the available skills list."},
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "read_file",
             "description": (
-                "Read a text file from the campaign work directory. "
-                "Use offset and limit to page through a large file."
+                "Read a text file from the campaign work directory, or from a skill directory "
+                "when a skill points at extra files. Use offset and limit to page through a large file."
             ),
             "parameters": {
                 "type": "object",
@@ -108,11 +125,23 @@ def _work_dir(campaign_id: int) -> Path:
     return path
 
 
-def _resolve(work: Path, name: str) -> Path:
-    path = (work / name).resolve()
-    if not path.is_relative_to(work.resolve()):
-        raise ValueError("path escapes the work dir")
-    return path
+def _resolve(roots: list[Path], name: str) -> Path:
+    fallback = None
+    for root in roots:
+        path = (root / name).resolve()
+        if not path.is_relative_to(root.resolve()):
+            continue
+        if fallback is None:
+            fallback = path
+        if path.exists():
+            return path
+    if fallback is not None:
+        return fallback
+    raise ValueError("path escapes the allowed dirs")
+
+
+def _label(path: Path, work: Path) -> str:
+    return str(path.relative_to(work)) if path.is_relative_to(work) else str(path)
 
 
 def _spill(work: Path, text: str, name: str) -> str:
@@ -220,7 +249,7 @@ async def bash(args: dict, work: Path, stop=None) -> tuple[str, bool]:
 
 
 async def read_file(args: dict, work: Path, stop=None) -> tuple[str, bool]:
-    path = _resolve(work, str(args.get("path", "")))
+    path = _resolve([work, *skills.roots()], str(args.get("path", "")))
     if not path.is_file():
         raise ValueError("file not found")
 
@@ -230,11 +259,11 @@ async def read_file(args: dict, work: Path, stop=None) -> tuple[str, bool]:
     with path.open(errors="replace") as fh:
         for _ in range(offset - 1):
             if not fh.readline():
-                return f"{path.relative_to(work)}: nothing at offset {offset}", True
+                return f"{_label(path, work)}: nothing at offset {offset}", True
 
         chunk = [line.rstrip("\n") for line in islice(fh, limit)]
         if not chunk:
-            return f"{path.relative_to(work)}: nothing at offset {offset}", True
+            return f"{_label(path, work)}: nothing at offset {offset}", True
 
         remaining = sum(1 for _ in fh)
 
@@ -242,11 +271,11 @@ async def read_file(args: dict, work: Path, stop=None) -> tuple[str, bool]:
     total = end + remaining
     body = "\n".join(f"{number:5d}  {line}" for number, line in enumerate(chunk, start=offset))
     tail = "" if remaining == 0 else f"\n[{remaining} more lines, use offset={end + 1}]"
-    return f"{path.relative_to(work)} (lines {offset}-{end} of {total})\n{body}{tail}", True
+    return f"{_label(path, work)} (lines {offset}-{end} of {total})\n{body}{tail}", True
 
 
 async def write_file(args: dict, work: Path, stop=None) -> tuple[str, bool]:
-    path = _resolve(work, str(args.get("path", "")))
+    path = _resolve([work], str(args.get("path", "")))
     path.parent.mkdir(parents=True, exist_ok=True)
 
     content = str(args.get("content", ""))
@@ -267,8 +296,20 @@ async def write_todos(args: dict, work: Path, stop=None) -> tuple[str, bool]:
     return f"plan updated: {len(todos)} items, {done} completed", True
 
 
+async def skill(args: dict, work: Path, stop=None) -> tuple[str, bool]:
+    name = str(args.get("name", "")).strip()
+    loaded = skills.load(name)
+    if loaded is None:
+        names = ", ".join(entry["name"] for entry in skills.discover()) or "none"
+        raise ValueError(f"unknown skill {name!r}, available: {names}")
+
+    header = f"# Skill: {loaded['name']}\nDirectory: {loaded['dir']}\n\n"
+    return header + loaded["body"], True
+
+
 HANDLERS = {
     "bash": bash,
+    "skill": skill,
     "read_file": read_file,
     "write_file": write_file,
     "write_todos": write_todos,

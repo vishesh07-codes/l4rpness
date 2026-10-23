@@ -13,6 +13,8 @@ services:
     volumes:
       - l4rpness-data:/app/data
       - ./config.toml:/app/config.toml:ro
+      - ./skills:/app/skills:ro
+      - ./AGENTS.md:/app/AGENTS.md:ro
     restart: unless-stopped
 
 volumes:

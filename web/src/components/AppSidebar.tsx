@@ -1,9 +1,12 @@
-import { LayoutGrid } from "lucide-react"
+import { LayoutGrid, Sparkles } from "lucide-react"
 import { Link, useLocation } from "react-router-dom"
 
 import { cn } from "@/lib/utils"
 
-const nav = [{ to: "/", label: "Dashboard", icon: LayoutGrid }]
+const nav = [
+  { to: "/", label: "Dashboard", icon: LayoutGrid },
+  { to: "/skills", label: "Skills", icon: Sparkles },
+]
 
 export function AppSidebar() {
   const { pathname } = useLocation()

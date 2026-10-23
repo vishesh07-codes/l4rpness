@@ -110,6 +110,51 @@ def test_bash_killed_on_stop(work):
     assert ms < 3000
 
 
+def test_skill_tool_loads_body(work, tmp_path, monkeypatch):
+    root = tmp_path / "skills"
+    directory = root / "demo"
+    directory.mkdir(parents=True)
+    (directory / "SKILL.md").write_text("---\nname: demo\ndescription: Use when demo\n---\n\nBody here.\n")
+    monkeypatch.setattr(config, "SKILL_DIRS", [root])
+
+    out, ok, _ = asyncio.run(tools.execute("skill", {"name": "demo"}, 1))
+    assert ok
+    assert "# Skill: demo" in out
+    assert "Body here." in out
+
+
+def test_skill_tool_unknown_lists_names(work, tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "SKILL_DIRS", [tmp_path / "skills"])
+
+    out, ok, _ = asyncio.run(tools.execute("skill", {"name": "nope"}, 1))
+    assert not ok
+    assert "unknown skill" in out
+
+
+def test_read_file_can_read_skill_dir(work, tmp_path, monkeypatch):
+    root = tmp_path / "skills"
+    nested = root / "demo" / "scripts"
+    nested.mkdir(parents=True)
+    (nested / "run.sh").write_text("#!/bin/sh\necho hi\n")
+    monkeypatch.setattr(config, "SKILL_DIRS", [root])
+
+    out, ok, _ = asyncio.run(tools.execute("read_file", {"path": str(nested / "run.sh")}, 1))
+    assert ok
+    assert "echo hi" in out
+
+
+def test_write_file_cannot_touch_skill_dir(work, tmp_path, monkeypatch):
+    root = tmp_path / "skills"
+    (root / "demo").mkdir(parents=True)
+    monkeypatch.setattr(config, "SKILL_DIRS", [root])
+
+    out, ok, _ = asyncio.run(
+        tools.execute("write_file", {"path": str(root / "demo" / "x.txt"), "content": "no"}, 1)
+    )
+    assert not ok
+    assert "escapes" in out
+
+
 def test_path_escape_rejected(work):
     out, ok, _ = asyncio.run(tools.execute("read_file", {"path": "../secret"}, 1))
     assert not ok

@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils"
 import { Campaign } from "@/pages/Campaign"
 import { Dashboard } from "@/pages/Dashboard"
 import { NewCampaign } from "@/pages/NewCampaign"
+import { Skills } from "@/pages/Skills"
 
 export default function App() {
   const [darkMode, setDarkMode] = useState(() => {
@@ -69,6 +70,7 @@ export default function App() {
           <Route path="/" element={<Dashboard />} />
           <Route path="/campaigns/new" element={<NewCampaign />} />
           <Route path="/campaigns/:id" element={<Campaign />} />
+          <Route path="/skills" element={<Skills />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>

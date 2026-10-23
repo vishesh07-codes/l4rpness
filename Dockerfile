@@ -26,7 +26,9 @@ RUN if [ "$TOOLSET" = "custom" ]; then \
 
 COPY app/ ./app/
 COPY prompts/ ./prompts/
+COPY skills/ ./skills/
 COPY config.toml ./config.toml
+COPY AGENTS.md ./AGENTS.md
 COPY --from=web /web/dist ./web/dist
 RUN mkdir -p /app/data && chown -R app:app /app/data
 

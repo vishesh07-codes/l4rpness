@@ -49,6 +49,17 @@ export type Part =
   | { type: "content"; text: string }
   | ({ type: "tool" } & ToolCall)
 
+export type Skill = {
+  name: string
+  description: string
+  source: "built-in" | "custom"
+}
+
+export type SkillDetail = Skill & {
+  body: string
+  files: string[]
+}
+
 export type AppConfig = {
   models: string[]
   default_model: string
@@ -147,6 +158,20 @@ export const api = {
     req<{ running: boolean; parts: Part[]; pending: string | null }>(
       `/api/campaigns/${id}/live`
     ),
+  listSkills: () => req<Skill[]>("/api/skills"),
+  getSkill: (name: string) => req<SkillDetail>(`/api/skills/${encodeURIComponent(name)}`),
+  createSkill: (skill: { name: string; description: string; body: string }) =>
+    req<{ name: string }>("/api/skills", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(skill),
+    }),
+  updateSkill: (name: string, skill: { description: string; body: string }) =>
+    req<{ name: string }>(`/api/skills/${encodeURIComponent(name)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(skill),
+    }),
   listMessages: (id: number) => req<Message[]>(`/api/campaigns/${id}/messages`),
   streamMessage,
   attachmentUrl: (id: number) => `/api/attachments/${id}`,
