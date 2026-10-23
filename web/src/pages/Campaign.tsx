@@ -32,6 +32,9 @@ import {
   api,
   type Attachment,
   type Campaign as CampaignData,
+  type GeneratorInfo,
+  type GeneratorMessage,
+  type Hypothesis,
   type Message,
   type Part,
   type ToolCall,
@@ -136,8 +139,15 @@ export function Campaign() {
   const [hasEarlier, setHasEarlier] = useState(false)
   const [windowSize, setWindowSize] = useState(PAGE_SIZE)
   const [loadingEarlier, setLoadingEarlier] = useState(false)
+  const [tab, setTab] = useState<"supervisor" | "generators" | "hypotheses">("supervisor")
+  const [generators, setGenerators] = useState<GeneratorInfo[]>([])
+  const [selectedGenerator, setSelectedGenerator] = useState<number | null>(null)
+  const [generatorMessages, setGeneratorMessages] = useState<GeneratorMessage[]>([])
+  const [hypotheses, setHypotheses] = useState<Hypothesis[]>([])
   const initialIds = useRef<Set<number> | null>(null)
   const lastIdRef = useRef(0)
+  const selectedGeneratorRef = useRef<number | null>(null)
+  const tabRef = useRef<"supervisor" | "generators" | "hypotheses">("supervisor")
   const viewportRef = useRef<HTMLElement | null>(null)
   const fileInput = useRef<HTMLInputElement>(null)
 
@@ -147,8 +157,10 @@ export function Campaign() {
       api.getCampaign(campaignId),
       api.listMessagesPage(campaignId, { limit: PAGE_SIZE }),
       api.config(),
+      api.listGenerators(campaignId),
+      api.listHypotheses(campaignId),
     ])
-      .then(([c, page, cfg]) => {
+      .then(([c, page, cfg, gens, hypos]) => {
         setCampaign(c)
         partsCache.clear()
         setMessages(page.messages)
@@ -158,10 +170,21 @@ export function Campaign() {
           ? page.messages[page.messages.length - 1].id
           : 0
         setConfigured(cfg.agent_configured)
+        setGenerators(gens)
+        setHypotheses(hypos)
+        setSelectedGenerator((prev) => prev ?? (gens[0]?.id ?? null))
         initialIds.current = new Set(page.messages.map((message) => message.id))
       })
       .catch((e: Error) => setError(e.message))
   }, [campaignId])
+
+  useEffect(() => {
+    selectedGeneratorRef.current = selectedGenerator
+  }, [selectedGenerator])
+
+  useEffect(() => {
+    tabRef.current = tab
+  }, [tab])
 
   // incremental sync: fetch only what is new (plus a small overlap so the
   // in-flight assistant row is replaced by its final version)
@@ -205,6 +228,55 @@ export function Campaign() {
       setLoadingEarlier(false)
     }
   }
+
+  async function loadGenerators() {
+    try {
+      setGenerators(await api.listGenerators(campaignId))
+    } catch {
+      // the next refresh retries
+    }
+  }
+
+  async function loadHypotheses() {
+    try {
+      setHypotheses(await api.listHypotheses(campaignId))
+    } catch {
+      // the next refresh retries
+    }
+  }
+
+  async function openGenerator(generatorId: number) {
+    setSelectedGenerator(generatorId)
+    selectedGeneratorRef.current = generatorId
+    setGeneratorMessages([])
+    try {
+      setGeneratorMessages(await api.getGeneratorMessages(generatorId))
+    } catch {
+      // leave it empty; the next refresh retries
+    }
+  }
+
+  useEffect(() => {
+    if (tab !== "generators") return
+    void loadGenerators()
+    const selected = selectedGeneratorRef.current
+    if (selected !== null) {
+      void api
+        .getGeneratorMessages(selected)
+        .then(setGeneratorMessages)
+        .catch(() => {})
+    }
+  }, [tab, campaignId])
+
+  // backstop for missed stream events while the worker tabs are open
+  useEffect(() => {
+    if (!campaign?.running || (tab !== "generators" && tab !== "hypotheses")) return
+    const timer = setInterval(() => {
+      if (tabRef.current === "generators") void loadGenerators()
+      else void loadHypotheses()
+    }, 4000)
+    return () => clearInterval(timer)
+  }, [tab, campaign?.running, campaignId])
 
   // Escape stops the agent — the visible path is the stop button, this is the
   // one people reach for
@@ -330,6 +402,16 @@ export function Campaign() {
           : s
       )
     )
+    on("generator", (d) => {
+      void loadGenerators()
+      if (d.message) void loadHypotheses()
+      if (d.message && selectedGeneratorRef.current === d.generator_id) {
+        const message = d.message as GeneratorMessage
+        setGeneratorMessages((prev) =>
+          prev.some((m) => m.id === message.id) ? prev : [...prev, message]
+        )
+      }
+    })
     on("chain_end", () => {
       setStream({ parts: [], pendingTool: null })
       void refresh()
@@ -494,6 +576,19 @@ export function Campaign() {
 
   const attachments = campaign.attachments ?? []
   const targetFiles = attachments.filter((a) => a.field === "target")
+  const tabs = [
+    { key: "supervisor" as const, label: "Supervisor", count: 0 },
+    {
+      key: "generators" as const,
+      label: "Generators",
+      count: generators.filter((g) => g.status === "running").length,
+    },
+    {
+      key: "hypotheses" as const,
+      label: "Hypotheses",
+      count: hypotheses.filter((h) => h.status === "new" || h.status === "working").length,
+    },
+  ]
   const usageIn = liveUsage?.in ?? campaign.usage_in ?? 0
   const usageOut = liveUsage?.out ?? campaign.usage_out ?? 0
   const usageCtx = liveUsage?.ctx ?? campaign.last_prompt_tokens ?? 0
@@ -590,13 +685,39 @@ export function Campaign() {
           </div>
         </header>
 
-        <ContextPanel
-          campaign={campaign}
-          attachments={attachments}
-          defaultOpen={messages.length === 0 && !stream}
-        />
+        <div className="flex items-center gap-1">
+          {tabs.map((entry) => (
+            <button
+              key={entry.key}
+              type="button"
+              onClick={() => setTab(entry.key)}
+              className={cn(
+                "flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[12px] font-medium transition-colors",
+                tab === entry.key
+                  ? "bg-inset text-ink"
+                  : "text-ink-3 hover:bg-hover hover:text-ink"
+              )}
+            >
+              {entry.label}
+              {entry.count > 0 && (
+                <span className="rounded-full bg-accent-tint px-1.5 font-mono text-[10px] text-accent-ink">
+                  {entry.count}
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+
+        {tab === "supervisor" && (
+          <ContextPanel
+            campaign={campaign}
+            attachments={attachments}
+            defaultOpen={messages.length === 0 && !stream}
+          />
+        )}
       </div>
 
+      {tab === "supervisor" && (
       <section className="relative flex min-h-0 flex-1 flex-col">
         <MessageScroller
           className="min-h-0 flex-1"
@@ -765,6 +886,109 @@ export function Campaign() {
           />
         </div>
       </section>
+      )}
+
+      {tab === "generators" && (
+        <div className="flex min-h-0 flex-1 gap-3 max-md:flex-col">
+          <div className="w-72 shrink-0 overflow-y-auto rounded-[12px] bg-surface p-1 shadow-hairline max-md:max-h-44">
+            {generators.length === 0 ? (
+              <p className="p-3 text-[12px] text-ink-3">
+                No hypothesis workers yet. The supervisor spawns them when the backlog runs dry.
+              </p>
+            ) : (
+              generators.map((generator) => (
+                <button
+                  key={generator.id}
+                  type="button"
+                  onClick={() => openGenerator(generator.id)}
+                  className={cn(
+                    "flex w-full flex-col gap-1 rounded-md px-2.5 py-2 text-left transition-colors",
+                    selectedGenerator === generator.id ? "bg-inset" : "hover:bg-hover"
+                  )}
+                >
+                  <span className="flex items-center gap-2">
+                    <span className="font-mono text-[11px] text-ink-3">#{generator.id}</span>
+                    <span className="min-w-0 flex-1 truncate text-[12px] font-medium">
+                      {generator.focus || "general"}
+                    </span>
+                    <StatusBadge status={generator.status} />
+                  </span>
+                  <span className="flex items-center gap-2 text-[11px] text-ink-3">
+                    <span className="shrink-0">{generator.hypothesis_count} hypotheses</span>
+                    {generator.last_snippet && (
+                      <span className="min-w-0 flex-1 truncate">{generator.last_snippet}</span>
+                    )}
+                  </span>
+                </button>
+              ))
+            )}
+          </div>
+
+          <div className="min-w-0 flex-1 overflow-y-auto rounded-[12px] bg-surface p-3 shadow-hairline">
+            {selectedGenerator === null ? (
+              <p className="text-[12px] text-ink-3">Pick a worker on the left.</p>
+            ) : generatorMessages.length === 0 ? (
+              <LoadingState label="Loading worker" />
+            ) : (
+              <div className="flex flex-col gap-3">
+                {generatorMessages.map((message) => (
+                  <div key={message.id} className="border-l-2 border-line pl-3">
+                    <AssistantMessage parts={message.parts} />
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {tab === "hypotheses" && (
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          {hypotheses.length === 0 ? (
+            <p className="text-[12px] text-ink-3">
+              No hypotheses yet. They appear here as the generators file them.
+            </p>
+          ) : (
+            <ul className="flex flex-col gap-2">
+              {hypotheses.map((hypothesis) => (
+                <li
+                  key={hypothesis.id}
+                  className="rounded-[12px] bg-surface px-3.5 py-3 shadow-hairline"
+                >
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-mono text-[11px] text-ink-3">#{hypothesis.id}</span>
+                    <StatusBadge status={hypothesis.status} />
+                    {hypothesis.vuln_class && (
+                      <span className="rounded-full border border-line px-1.5 font-mono text-[10px] text-ink-3">
+                        {hypothesis.vuln_class}
+                      </span>
+                    )}
+                    {hypothesis.generator_id != null && (
+                      <span className="text-[11px] text-ink-3">
+                        worker #{hypothesis.generator_id}
+                      </span>
+                    )}
+                  </div>
+                  <p className="mt-1.5 text-[13px] font-medium">{hypothesis.title}</p>
+                  {hypothesis.angle && (
+                    <p className="mt-0.5 text-[12px] text-ink-2">{hypothesis.angle}</p>
+                  )}
+                  {hypothesis.rationale && (
+                    <p className="mt-1 text-[12px] leading-relaxed text-ink-3">
+                      {hypothesis.rationale}
+                    </p>
+                  )}
+                  {hypothesis.result && (
+                    <p className="mt-1.5 text-[12px] text-ink-2">
+                      result: {hypothesis.result}
+                    </p>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
 
       <ConfirmDialog
         open={confirmDelete}

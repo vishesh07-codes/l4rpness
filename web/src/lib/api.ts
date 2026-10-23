@@ -68,6 +68,39 @@ export type Part =
   | { type: "notice"; text: string }
   | ({ type: "tool" } & ToolCall)
 
+export type GeneratorInfo = {
+  id: number
+  campaign_id: number
+  focus: string
+  status: string
+  hypothesis_count: number
+  last_snippet?: string
+  created_at: string
+  updated_at: string
+}
+
+export type GeneratorMessage = {
+  id: number
+  generator_id: number
+  content: string
+  parts: Part[]
+  created_at: string
+}
+
+export type Hypothesis = {
+  id: number
+  campaign_id: number
+  generator_id?: number | null
+  title: string
+  angle: string
+  vuln_class: string
+  rationale: string
+  result: string
+  status: string
+  created_at: string
+  updated_at: string
+}
+
 export type Skill = {
   name: string
   description: string
@@ -228,6 +261,12 @@ export const api = {
       body: JSON.stringify(servers),
     }),
   listMessages: (id: number) => req<Message[]>(`/api/campaigns/${id}/messages`),
+  listGenerators: (id: number) => req<GeneratorInfo[]>(`/api/campaigns/${id}/generators`),
+  getGeneratorMessages: (generatorId: number, after?: number) =>
+    req<GeneratorMessage[]>(
+      `/api/generators/${generatorId}/messages${after ? `?after=${after}` : ""}`
+    ),
+  listHypotheses: (id: number) => req<Hypothesis[]>(`/api/campaigns/${id}/hypotheses`),
   listMessagesPage: async (
     id: number,
     options: { limit?: number; after?: number; before?: number } = {}
