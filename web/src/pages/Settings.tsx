@@ -296,14 +296,16 @@ export function Settings() {
   // provider key rows, the "Default provider" options and the host state
   async function refreshAfterEndpoints(next: EndpointsState) {
     setEndpoints(next)
-    const [providers, config, hostCfg] = await Promise.all([
+    const [providers, config, hostCfg, hostEnv] = await Promise.all([
       api.settingsProviders(),
       api.settingsConfig(),
       api.hostConfig(),
+      api.hostEnv(),
     ])
     setRows(providers)
     setRuntime(config)
     setHostConfig(hostCfg)
+    setHost(hostEnv)
   }
 
   return (
@@ -330,7 +332,9 @@ export function Settings() {
         />
       )}
 
-      {endpoints && <EndpointSettings state={endpoints} onChanged={refreshAfterEndpoints} />}
+      {endpoints && (
+        <EndpointSettings state={endpoints} host={host} onChanged={refreshAfterEndpoints} />
+      )}
 
       {runtime && (
         <RuntimeSettings
@@ -608,24 +612,72 @@ type EndpointForm = {
   name: string
   base_url: string
   api_key_env: string
+  api_key: string
   thinking: boolean
 }
 
-const EMPTY_ENDPOINT: EndpointForm = { name: "", base_url: "", api_key_env: "", thinking: false }
+const EMPTY_ENDPOINT: EndpointForm = {
+  name: "",
+  base_url: "",
+  api_key_env: "",
+  api_key: "",
+  thinking: false,
+}
+
+// `myrouter` -> `MYROUTER_API_KEY`; saves people from inventing var names
+function deriveKeyVar(name: string) {
+  const slug = name
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+  return slug ? `${slug}_API_KEY` : ""
+}
+
+const ENDPOINT_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_-]*$/
+const KEY_VAR_RE = /^[A-Z][A-Z0-9_]*$/
+
+function endpointNameError(value: string) {
+  const text = value.trim()
+  if (!text) return "name is required"
+  if (!ENDPOINT_NAME_RE.test(text))
+    return "letters, digits, '-' and '_' only (must start with a letter or digit)"
+  return ""
+}
+
+function endpointUrlError(value: string) {
+  const text = value.trim()
+  if (!text) return "base URL is required"
+  if (!/^https?:\/\//.test(text)) return "must start with http:// or https://"
+  return ""
+}
+
+function endpointKeyVarError(value: string) {
+  const text = value.trim()
+  if (!text) return "key variable name is required"
+  if (!KEY_VAR_RE.test(text)) return "upper-case letters, digits and '_' only, e.g. NEWROUTER_API_KEY"
+  return ""
+}
+
+const FIELD_ERROR = "mt-1 text-[11px] text-destructive"
 
 // Model endpoints, straight from config.toml's `llm.providers` tables. Each
 // edit is written through to the host file immediately, and the rest of the
 // page (provider keys, default-provider options) refreshes from onChanged.
 function EndpointSettings({
   state,
+  host,
   onChanged,
 }: {
   state: EndpointsState
+  host: HostEnvState | null
   onChanged: (next: EndpointsState) => Promise<void>
 }) {
   // "" opens the new-endpoint form; an endpoint name edits that row
   const [editing, setEditing] = useState<string | null>(null)
   const [form, setForm] = useState<EndpointForm>(EMPTY_ENDPOINT)
+  const [envTouched, setEnvTouched] = useState(false)
+  const [submitted, setSubmitted] = useState(false)
   const [busy, setBusy] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
 
@@ -643,9 +695,23 @@ function EndpointSettings({
     }
   }
 
+  // typing the name fills the key variable until someone edits it by hand
+  function patchForm(patch: Partial<EndpointForm>) {
+    if (patch.api_key_env !== undefined) setEnvTouched(true)
+    setForm((prev) => {
+      const next = { ...prev, ...patch }
+      if (patch.name !== undefined && !envTouched) {
+        next.api_key_env = deriveKeyVar(patch.name)
+      }
+      return next
+    })
+  }
+
   function startNew() {
     setEditing("")
-    setForm(EMPTY_ENDPOINT)
+    setForm({ ...EMPTY_ENDPOINT })
+    setEnvTouched(false)
+    setSubmitted(false)
   }
 
   function startEdit(endpoint: Endpoint) {
@@ -654,15 +720,57 @@ function EndpointSettings({
       name: endpoint.name,
       base_url: endpoint.base_url,
       api_key_env: endpoint.api_key_env,
+      api_key: "",
       thinking: endpoint.thinking,
     })
+    setEnvTouched(true)
+    setSubmitted(false)
+  }
+
+  function cancel() {
+    setEditing(null)
+    setSubmitted(false)
   }
 
   function save() {
+    if (
+      endpointNameError(form.name) ||
+      endpointUrlError(form.base_url) ||
+      endpointKeyVarError(form.api_key_env)
+    ) {
+      setSubmitted(true)
+      return
+    }
+    const key = form.api_key.trim()
+    const keyVar = form.api_key_env.trim()
     void run(
-      () => api.saveEndpoint(form),
+      async () => {
+        const next = await api.saveEndpoint({
+          name: form.name.trim(),
+          base_url: form.base_url.trim(),
+          api_key_env: keyVar,
+          thinking: form.thinking,
+        })
+        if (key) {
+          // same store as the Provider keys section: the overlay now, the
+          // host .env too when it is writable
+          await api.saveProviderKeys({ [keyVar]: key })
+          if (host?.writable) {
+            try {
+              await api.pushHostEnv({ [keyVar]: key })
+            } catch (e) {
+              toast.warning(
+                `Key saved in Settings, but the host .env update failed: ${(e as Error).message}`
+              )
+            }
+          }
+        }
+        return next
+      },
       () => {
-        toast.success(`Saved endpoint ${form.name}`)
+        toast.success(
+          key ? `Saved endpoint ${form.name} and its API key` : `Saved endpoint ${form.name}`
+        )
         setEditing(null)
       }
     )
@@ -698,9 +806,10 @@ function EndpointSettings({
           newEndpoint
           form={form}
           busy={busy}
-          onChange={setForm}
+          submitted={submitted}
+          onChange={patchForm}
           onSave={save}
-          onCancel={() => setEditing(null)}
+          onCancel={cancel}
         />
       )}
 
@@ -715,9 +824,11 @@ function EndpointSettings({
               id={`endpoint-${endpoint.name}`}
               form={form}
               busy={busy}
-              onChange={setForm}
+              submitted={submitted}
+              keyConfigured={endpoint.key_configured}
+              onChange={patchForm}
               onSave={save}
-              onCancel={() => setEditing(null)}
+              onCancel={cancel}
             />
           ) : (
             <div key={endpoint.name} className="rounded-[12px] bg-inset px-3 py-2.5">
@@ -803,6 +914,8 @@ function EndpointFormRow({
   id,
   form,
   newEndpoint = false,
+  keyConfigured = false,
+  submitted,
   busy,
   onChange,
   onSave,
@@ -811,11 +924,16 @@ function EndpointFormRow({
   id: string
   form: EndpointForm
   newEndpoint?: boolean
+  keyConfigured?: boolean
+  submitted: boolean
   busy: boolean
-  onChange: (form: EndpointForm) => void
+  onChange: (patch: Partial<EndpointForm>) => void
   onSave: () => void
   onCancel: () => void
 }) {
+  const nameError = endpointNameError(form.name)
+  const urlError = endpointUrlError(form.base_url)
+  const keyVarError = endpointKeyVarError(form.api_key_env)
   return (
     <div className="mt-3 rounded-[12px] bg-inset px-3 py-3">
       <div className="grid gap-3 sm:grid-cols-2">
@@ -827,10 +945,12 @@ function EndpointFormRow({
             <Input
               id={`${id}-name`}
               value={form.name}
-              onChange={(e) => onChange({ ...form, name: e.target.value })}
-              placeholder="9router"
+              onChange={(e) => onChange({ name: e.target.value })}
+              placeholder="myrouter"
               className="font-mono text-[13px]"
+              autoFocus
             />
+            {submitted && nameError && <p className={FIELD_ERROR}>{nameError}</p>}
           </div>
         )}
         <div className="flex min-w-0 flex-col gap-1.5">
@@ -840,28 +960,52 @@ function EndpointFormRow({
           <Input
             id={`${id}-url`}
             value={form.base_url}
-            onChange={(e) => onChange({ ...form, base_url: e.target.value })}
+            onChange={(e) => onChange({ base_url: e.target.value })}
             placeholder="https://api.example.com/v1"
             className="font-mono text-[13px]"
           />
+          {submitted && urlError && <p className={FIELD_ERROR}>{urlError}</p>}
         </div>
         <div className="flex min-w-0 flex-col gap-1.5">
           <Label htmlFor={`${id}-key`} className="text-[12px]">
-            API key env var
+            Key variable name
           </Label>
           <Input
             id={`${id}-key`}
             value={form.api_key_env}
-            onChange={(e) => onChange({ ...form, api_key_env: e.target.value })}
-            placeholder="EXAMPLE_API_KEY"
+            onChange={(e) => onChange({ api_key_env: e.target.value })}
+            placeholder="MYROUTER_API_KEY"
             className="font-mono text-[13px]"
           />
+          <p className="text-[11px] text-ink-3">
+            Auto-filled from the name; this variable holds the key.
+          </p>
+          {submitted && keyVarError && <p className={FIELD_ERROR}>{keyVarError}</p>}
         </div>
-        <label className="flex items-center gap-2 self-end pb-2 text-[13px]">
+        <div className="flex min-w-0 flex-col gap-1.5">
+          <Label htmlFor={`${id}-apikey`} className="text-[12px]">
+            API key (optional)
+          </Label>
+          <Input
+            id={`${id}-apikey`}
+            type="password"
+            autoComplete="new-password"
+            value={form.api_key}
+            onChange={(e) => onChange({ api_key: e.target.value })}
+            placeholder={
+              keyConfigured ? "•••• already set — type to replace" : "paste the key, or set it later"
+            }
+            className="font-mono text-[13px]"
+          />
+          <p className="text-[11px] text-ink-3">
+            Stored with your provider keys; you can also set it later in Provider keys.
+          </p>
+        </div>
+        <label className="flex items-center gap-2 self-start text-[13px] sm:self-end sm:pb-2">
           <input
             type="checkbox"
             checked={form.thinking}
-            onChange={(e) => onChange({ ...form, thinking: e.target.checked })}
+            onChange={(e) => onChange({ thinking: e.target.checked })}
           />
           thinking mode
         </label>

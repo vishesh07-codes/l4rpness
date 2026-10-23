@@ -14,7 +14,7 @@ def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "DATA_DIR", tmp_path / "data")
     # forget whatever the real process env held so each test starts clean
     monkeypatch.setattr(config, "_ENV_BASELINE", {})
-    for name in KEY_VARS:
+    for name in settings.allowed_vars() | set(KEY_VARS):
         monkeypatch.delenv(name, raising=False)
     config.reload_keys()
     yield tmp_path / "data"
@@ -465,6 +465,8 @@ def test_save_endpoint_validation(host_config):
         settings.save_endpoint({"name": "bad name", "base_url": "http://x", "api_key_env": "K"})
     with pytest.raises(ValueError):
         settings.save_endpoint({"name": "ok", "base_url": "ftp://x", "api_key_env": "K"})
+    with pytest.raises(ValueError):
+        settings.save_endpoint({"name": "ok", "base_url": "http://x", "api_key_env": ""})
     with pytest.raises(ValueError):
         settings.save_endpoint({"name": "ok", "base_url": "http://x", "api_key_env": "lower"})
     assert set(config.PROVIDERS) == {"deepseek", "9router"}

@@ -959,7 +959,9 @@ def _endpoint_values(values: dict) -> dict:
         raise ValueError("base URL must start with http:// or https://")
     api_key_env = str(values.get("api_key_env", "")).strip()
     if not _VAR_RE.match(api_key_env):
-        raise ValueError("API key env var must look like AN_ENV_VAR")
+        raise ValueError(
+            "key variable name must be upper-case letters, digits and '_' (e.g. NEWROUTER_API_KEY)"
+        )
     return {
         "name": name,
         "base_url": base_url,
