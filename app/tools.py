@@ -2,6 +2,7 @@ import asyncio
 import codecs
 import contextlib
 import json
+import logging
 import os
 import re
 import signal
@@ -10,6 +11,8 @@ from itertools import islice
 from pathlib import Path
 
 from . import config, db, mcp, skills
+
+log = logging.getLogger("l4rpness")
 
 CORE_SCHEMAS = [
     {
@@ -270,18 +273,40 @@ SUPERVISOR_TOOLS = {
 GENERATOR_TOOLS = {"hypothesis_generate", "generator_done"}
 
 
-def schemas_for(kind: str | None = None) -> list[dict]:
+def _extract_mode(mode_or_campaign) -> str | None:
+    if mode_or_campaign is None or isinstance(mode_or_campaign, str):
+        return mode_or_campaign
+    try:
+        return mode_or_campaign["mode"] or None
+    except Exception:
+        pass
+    try:
+        return mode_or_campaign.get("mode") or None
+    except Exception:
+        return None
+
+
+def schemas_for(kind: str | None = None, mode: str | dict | None = None) -> list[dict]:
     schemas = list(CORE_SCHEMAS)
     if kind == "supervisor":
-        schemas += SUPERVISOR_SCHEMAS
+        # Fail closed: unknown/missing mode hides the tool, matching the
+        # prompt default of continuous. Only goal campaigns offer it.
+        resolved = _extract_mode(mode)
+        if resolved == "goal":
+            schemas += SUPERVISOR_SCHEMAS
+        else:
+            schemas += [s for s in SUPERVISOR_SCHEMAS if s["function"]["name"] != "complete_engagement"]
     elif kind == "generator":
         schemas += GENERATOR_SCHEMAS
     return schemas + mcp.schemas()
 
 
-def allowed_for(kind: str | None = None) -> set[str] | None:
+def allowed_for(kind: str | None = None, mode: str | dict | None = None) -> set[str] | None:
+    resolved = _extract_mode(mode)
     if kind == "supervisor":
-        return CORE_TOOLS | SUPERVISOR_TOOLS
+        if resolved == "goal":
+            return CORE_TOOLS | SUPERVISOR_TOOLS
+        return (CORE_TOOLS | SUPERVISOR_TOOLS) - {"complete_engagement"}
     if kind == "generator":
         return CORE_TOOLS | GENERATOR_TOOLS
     return None
@@ -769,6 +794,20 @@ async def generator_status(args: dict, campaign_id: int, stop=None) -> tuple[str
 
 async def complete_engagement(args: dict, campaign_id: int, stop=None) -> tuple[str, bool]:
     summary = _str_arg(args, "summary") or "objective achieved"
+    try:
+        with db.db() as conn:
+            row = conn.execute("SELECT mode FROM campaigns WHERE id = ?", (campaign_id,)).fetchone()
+    except Exception:
+        log.exception("complete_engagement: mode lookup failed for campaign %d", campaign_id)
+        return "error: could not verify campaign mode", False
+    if row is None:
+        return "error: campaign not found", False
+    try:
+        mode = row["mode"] or "continuous"
+    except Exception:
+        mode = "continuous"
+    if mode != "goal":
+        return "error: complete_engagement is only available in until-goal campaigns", False
     return f"engagement marked complete: {summary}", True
 
 

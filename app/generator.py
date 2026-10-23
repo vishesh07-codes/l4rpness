@@ -99,7 +99,7 @@ def _store_message(generator_id: int, content: str, parts: list) -> dict:
 
 
 def _system_prompt(campaign, attachments, focus: str) -> str:
-    base = agent.build_prompt(campaign, attachments)
+    base = agent.build_prompt(campaign, attachments, include_run_mode=False)
     try:
         extra = PROMPT_FILE.read_text()
     except OSError:

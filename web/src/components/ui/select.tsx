@@ -63,8 +63,15 @@ function SelectContent({
   children,
   position = "item-aligned",
   align = "center",
+  header,
+  scrollable,
   ...props
-}: React.ComponentProps<typeof SelectPrimitive.Content>) {
+}: React.ComponentProps<typeof SelectPrimitive.Content> & {
+  header?: React.ReactNode
+  /** Long lists only: edge fade that signals scrollability. Short lists
+      skip it so their edge text never renders faded for no benefit. */
+  scrollable?: boolean
+}) {
   return (
     <SelectPrimitive.Portal>
       <SelectPrimitive.Content
@@ -76,11 +83,16 @@ function SelectContent({
         {...props}
       >
         <SelectScrollUpButton />
+        {header}
         <SelectPrimitive.Viewport
           data-position={position}
           className={cn(
-            "data-[position=popper]:h-(--radix-select-trigger-height) data-[position=popper]:w-full data-[position=popper]:min-w-(--radix-select-trigger-width)",
-            position === "popper" && ""
+            // dedicated scroll region: capped height with a thin thumb in
+            // our tokens (see .select-viewport-scroll in index.css); the
+            // edge fade only joins on long lists
+            "select-viewport-scroll max-h-60",
+            scrollable && "scroll-fade-y",
+            "data-[position=popper]:h-(--radix-select-trigger-height) data-[position=popper]:w-full data-[position=popper]:min-w-(--radix-select-trigger-width)"
           )}
         >
           {children}
@@ -149,7 +161,7 @@ function SelectScrollUpButton({
     <SelectPrimitive.ScrollUpButton
       data-slot="select-scroll-up-button"
       className={cn(
-        "z-10 flex cursor-default items-center justify-center bg-popover py-1 [&_svg:not([class*='size-'])]:size-4",
+        "z-10 flex cursor-default items-center justify-center bg-popover py-1 text-ink-3 [&_svg:not([class*='size-'])]:size-3.5",
         className
       )}
       {...props}
@@ -168,7 +180,7 @@ function SelectScrollDownButton({
     <SelectPrimitive.ScrollDownButton
       data-slot="select-scroll-down-button"
       className={cn(
-        "z-10 flex cursor-default items-center justify-center bg-popover py-1 [&_svg:not([class*='size-'])]:size-4",
+        "z-10 flex cursor-default items-center justify-center bg-popover py-1 text-ink-3 [&_svg:not([class*='size-'])]:size-3.5",
         className
       )}
       {...props}

@@ -1,5 +1,7 @@
 services:
   l4rpness:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     build:
       context: .
       args:
@@ -7,6 +9,33 @@ services:
     image: l4rpness:local
     ports:
       - "127.0.0.1:4517:4517"
+    # root inside the container (runtime package installs, raw-socket tools),
+    # pinned here so image defaults cannot silently change it
+    user: "0:0"
+    # escape hardening: the container never gains privileges, cannot mount or
+    # load modules (no SYS_ADMIN/SYS_MODULE) and keeps only the capabilities a
+    # pentest toolbox needs. The docker socket is never mounted.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - AUDIT_WRITE
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - FSETID
+      - KILL
+      - MKNOD
+      - NET_ADMIN
+      - NET_BIND_SERVICE
+      - NET_RAW
+      - SETFCAP
+      - SETGID
+      - SETPCAP
+      - SETUID
+      - SYS_CHROOT
+      - SYS_PTRACE
     env_file:
       - path: .env
         required: false

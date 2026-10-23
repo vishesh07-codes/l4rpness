@@ -923,7 +923,9 @@ export function Campaign() {
                 variant="ghost"
                 size="icon-xs"
                 label="Stop the agent"
-                description="Stop the 24x7 loop"
+                description={
+                  campaign.mode === "goal" ? "Stop the until-goal run" : "Stop the 24x7 loop"
+                }
                 onClick={stop}
                 disabled={stopping}
                 className="text-ink-3 hover:text-destructive"
@@ -936,7 +938,11 @@ export function Campaign() {
                 variant="ghost"
                 size="icon-xs"
                 label="Resume the agent"
-                description="Restart the 24x7 loop from where it left off"
+                description={
+                  campaign.mode === "goal"
+                    ? "Restart the until-goal run from where it left off"
+                    : "Restart the 24x7 loop from where it left off"
+                }
                 onClick={resume}
                 disabled={resuming || !configured}
                 className="text-ink-3 hover:text-ink"

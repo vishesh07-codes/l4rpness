@@ -1,7 +1,7 @@
 "use client";
 // www.agentui.pro/components/agents/prompt-input
 
-import { ArrowUp, FileText, Plus, Square } from "@/components/icons";
+import { ArrowUp, FileText, Plus, Search, Square } from "@/components/icons";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
   type ChangeEvent,
@@ -29,6 +29,7 @@ import {
   SelectItem,
   SelectTrigger,
 } from "@/components/motion/select";
+import { MODEL_FILTER_THRESHOLD } from "@/components/ui/model-select";
 import { SPRING_SWAP } from "@/lib/ease";
 import { cn } from "@/lib/utils";
 
@@ -104,6 +105,9 @@ export function PromptInput({
     defaultModel ?? models[0]?.value,
   );
   const [actionsOpen, setActionsOpen] = useState(false);
+  const [modelOpen, setModelOpen] = useState(false);
+  const [modelQuery, setModelQuery] = useState("");
+  const modelFilterRef = useRef<HTMLInputElement>(null);
   const mentionStart = useRef(-1);
   const [mentionQuery, setMentionQuery] = useState("");
   const [mentionIndex, setMentionIndex] = useState(0);
@@ -113,6 +117,19 @@ export function PromptInput({
   const currentModel = models.find(
     (option) => option.value === currentModelValue,
   );
+  const modelFilterable = models.length > MODEL_FILTER_THRESHOLD;
+  const modelMatches = useMemo(() => {
+    const q = modelQuery.trim().toLowerCase();
+    if (!q) return models;
+    // NOTE: non-matches unmount here (unlike ModelSelect, which hides +
+    // disables). Safe only because this custom motion select has no
+    // focus-selected-item effect — Radix would steal filter focus on every
+    // keystroke if its collection churned. Do not "unify" without re-checking.
+    return models.filter((option) => {
+      if (option.value.toLowerCase().includes(q)) return true;
+      return typeof option.label === "string" && option.label.toLowerCase().includes(q);
+    });
+  }, [models, modelQuery]);
   const canSubmit = Boolean(currentValue.trim()) && !disabled && !loading;
 
   const resizeTextarea = useCallback(() => {
@@ -377,6 +394,17 @@ export function PromptInput({
             onValueChange={setModel}
             disabled={disabled || loading}
             className="min-w-0"
+            open={modelOpen}
+            onOpenChange={(open) => {
+              setModelOpen(open);
+              if (!open) {
+                setModelQuery("");
+                return;
+              }
+              // long catalog: land in the filter so typing narrows it at once
+              if (modelFilterable)
+                requestAnimationFrame(() => modelFilterRef.current?.focus());
+            }}
           >
             <SelectTrigger className="h-8 w-auto max-w-52 rounded-xl border-0 bg-transparent px-2 py-0 text-xs hover:bg-muted focus-visible:ring-2">
               <span className="flex min-w-0 items-center gap-1.5">
@@ -390,8 +418,42 @@ export function PromptInput({
                 </span>
               </span>
             </SelectTrigger>
-            <SelectContent className="right-auto w-52 shadow-none">
-              {models.map((option) => (
+            <SelectContent
+              className="right-auto w-72 shadow-none"
+              header={
+                modelFilterable ? (
+                  <div className="border-b border-line px-1 pt-1 pb-1.5">
+                    <div className="relative">
+                      <Search className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-ink-3" />
+                      <input
+                        ref={modelFilterRef}
+                        value={modelQuery}
+                        onChange={(e) => setModelQuery(e.target.value)}
+                        // this panel lives inline inside the prompt <form>:
+                        // Enter must not implicitly submit it. ArrowDown
+                        // drops into the list, combobox-style.
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") e.preventDefault();
+                          if (e.key === "ArrowDown") {
+                            e.preventDefault();
+                            const listbox = modelFilterRef.current?.closest(
+                              '[role="listbox"]',
+                            );
+                            listbox
+                              ?.querySelector<HTMLElement>('[role="option"]:not([disabled])')
+                              ?.focus({ preventScroll: true });
+                          }
+                        }}
+                        placeholder="Filter models…"
+                        aria-label="Filter models"
+                        className="h-7 w-full rounded-md bg-inset pr-2 pl-7 font-mono text-xs outline-none placeholder:text-ink-3 focus-visible:ring-2 focus-visible:ring-ring/40"
+                      />
+                    </div>
+                  </div>
+                ) : undefined
+              }
+            >
+              {modelMatches.map((option) => (
                 <SelectItem
                   key={option.value}
                   value={option.value}
@@ -410,6 +472,11 @@ export function PromptInput({
                   </span>
                 </SelectItem>
               ))}
+              {modelMatches.length === 0 && (
+                <p className="px-2 py-4 text-center text-xs text-ink-3">
+                  No models match “{modelQuery.trim()}”
+                </p>
+              )}
             </SelectContent>
           </Select>
         ) : null}

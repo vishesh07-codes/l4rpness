@@ -62,7 +62,7 @@ async def models() -> list[str]:
     return _models
 
 
-def build_prompt(campaign, attachment_rows) -> str:
+def build_prompt(campaign, attachment_rows, include_run_mode: bool = True) -> str:
     sections = []
     for label, value in [
         ("Target", campaign["target"]),
@@ -73,6 +73,23 @@ def build_prompt(campaign, attachment_rows) -> str:
     ]:
         if value.strip():
             sections.append(f"{label}:\n{value.strip()}")
+
+    # generators share this brief but have their own lifecycle — telling them
+    # about complete_engagement would point at a tool their allow-list blocks
+    if include_run_mode:
+        mode = _campaign_mode(campaign) or "continuous"
+        if mode == "goal":
+            sections.append(
+                "Run mode: until goal — pursue the objective stated in Instructions/Description "
+                "to a concrete, evidence-backed result, then call complete_engagement once "
+                "with a one-line summary of what was achieved and where the evidence lives. "
+                "The tool is only available in this mode; a continuous campaign never completes."
+            )
+        else:
+            sections.append(
+                "Run mode: continuous (24x7) — keep testing until the operator stops you. "
+                "This campaign never completes; complete_engagement does not exist here."
+            )
 
     prompt = SYSTEM.substitute(
         campaign="\n\n".join(sections),
@@ -107,6 +124,10 @@ def _parse_args(raw: str) -> tuple[dict, str]:
             return {}, str(first)
 
 
+def _campaign_mode(campaign) -> str | None:
+    return tools._extract_mode(campaign)
+
+
 async def _step(client, campaign, messages, calls: list, tool_kind: str | None = None) -> AsyncIterator[tuple[str, Any]]:
     provider, model = split_model(campaign["model"])
     conf = config.PROVIDERS.get(provider, {})
@@ -119,7 +140,7 @@ async def _step(client, campaign, messages, calls: list, tool_kind: str | None =
     request: dict = dict(
         model=model,
         messages=cast(Any, messages),
-        tools=cast(Any, tools.schemas_for(tool_kind)),
+        tools=cast(Any, tools.schemas_for(tool_kind, _campaign_mode(campaign))),
         stream=True,
         temperature=config.TEMPERATURE,
         **extra,
@@ -275,7 +296,7 @@ async def run(campaign, attachment_rows, history, campaign_id, stop=None, on_too
                         campaign_id,
                         stop,
                         on_output=stream_chunk,
-                        allow=tools.allowed_for(tool_kind),
+                        allow=tools.allowed_for(tool_kind, _campaign_mode(campaign)),
                     )
             yield "tool_result", {"id": call["id"], "name": call["name"], "output": output, "ok": ok, "ms": ms}
             messages.append({"role": "tool", "tool_call_id": call["id"], "content": output})

@@ -17,9 +17,16 @@ Operating rules:
 - Keep confirmed findings in `FINDINGS.md` at the root of your work directory: one section per
   finding with severity/CVSS, the affected file and line, the real evidence, and the path to the
   runnable PoC. Update it the moment a finding is proven.
-- Never sit still. If a tool fails, try another way. If a target is unreachable, prove it and
-  move to the next surface. Idle turns are wasted turns.
+- Never sit still. If a tool fails, try another way. If a tool is missing, install it yourself:
+  the container is disposable and you have root (`apt-get`, `pip`, `npm`). If a target is
+  unreachable, prove it and move to the next surface. Idle turns are wasted turns.
 - Only report what tools actually returned. Never invent output or findings.
+- Scope version findings to the exact version tested or the version/tag pinned by the assessed
+  live consumer. Do not report an older unpatched release as a finding when the assessed version
+  has the fix; mention the older release only as historical context unless you prove that a live
+  consumer still uses it. A fix that exists only in a later release is not evidence that the
+  assessed release is vulnerable, and a patched successor does not by itself prove exploitation
+  of any consumer.
 
 File references:
 

@@ -71,7 +71,7 @@ The agent runtime is the next thing to build, and it is our own loop, no framewo
 
 The parts around the agents are deliberately not LLM driven. A small coordinator owns the agent tree, heartbeats, restarts and task assignment. If a supervisor dies it gets restarted from what is in the database. When a context gets too long it is summarized and the agent is reborn with a handoff, so nothing important lives only in a model's memory.
 
-Docker: multistage build where Node builds the frontend and Python runs the app. Runs as a non-root user, port 4517 bound to 127.0.0.1 only, all data in a named volume.
+Docker: multistage build where Node builds the frontend and Python runs the app. Runs as root inside a hardened container (see Container tools), port 4517 bound to 127.0.0.1 only, all data in a named volume.
 
 ## Running it
 
@@ -87,7 +87,7 @@ To wipe all campaigns, messages and uploads:
 
     docker compose down -v
 
-To get a shell inside the container (add `-u root` if you need root, or `-w /app/data/work/<id>` to land in a campaign work dir):
+To get a shell inside the container (you land as root; add `-w /app/data/work/<id>` to land in a campaign work dir):
 
     docker compose exec l4rpness bash
 
@@ -101,7 +101,9 @@ For a slim image without them:
 
     L4RP_TOOLSET=minimal docker compose up --build -d
 
-The app runs as the unprivileged `app` user, so nmap connect scans work but raw socket flags like `-sS` or `-O` need root.
+The container runs as root **inside** the container: the agent can install packages at runtime (`apt-get`, `pip`, `npm`) and raw-socket tools work (`nmap -sS`, `nmap -O`, `tcpdump`). `sudo` is installed and passwordless.
+
+Root is kept contained by the container boundary. `compose.yaml` pins `user: "0:0"`, drops all capabilities and adds back only what tooling needs (no `SYS_ADMIN`, no `SYS_MODULE`), sets `no-new-privileges`, keeps Docker's default seccomp profile, and mounts neither the Docker socket nor host paths beyond the project's config files. Private pid, network and mount namespaces mean root inside cannot see or reach the host. For an extra layer against kernel exploits, run the daemon with `userns-remap` or use rootless Docker (both are daemon-wide settings).
 
 ## Development
 

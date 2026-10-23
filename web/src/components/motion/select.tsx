@@ -275,9 +275,11 @@ export function SelectValue({ placeholder, className }: SelectValueProps) {
 export interface SelectContentProps {
   className?: string;
   children: ReactNode;
+  /** Pinned above the scroll region — e.g. a filter field. */
+  header?: ReactNode;
 }
 
-export function SelectContent({ className, children }: SelectContentProps) {
+export function SelectContent({ className, children, header }: SelectContentProps) {
   const ctx = useSelectContext("SelectContent");
   const innerRef = useRef<HTMLDivElement>(null);
   const [height, setHeight] = useState(0);
@@ -387,7 +389,12 @@ export function SelectContent({ className, children }: SelectContentProps) {
         animate={open ? "show" : "hidden"}
         className="p-1"
       >
-        {children}
+        {header}
+        {/* capped scroll region for long option lists — the height animation
+            above measures this capped height, so the panel stops growing */}
+        <div className="select-viewport-scroll max-h-60 overflow-y-auto">
+          {children}
+        </div>
       </motion.div>
     </motion.div>
   );

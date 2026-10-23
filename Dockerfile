@@ -6,10 +6,19 @@ COPY web/ ./
 RUN npm run build
 
 FROM python:3.13-slim
-ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
+ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 PIP_BREAK_SYSTEM_PACKAGES=1 PIP_ROOT_USER_ACTION=ignore
 WORKDIR /app
 
 RUN useradd -m -u 1000 app
+
+# passwordless sudo as a fallback for tools that insist on it; the container
+# itself runs as root (see the USER directive at the bottom)
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends sudo && \
+    rm -rf /var/lib/apt/lists/* && \
+    echo 'app ALL=(ALL:ALL) NOPASSWD:ALL' > /etc/sudoers.d/app && \
+    chmod 0440 /etc/sudoers.d/app && \
+    visudo -cf /etc/sudoers.d/app
 COPY requirements.txt .
 RUN pip install -r requirements.txt
 
@@ -51,7 +60,11 @@ COPY AGENTS.md ./AGENTS.md
 COPY --from=web /web/dist ./web/dist
 RUN mkdir -p /app/data && chown -R app:app /app/data
 
-USER app
+# Root inside the container: agents install packages at runtime and raw-socket
+# tooling (nmap -sS/-O, tcpdump) needs root. Escape hardening lives in
+# compose.yaml (cap_drop ALL + minimal caps, no-new-privileges, default seccomp,
+# no docker socket, no privileged mode) so this root stays inside the container.
+USER root
 EXPOSE 4517
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s \

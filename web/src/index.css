@@ -330,6 +330,30 @@ main {
   );
 }
 
+/* Select dropdown scroll region — the dedicated scroll area for picker
+ * lists (shadcn "scrollable select" pattern, re-expressed in our tokens).
+ * Radix owns this scroll container: the Viewport drives keyboard nav,
+ * typeahead and scroll-into-view, so a nested ScrollArea would break those.
+ * Instead the native scrollbar is restyled here — 6px thumb in ink-3 at low
+ * opacity on a transparent track, matching the app's hairline language. */
+.select-viewport-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--ink-3) 45%, transparent) transparent;
+}
+
+.select-viewport-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+
+.select-viewport-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.select-viewport-scroll::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--ink-3) 45%, transparent);
+  border-radius: 999px;
+}
+
 /* ── toasts ────────────────────────────────────────────────
  * Sonner ships stock styling; this block re-skins it into the tactile
  * system (surface + hairline + overlay shadow + app type). The selectors

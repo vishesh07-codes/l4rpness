@@ -223,12 +223,15 @@ export const AssistantMessage = memo(function AssistantMessage({
     .map((part) => part.text)
     .join("")
 
-  // label the first reasoning block only; shimmer the one still streaming
+  // label the first reasoning block only; shimmer the one still streaming.
+  // a reasoning block streams only while it is the last part overall —
+  // once a tool/content block follows, the reasoning is settled.
   const firstThinkingIndex = parts.findIndex((part) => part.type === "thinking")
   const lastThinkingIndex = parts.reduce(
     (latest, part, index) => (part.type === "thinking" ? index : latest),
     -1
   )
+  const lastPartIndex = parts.length - 1
 
   return (
     <div className="group/response flex w-full flex-col gap-3">
@@ -246,7 +249,8 @@ export const AssistantMessage = memo(function AssistantMessage({
       {visible.map((part, offset) => {
         const index = from + offset
         if (part.type === "thinking") {
-          const streaming = live && index === lastThinkingIndex
+          const streaming =
+            live && index === lastThinkingIndex && index === lastPartIndex
           return (
             <ReasoningBlock
               key={`thinking-${index}`}

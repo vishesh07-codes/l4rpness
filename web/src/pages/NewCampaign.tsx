@@ -9,6 +9,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Field as FieldRoot, FieldDescription, FieldLabel } from "@/components/ui/field"
 import { Label } from "@/components/ui/label"
+import { ModelSelect } from "@/components/ui/model-select"
 import { SegmentedControl } from "@/components/ui/segmented"
 import {
   Select,
@@ -104,7 +105,11 @@ export function NewCampaign() {
         <Field
           label="Target"
           htmlFor="target"
-          hint="URL, IP, host — or paragraphs, anything you want. The agent starts immediately and keeps testing until you stop it."
+          hint={
+            mode === "goal"
+              ? "URL, IP, host — or paragraphs, anything you want. The agent starts immediately and works until the goal in the brief is met."
+              : "URL, IP, host — or paragraphs, anything you want. The agent starts immediately and keeps testing until you stop it."
+          }
         >
           <Textarea
             ref={targetRef}
@@ -131,18 +136,7 @@ export function NewCampaign() {
         <div className="grid gap-4 sm:grid-cols-2">
           <div className="flex flex-col gap-2">
             <Label htmlFor="model">Model</Label>
-            <Select value={model} onValueChange={setModel}>
-              <SelectTrigger id="model" className="w-full font-mono">
-                <SelectValue placeholder="Choose a model" />
-              </SelectTrigger>
-              <SelectContent>
-                {models.map((m) => (
-                  <SelectItem key={m} value={m} className="font-mono">
-                    {m}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <ModelSelect id="model" value={model} onValueChange={setModel} models={models} />
           </div>
 
           <div className="flex flex-col gap-2">
