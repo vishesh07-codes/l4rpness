@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS campaigns (
     description TEXT NOT NULL DEFAULT '',
     scope TEXT NOT NULL DEFAULT '',
     model TEXT NOT NULL,
+    effort TEXT NOT NULL DEFAULT 'high',
     status TEXT NOT NULL DEFAULT 'created',
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -22,6 +23,7 @@ CREATE TABLE IF NOT EXISTS messages (
     campaign_id INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
     role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
     content TEXT NOT NULL,
+    reasoning TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -60,6 +62,18 @@ def db():
         conn.close()
 
 
+def _columns(conn, table):
+    return {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+
+
+def migrate(conn):
+    if "effort" not in _columns(conn, "campaigns"):
+        conn.execute("ALTER TABLE campaigns ADD COLUMN effort TEXT NOT NULL DEFAULT 'high'")
+    if "reasoning" not in _columns(conn, "messages"):
+        conn.execute("ALTER TABLE messages ADD COLUMN reasoning TEXT NOT NULL DEFAULT ''")
+
+
 def init():
     with db() as conn:
         conn.executescript(SCHEMA)
+        migrate(conn)

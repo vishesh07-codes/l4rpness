@@ -58,6 +58,12 @@ def test_unknown_model_falls_back(client):
     assert campaign["model"] == config.DEFAULT_MODEL
 
 
+def test_effort_default_and_fallback(client):
+    assert create(client)["effort"] == config.DEFAULT_EFFORT
+    assert create(client, effort="max")["effort"] == "max"
+    assert create(client, effort="ultra")["effort"] == config.DEFAULT_EFFORT
+
+
 def test_attachment_roundtrip(client):
     res = client.post(
         "/api/campaigns",
@@ -91,20 +97,37 @@ def test_prompt_includes_attachment_text(client):
     assert "no tools" in prompt
 
 
-def test_chat_stores_messages(client, monkeypatch):
-    async def fake_reply(campaign, attachments, history):
-        return "ack: " + history[-1]["content"]
+def test_chat_streams_and_stores_messages(client, monkeypatch):
+    async def fake_stream(campaign, attachments, history):
+        yield "thinking", "weighing it"
+        yield "content", "ack: " + history[-1]["content"]
 
-    monkeypatch.setattr(agent, "reply", fake_reply)
+    monkeypatch.setattr(agent, "stream", fake_stream)
     campaign = create(client)
 
     res = client.post(f"/api/campaigns/{campaign['id']}/messages", json={"content": "hello"})
-    assert res.status_code == 201
-    body = res.json()
-    assert body["assistant"]["content"] == "ack: hello"
+    assert res.status_code == 200
+    assert "event: thinking" in res.text
+    assert "event: content" in res.text
+    assert "event: done" in res.text
 
     messages = client.get(f"/api/campaigns/{campaign['id']}/messages").json()
     assert [m["role"] for m in messages] == ["user", "assistant"]
+    assert messages[1]["content"] == "ack: hello"
+    assert messages[1]["reasoning"] == "weighing it"
+
+
+def test_chat_stream_failure_stores_nothing(client, monkeypatch):
+    async def broken_stream(campaign, attachments, history):
+        yield "content", "partial"
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(agent, "stream", broken_stream)
+    campaign = create(client)
+
+    res = client.post(f"/api/campaigns/{campaign['id']}/messages", json={"content": "hi"})
+    assert "event: error" in res.text
+    assert client.get(f"/api/campaigns/{campaign['id']}/messages").json() == []
 
 
 def test_chat_without_key(client, monkeypatch):

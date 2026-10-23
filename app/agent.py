@@ -1,5 +1,6 @@
+from collections.abc import AsyncIterator
 from string import Template
-from typing import cast
+from typing import Any, cast
 
 from openai import AsyncOpenAI
 from openai.types.chat import ChatCompletionMessageParam
@@ -27,7 +28,7 @@ def build_prompt(campaign, attachment_rows) -> str:
     )
 
 
-async def reply(campaign, attachment_rows, history) -> str:
+async def stream(campaign, attachment_rows, history) -> AsyncIterator[tuple[str, str]]:
     client = AsyncOpenAI(api_key=config.API_KEY, base_url=config.BASE_URL, timeout=180)
     messages: list[ChatCompletionMessageParam] = [
         {"role": "system", "content": build_prompt(campaign, attachment_rows)}
@@ -37,5 +38,20 @@ async def reply(campaign, attachment_rows, history) -> str:
         for m in history
     ]
 
-    resp = await client.chat.completions.create(model=campaign["model"], messages=messages)
-    return (resp.choices[0].message.content or "").strip()
+    response = await client.chat.completions.create(
+        model=campaign["model"],
+        messages=messages,
+        stream=True,
+        reasoning_effort=cast(Any, campaign["effort"] or config.DEFAULT_EFFORT),
+        extra_body={"thinking": {"type": "enabled"}},
+    )
+
+    async for chunk in response:
+        if not chunk.choices:
+            continue
+        delta = chunk.choices[0].delta
+        reasoning = getattr(delta, "reasoning_content", None)
+        if reasoning:
+            yield "thinking", reasoning
+        if delta.content:
+            yield "content", delta.content

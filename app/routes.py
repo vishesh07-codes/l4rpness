@@ -1,8 +1,9 @@
+import json
 import logging
 import shutil
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
 from . import agent, config, db, uploads
@@ -32,6 +33,8 @@ def app_config():
     return {
         "models": config.MODELS,
         "default_model": config.DEFAULT_MODEL,
+        "efforts": config.EFFORTS,
+        "default_effort": config.DEFAULT_EFFORT,
         "agent_configured": bool(config.API_KEY),
     }
 
@@ -55,6 +58,7 @@ def list_campaigns():
 async def create_campaign(
     target: str = Form(""),
     model: str = Form(""),
+    effort: str = Form(""),
     info: str = Form(""),
     instructions: str = Form(""),
     description: str = Form(""),
@@ -69,6 +73,8 @@ async def create_campaign(
         raise HTTPException(400, "target is required")
     if model not in config.MODELS:
         model = config.DEFAULT_MODEL
+    if effort not in config.EFFORTS:
+        effort = config.DEFAULT_EFFORT
 
     uploads_by_field = {
         "target": target_files,
@@ -84,10 +90,10 @@ async def create_campaign(
         with db.db() as conn:
             cur = conn.execute(
                 """
-                INSERT INTO campaigns (target, info, instructions, description, scope, model)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO campaigns (target, info, instructions, description, scope, model, effort)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (target.strip(), info.strip(), instructions.strip(), description.strip(), scope.strip(), model),
+                (target.strip(), info.strip(), instructions.strip(), description.strip(), scope.strip(), model, effort),
             )
             campaign_id = cur.lastrowid
             if campaign_id is None:
@@ -136,7 +142,11 @@ def list_messages(campaign_id: int):
     return [row_dict(r) for r in rows]
 
 
-@router.post("/campaigns/{campaign_id}/messages", status_code=201)
+def sse(event: str, data: dict) -> str:
+    return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+
+@router.post("/campaigns/{campaign_id}/messages")
 async def send_message(campaign_id: int, body: MessageIn):
     content = body.content.strip()
     if not content:
@@ -158,26 +168,47 @@ async def send_message(campaign_id: int, body: MessageIn):
     history = [{"role": r["role"], "content": r["content"]} for r in prior]
     history.append({"role": "user", "content": content})
 
-    try:
-        answer = await agent.reply(campaign, attachments, history)
-    except Exception:
-        log.exception("agent call failed")
-        raise HTTPException(502, "agent request failed")
+    async def events():
+        thinking = []
+        answer = []
+        try:
+            async for kind, text in agent.stream(campaign, attachments, history):
+                if kind == "thinking":
+                    thinking.append(text)
+                    yield sse("thinking", {"text": text})
+                else:
+                    answer.append(text)
+                    yield sse("content", {"text": text})
+        except Exception:
+            log.exception("agent stream failed")
+            yield sse("error", {"detail": "agent request failed"})
+            return
 
-    with db.db() as conn:
-        user_cur = conn.execute(
-            "INSERT INTO messages (campaign_id, role, content) VALUES (?, 'user', ?)",
-            (campaign_id, content),
-        )
-        assistant_cur = conn.execute(
-            "INSERT INTO messages (campaign_id, role, content) VALUES (?, 'assistant', ?)",
-            (campaign_id, answer),
-        )
-        conn.execute("UPDATE campaigns SET updated_at = datetime('now') WHERE id = ?", (campaign_id,))
-        user_row = conn.execute("SELECT * FROM messages WHERE id = ?", (user_cur.lastrowid,)).fetchone()
-        assistant_row = conn.execute("SELECT * FROM messages WHERE id = ?", (assistant_cur.lastrowid,)).fetchone()
+        reply = "".join(answer).strip()
+        if not reply:
+            yield sse("error", {"detail": "agent returned an empty reply"})
+            return
 
-    return {"user": row_dict(user_row), "assistant": row_dict(assistant_row)}
+        with db.db() as conn:
+            user_cur = conn.execute(
+                "INSERT INTO messages (campaign_id, role, content) VALUES (?, 'user', ?)",
+                (campaign_id, content),
+            )
+            assistant_cur = conn.execute(
+                "INSERT INTO messages (campaign_id, role, content, reasoning) VALUES (?, 'assistant', ?, ?)",
+                (campaign_id, reply, "".join(thinking).strip()),
+            )
+            conn.execute("UPDATE campaigns SET updated_at = datetime('now') WHERE id = ?", (campaign_id,))
+            user_row = conn.execute("SELECT * FROM messages WHERE id = ?", (user_cur.lastrowid,)).fetchone()
+            assistant_row = conn.execute("SELECT * FROM messages WHERE id = ?", (assistant_cur.lastrowid,)).fetchone()
+
+        yield sse("done", {"user": row_dict(user_row), "assistant": row_dict(assistant_row)})
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache"},
+    )
 
 
 @router.get("/attachments/{attachment_id}")
