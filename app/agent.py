@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import os
@@ -15,19 +16,30 @@ log = logging.getLogger("l4rpness")
 SYSTEM = Template((config.ROOT / "prompts" / "campaign_agent.md").read_text())
 _models: list[str] = []
 
+# model listing talks to every configured provider; an unreachable one must
+# never stall the whole list (or the UI), so each fetch gets its own short cap
+# with no SDK retries — a dead endpoint is skipped after one attempt
+MODELS_TIMEOUT = 5.0
+
 
 def provider_key(provider: str) -> str:
     conf = config.PROVIDERS.get(provider, {})
     return os.getenv(conf.get("api_key_env", ""), "").strip()
 
 
-def _client(provider: str | None = None) -> AsyncOpenAI:
+def _client(
+    provider: str | None = None,
+    timeout: float | None = None,
+    retries: int | None = None,
+) -> AsyncOpenAI:
     name = provider or config.PROVIDER
     conf = config.PROVIDERS.get(name, {})
+    kwargs = {"max_retries": retries} if retries is not None else {}
     return AsyncOpenAI(
         api_key=provider_key(name) or config.API_KEY,
         base_url=conf.get("base_url", config.BASE_URL),
-        timeout=config.REQUEST_TIMEOUT,
+        timeout=timeout or config.REQUEST_TIMEOUT,
+        **kwargs,
     )
 
 
@@ -40,25 +52,27 @@ def split_model(model: str) -> tuple[str, str]:
     return config.PROVIDER, model
 
 
+async def _provider_models(name: str) -> list[str]:
+    try:
+        # openai>=2 returns an async paginator from models.list(), not an
+        # awaitable page, so iterate it instead of awaiting it
+        return [
+            f"{name}/{model.id}"
+            async for model in _client(name, timeout=MODELS_TIMEOUT, retries=0).models.list()
+        ]
+    except Exception as exc:
+        log.warning("model list failed for provider %s: %s", name, exc)
+        return []
+
+
 async def models() -> list[str]:
     global _models
     if _models:
         return _models
 
-    merged = []
-    for name in config.PROVIDERS:
-        if not provider_key(name):
-            continue
-        try:
-            # openai>=2 returns an async paginator from models.list(), not an
-            # awaitable page, so iterate it instead of awaiting it
-            async for model in _client(name).models.list():
-                merged.append(f"{name}/{model.id}")
-        except Exception as exc:
-            log.warning("model list failed for provider %s: %s", name, exc)
-            continue
-
-    _models = sorted(set(merged))
+    names = [name for name in config.PROVIDERS if provider_key(name)]
+    merged = await asyncio.gather(*(_provider_models(name) for name in names))
+    _models = sorted({model for part in merged for model in part})
     return _models
 
 
