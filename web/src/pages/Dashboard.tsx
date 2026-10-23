@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react"
-import { Link, useNavigate } from "react-router-dom"
+import { useNavigate } from "react-router-dom"
 import { toast } from "sonner"
 
 import { PromptInput } from "@/components/agents/prompt-input"
@@ -8,6 +8,7 @@ import { IconAction } from "@/components/IconAction"
 import { Crosshair, Play, Plus, Search, Square, Trash2, TriangleAlert } from "@/components/icons"
 import { Pulse } from "@/components/Pulse"
 import { StatusBadge } from "@/components/StatusBadge"
+import { TransitionLink } from "@/components/TransitionLink"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
@@ -16,6 +17,7 @@ import { Marker, MarkerContent } from "@/components/ui/marker"
 import { Skeleton } from "@/components/ui/skeleton"
 import { api, FIELDS, type Campaign } from "@/lib/api"
 import { cn, fmtDate, fmtTokens } from "@/lib/utils"
+import { withViewTransition } from "@/lib/view-transition"
 
 const SUGGESTIONS = [
   "https://example.com",
@@ -104,7 +106,7 @@ export function Dashboard() {
       }
       for (const field of FIELDS) form.set(field, field === "target" ? value : "")
       const campaign = await api.createCampaign(form)
-      nav(`/campaigns/${campaign.id}`)
+      withViewTransition(() => nav(`/campaigns/${campaign.id}`))
     } catch (e) {
       setError((e as Error).message)
       setCreating(false)
@@ -187,13 +189,13 @@ export function Dashboard() {
                 {s}
               </button>
             ))}
-            <Link
+            <TransitionLink
               to="/campaigns/new"
               className="inline-flex items-center gap-1.5 rounded-full border border-dashed border-line px-3 py-1.5 text-[12px] text-ink-3 outline-none transition-colors duration-150 hover:border-line-strong hover:text-ink focus-visible:ring-2 focus-visible:ring-ring/60"
             >
               <Plus className="size-3.5" strokeWidth={2} />
               Full brief
-            </Link>
+            </TransitionLink>
           </div>
         </div>
       </section>
@@ -243,9 +245,9 @@ export function Dashboard() {
             Start one from the box above, or set up a full brief with scope and instructions.
           </p>
           <Button asChild variant="outline" size="sm" className="mt-4">
-            <Link to="/campaigns/new">
+            <TransitionLink to="/campaigns/new">
               <Plus className="size-4" strokeWidth={2} /> New campaign
-            </Link>
+            </TransitionLink>
           </Button>
         </div>
       )}
@@ -320,13 +322,13 @@ export function Dashboard() {
                   </div>
                 </div>
 
-                <Link
+                <TransitionLink
                   to={`/campaigns/${c.id}`}
                   title={c.target}
                   className="mt-2.5 line-clamp-2 font-mono text-[13px] leading-snug text-ink outline-none after:absolute after:inset-0 after:rounded-[12px] focus-visible:after:ring-2 focus-visible:after:ring-ring/60"
                 >
                   {c.target.split("\n")[0]}
-                </Link>
+                </TransitionLink>
 
                 <div className="mt-auto flex flex-wrap items-center gap-x-2 gap-y-1 pt-3 text-[11px] text-ink-3">
                   <span className="font-mono">{c.model}</span>

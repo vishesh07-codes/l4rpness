@@ -23,7 +23,7 @@ export function PageHeader({
   className?: string
 }) {
   return (
-    <header className={cn("mb-6", className)}>
+    <header className={cn("glass mb-6 rounded-xl border border-glass-border px-5 py-4", className)}>
       {back && (
         <Link
           to={back.to}

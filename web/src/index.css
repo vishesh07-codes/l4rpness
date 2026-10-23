@@ -43,6 +43,16 @@
   --sidebar-accent-foreground: var(--ink);
   --sidebar-border: var(--line);
   --sidebar-ring: var(--accent-ink);
+
+  /* glass material — translucent surfaces that pick up the app backdrop */
+  --glass-bg: color-mix(in srgb, var(--surface) 68%, transparent);
+  --glass-bg-strong: color-mix(in srgb, var(--surface) 78%, transparent);
+  --glass-border: oklch(0 0 0 / 0.07);
+  --glass-blur: 14px;
+  --glass-saturate: 150%;
+  /* soft lights painted behind everything so the blur has something to grab */
+  --glass-glow-1: color-mix(in srgb, var(--accent) 14%, transparent);
+  --glass-glow-2: color-mix(in srgb, var(--ink) 5%, transparent);
 }
 
 .dark {
@@ -78,15 +88,80 @@
   --sidebar-accent-foreground: var(--ink);
   --sidebar-border: var(--line);
   --sidebar-ring: var(--accent-ink);
+
+  /* glass reads from a darker film in dark mode so panels stay grounded */
+  --glass-bg: color-mix(in srgb, var(--surface) 45%, transparent);
+  --glass-bg-strong: color-mix(in srgb, var(--surface) 65%, transparent);
+  --glass-border: oklch(1 0 0 / 0.08);
+  --glass-glow-1: color-mix(in srgb, var(--accent) 20%, transparent);
+  --glass-glow-2: color-mix(in srgb, var(--ink) 6%, transparent);
 }
 
 ::view-transition-old(root),
 ::view-transition-new(root) {
-  animation: none;
   mix-blend-mode: normal;
 }
 
+/* route changes cross-fade so pages swap gently. the rail and page chrome
+   live inside root, so keep this to opacity — any translate would drag the
+   whole shell along with it. */
+::view-transition-old(root) {
+  animation: page-out 150ms var(--ease-out-strong) both;
+}
+
 ::view-transition-new(root) {
+  animation: page-in 240ms var(--ease-out-strong) both;
+}
+
+@keyframes page-out {
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes page-in {
+  from {
+    opacity: 0;
+  }
+}
+
+/* universal route enter — works in every browser, and stands in wherever the
+ * View Transitions cross-fade is unavailable (Firefox, older engines).
+ * `html.vt-active` disables it while a View Transition drives the change.
+ * `backwards` fill (not `both`) so the wrapper never keeps a transform, which
+ * would otherwise turn it into a containing block for fixed-position children. */
+.page-enter {
+  animation: route-in 260ms var(--ease-out-strong) backwards;
+}
+
+html.vt-active .page-enter {
+  animation: none;
+}
+
+@keyframes route-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .page-enter {
+    animation: none;
+  }
+}
+
+/* theme flip: an origin-aware circle wipe from the toggle instead of the
+   cross-fade. scoped to `theme-transition` so route changes stay a fade. */
+html.theme-transition::view-transition-old(root) {
+  animation: none;
+}
+
+html.theme-transition::view-transition-new(root) {
   animation: theme-reveal 400ms ease-out both;
   clip-path: circle(0 at var(--theme-x) var(--theme-y));
 }
@@ -98,8 +173,66 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  ::view-transition-old(root),
   ::view-transition-new(root) {
     animation-duration: 1ms;
+  }
+}
+
+/* ── glass surfaces ────────────────────────────────────────
+ * Translucent chrome and cards over a fixed backdrop. Every rule pairs the
+ * `-webkit-` alias; engines without backdrop-filter, and users who ask for
+ * reduced transparency, fall back to an opaque surface so labels stay legible.
+ */
+.app-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-color: var(--background);
+  background-image:
+    radial-gradient(55rem 55rem at 8% -12%, var(--glass-glow-1), transparent 60%),
+    radial-gradient(45rem 45rem at 105% -5%, var(--glass-glow-2), transparent 55%);
+}
+
+/* #root/main must be transparent or they paint over the fixed backdrop */
+#root,
+main {
+  background-color: transparent;
+}
+
+/* Glass background + blur only; borders stay Tailwind utilities so callers
+ * choose which edges get a hairline (see --color-glass-border). Kept in
+ * `components` so a caller's Tailwind `bg-*` can still override if needed. */
+@layer components {
+  .glass,
+  .glass-strong,
+  .glass-flat {
+    background-color: var(--glass-bg-strong);
+  }
+
+  /* chrome only (sidebar, headers): this is the expensive one */
+  @supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+    .glass {
+      background-color: var(--glass-bg);
+      -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+      backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+    }
+
+    .glass-strong {
+      -webkit-backdrop-filter: blur(calc(var(--glass-blur) * 1.6)) saturate(var(--glass-saturate));
+      backdrop-filter: blur(calc(var(--glass-blur) * 1.6)) saturate(var(--glass-saturate));
+    }
+  }
+
+  @media (prefers-reduced-transparency: reduce) {
+    .glass,
+    .glass-strong,
+    .glass-flat {
+      background-color: var(--surface);
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
+    }
   }
 }
 
@@ -251,6 +384,7 @@ html[data-darkreader-mode] .app-sidebar {
   --color-sidebar-primary: var(--sidebar-primary);
   --color-sidebar-foreground: var(--sidebar-foreground);
   --color-sidebar: var(--sidebar);
+  --color-glass-border: var(--glass-border);
   --color-chart-5: var(--chart-5);
   --color-chart-4: var(--chart-4);
   --color-chart-3: var(--chart-3);

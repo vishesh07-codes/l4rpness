@@ -1,9 +1,11 @@
 import { useEffect, useState, type MouseEvent } from "react"
-import { Link, useLocation } from "react-router-dom"
+import { useLocation } from "react-router-dom"
 
 import { BookOpenText, Compose, LayoutGrid, Moon, Shield, SidebarToggle, Sun, Wrench } from "@/components/icons"
 import { api, type Campaign } from "@/lib/api"
 import { IconAction } from "@/components/IconAction"
+import { TransitionLink } from "@/components/TransitionLink"
+import { Wordmark } from "@/components/Wordmark"
 import { cn } from "@/lib/utils"
 
 const nav = [
@@ -75,7 +77,7 @@ export function AppSidebar({
       <aside
         data-collapsed={collapsed || undefined}
         className={cn(
-          "app-sidebar fixed inset-y-0 left-0 z-20 flex flex-col bg-sidebar transition-[width,transform] duration-200 ease-[var(--ease-out-strong)]",
+          "app-sidebar glass-strong fixed inset-y-0 left-0 z-20 flex flex-col border-r border-glass-border transition-[width,transform] duration-200 ease-[var(--ease-out-strong)]",
           // below md the rail overlays at full width and slides away when closed
           "w-60 max-md:shadow-overlay",
           mobileOpen ? "max-md:translate-x-0" : "max-md:-translate-x-full",
@@ -90,15 +92,12 @@ export function AppSidebar({
         )}
       >
         {!rail && (
-          <Link
+          <TransitionLink
             to="/"
-            className="flex items-center gap-2 rounded-[10px] outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+            className="flex items-center rounded-[10px] outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
           >
-            <span className="size-2 rounded-full bg-accent" aria-hidden />
-            <span className="text-[14px] font-semibold tracking-[-0.02em] text-ink">
-              l4rp<span className="text-ink-3">ness</span>
-            </span>
-          </Link>
+            <Wordmark className="h-[22px] w-auto" />
+          </TransitionLink>
         )}
         <button
           type="button"
@@ -150,7 +149,7 @@ export function AppSidebar({
             {recent?.map((c) => {
               const active = pathname === `/campaigns/${c.id}`
               return (
-                <Link
+                <TransitionLink
                   key={c.id}
                   to={`/campaigns/${c.id}`}
                   aria-current={active ? "page" : undefined}
@@ -171,8 +170,8 @@ export function AppSidebar({
                       <span className="sr-only">Running: </span>
                     </>
                   )}
-                  <span className="min-w-0 truncate">{c.target.split("\n")[0]}</span>
-                </Link>
+                  <span className="min-w-0 truncate">{c.target.split("\n")[0]}                  </span>
+                </TransitionLink>
               )
             })}
           </div>
@@ -248,7 +247,7 @@ function Row({
   collapsed: boolean
 }) {
   return (
-    <Link
+    <TransitionLink
       to={to}
       aria-current={active ? "page" : undefined}
       title={collapsed ? label : undefined}
@@ -266,6 +265,6 @@ function Row({
         strokeWidth={1.5}
       />
       {!collapsed && label}
-    </Link>
+    </TransitionLink>
   )
 }

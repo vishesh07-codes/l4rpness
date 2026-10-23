@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ClipboardEvent } from "react"
 import { toast } from "sonner"
-import { Link, useNavigate, useParams } from "react-router-dom"
+import { useNavigate, useParams } from "react-router-dom"
 import {
   ArrowDown,
   ArrowLeft,
@@ -38,8 +38,10 @@ import {
 } from "@/lib/api"
 import { ConfirmDialog } from "@/components/ConfirmDialog"
 import { IconAction } from "@/components/IconAction"
+import { TransitionLink } from "@/components/TransitionLink"
 import { latestTodos } from "@/lib/todos"
 import { cn, fmtDate, fmtTokens } from "@/lib/utils"
+import { withViewTransition } from "@/lib/view-transition"
 
 const SECTIONS = [
   { key: "info", label: "Info" },
@@ -340,7 +342,7 @@ export function Campaign() {
       await api.deleteCampaign(campaignId)
       setConfirmDelete(false)
       toast.success("Campaign deleted")
-      nav("/")
+      withViewTransition(() => nav("/"))
     } catch (e) {
       toast.error("Could not delete the campaign", { description: (e as Error).message })
       setDeleting(false)
@@ -364,13 +366,13 @@ export function Campaign() {
   return (
     <div className="mx-auto flex h-svh max-w-3xl flex-col gap-4 px-6 py-6 max-md:pt-16">
       <div className="flex flex-col gap-3">
-        <Link
+        <TransitionLink
           to="/"
           className="flex w-fit items-center gap-1 text-[13px] text-ink-2 transition-colors hover:text-foreground"
         >
           <ArrowLeft className="size-3.5" strokeWidth={1.5} />
           Campaigns
-        </Link>
+        </TransitionLink>
 
         <header className="flex items-start justify-between gap-4">
           <div className="min-w-0">

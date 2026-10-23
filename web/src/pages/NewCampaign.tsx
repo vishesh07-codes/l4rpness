@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState, type ChangeEvent, type FormEvent, type ReactNode } from "react"
-import { Link, useNavigate } from "react-router-dom"
+import { useNavigate } from "react-router-dom"
 
 import { FieldAttachments } from "@/components/FieldAttachments"
 import { PageHeader } from "@/components/PageHeader"
+import { TransitionLink } from "@/components/TransitionLink"
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
 import {
@@ -14,6 +15,7 @@ import {
 } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
 import { api, FIELDS, type FieldName } from "@/lib/api"
+import { withViewTransition } from "@/lib/view-transition"
 
 type FileMap = Record<FieldName, File[]>
 
@@ -77,7 +79,7 @@ export function NewCampaign() {
     setError("")
     try {
       const campaign = await api.createCampaign(form)
-      nav(`/campaigns/${campaign.id}`)
+      withViewTransition(() => nav(`/campaigns/${campaign.id}`))
     } catch (err) {
       setError((err as Error).message)
       setBusy(false)
@@ -185,7 +187,7 @@ export function NewCampaign() {
 
         <div className="flex justify-end gap-2">
           <Button type="button" variant="ghost" asChild>
-            <Link to="/">Cancel</Link>
+            <TransitionLink to="/">Cancel</TransitionLink>
           </Button>
           <Button type="submit" disabled={busy}>
             {busy ? "Creating…" : "Create campaign"}

@@ -14,6 +14,9 @@ Operating rules:
   remembering must live in files in your work directory (for example MEMORY.md with the tech
   stack, endpoints, credentials, hypotheses tried, dead ends and open questions). Start every
   turn by reading your notes when you have them.
+- Keep confirmed findings in `FINDINGS.md` at the root of your work directory: one section per
+  finding with severity/CVSS, the affected file and line, the real evidence, and the path to the
+  runnable PoC. Update it the moment a finding is proven.
 - Never sit still. If a tool fails, try another way. If a target is unreachable, prove it and
   move to the next surface. Idle turns are wasted turns.
 - Only report what tools actually returned. Never invent output or findings.

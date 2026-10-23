@@ -1,6 +1,6 @@
 import { Menu } from "@/components/icons"
-import { lazy, Suspense, useEffect, useState, type MouseEvent } from "react"
-import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom"
+import { lazy, Suspense, useEffect, useRef, useState, type MouseEvent } from "react"
+import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-router-dom"
 
 import { AppSidebar } from "@/components/AppSidebar"
 import { Toaster } from "@/components/ui/sonner"
@@ -43,20 +43,50 @@ export default function App() {
 
   function toggleTheme(event: MouseEvent<HTMLButtonElement>) {
     const bounds = event.currentTarget.getBoundingClientRect()
-    document.documentElement.style.setProperty("--theme-x", `${bounds.left + bounds.width / 2}px`)
-    document.documentElement.style.setProperty("--theme-y", `${bounds.top + bounds.height / 2}px`)
+    const root = document.documentElement
+    root.style.setProperty("--theme-x", `${bounds.left + bounds.width / 2}px`)
+    root.style.setProperty("--theme-y", `${bounds.top + bounds.height / 2}px`)
 
     const updateTheme = () => setDarkMode((enabled) => !enabled)
     const transitionDocument = document as Document & {
-      startViewTransition?: (callback: () => void) => unknown
+      startViewTransition?: (
+        callback: () => void
+      ) => { finished?: Promise<void> } | undefined
     }
 
-    transitionDocument.startViewTransition?.(updateTheme) ?? updateTheme()
+    // a theme flip changes color/background/border/shadow on nearly every
+    // element; without this they all transition together and the swap smears
+    // instead of snapping. Force a reflow so the kill-switch applies first.
+    const style = document.createElement("style")
+    style.textContent = "*,*::before,*::after{transition:none !important}"
+    document.head.appendChild(style)
+    void document.body.offsetHeight
+    const restore = () => style.remove()
+
+    if (!transitionDocument.startViewTransition) {
+      updateTheme()
+      requestAnimationFrame(restore)
+      return
+    }
+
+    // the circle-wipe CSS hangs off this class, so route changes (which also
+    // use the View Transitions API) stay a plain cross-fade
+    root.classList.add("theme-transition")
+    const done = () => {
+      root.classList.remove("theme-transition")
+      restore()
+    }
+    const transition = transitionDocument.startViewTransition(updateTheme)
+    if (transition?.finished) transition.finished.finally(done)
+    else window.setTimeout(done, 500)
   }
 
   return (
     <BrowserRouter>
      <TooltipProvider delayDuration={500} skipDelayDuration={300}>
+      {/* soft lights behind the shell; glass surfaces blur this layer */}
+      <div aria-hidden className="app-backdrop" />
+
       {/* keyboard users land here first, ahead of the rail's nav + history */}
       <a
         href="#content"
@@ -97,22 +127,42 @@ export default function App() {
           collapsed ? "pl-0 md:pl-[60px]" : "pl-0 md:pl-60"
         )}
       >
-        <Suspense
-          fallback={<div className="px-8 py-10 text-sm text-ink-2">Loading…</div>}
-        >
-          <Routes>
-            <Route path="/" element={<Dashboard />} />
-            <Route path="/campaigns/new" element={<NewCampaign />} />
-            <Route path="/campaigns/:id" element={<Campaign />} />
-            <Route path="/skills" element={<Skills />} />
-            <Route path="/mcp" element={<Mcp />} />
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
-        </Suspense>
+        <RoutedContent />
       </main>
 
       <Toaster theme={darkMode ? "dark" : "light"} position="bottom-right" />
      </TooltipProvider>
     </BrowserRouter>
+  )
+}
+
+/**
+ * The routed page, keyed by pathname so a fresh mount replays the enter
+ * animation on every navigation. This is the universal fallback; where the
+ * View Transitions API is available the cross-fade drives it instead and
+ * `html.vt-active` suppresses this animation so the two don't stack.
+ */
+function RoutedContent() {
+  const { pathname } = useLocation()
+  // the enter animation is for navigation only — skip it on the first paint so
+  // a hard refresh doesn't "animate the app in"
+  const firstPaint = useRef(true)
+  useEffect(() => {
+    firstPaint.current = false
+  }, [])
+
+  return (
+    <div key={pathname} className={firstPaint.current ? undefined : "page-enter"}>
+      <Suspense fallback={<div className="px-8 py-10 text-sm text-ink-2">Loading…</div>}>
+        <Routes>
+          <Route path="/" element={<Dashboard />} />
+          <Route path="/campaigns/new" element={<NewCampaign />} />
+          <Route path="/campaigns/:id" element={<Campaign />} />
+          <Route path="/skills" element={<Skills />} />
+          <Route path="/mcp" element={<Mcp />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </Suspense>
+    </div>
   )
 }
