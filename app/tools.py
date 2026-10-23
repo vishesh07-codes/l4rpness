@@ -212,6 +212,24 @@ async def _kill_when_stopped(proc, stop):
         _kill_tree(proc)
 
 
+async def _wait_for_exit(proc, seconds: float) -> bool:
+    """Poll for process exit and return True when it happened.
+
+    asyncio's Process.wait() only resolves once every stdout/stderr pipe is
+    disconnected (base_subprocess._call_connection_lost). A detached process
+    can hold the pipe open after the shell exits, which makes wait() hang
+    forever even though the process is already reaped. The returncode is set
+    the moment the process exits, so poll that instead.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + seconds
+    while proc.returncode is None:
+        if loop.time() >= deadline:
+            return False
+        await asyncio.sleep(0.05)
+    return True
+
+
 async def bash(args: dict, work: Path, stop=None, on_output=None) -> tuple[str, bool]:
     cmd = _cmd_arg(args)
     if not cmd:
@@ -237,9 +255,11 @@ async def bash(args: dict, work: Path, stop=None, on_output=None) -> tuple[str, 
     assert proc.stdout is not None
     stdout = proc.stdout
 
-    async def drain() -> tuple[bytes, bool]:
-        out = bytearray()
-        capped = False
+    out = bytearray()
+    capped = False
+
+    async def read_output() -> None:
+        nonlocal capped
         decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
         streamed = 0
         while True:
@@ -261,17 +281,17 @@ async def bash(args: dict, work: Path, stop=None, on_output=None) -> tuple[str, 
             tail = decoder.decode(b"", final=True)
             if tail and streamed < config.TOOL_OUTPUT_CHARS:
                 on_output(tail[: config.TOOL_OUTPUT_CHARS - streamed])
-        await proc.wait()
-        return bytes(out), capped
 
     watcher = asyncio.ensure_future(_kill_when_stopped(proc, stop)) if stop else None
+    reader = asyncio.ensure_future(read_output())
     note = ""
     try:
-        out, capped = await asyncio.wait_for(drain(), timeout)
-    except asyncio.TimeoutError:
-        _kill_tree(proc)
-        out, capped = await drain()
-        note = f"\n[killed after {timeout}s]"
+        # wait for the shell process, never for EOF: a detached background
+        # process can hold the stdout pipe open after the shell is gone
+        if not await _wait_for_exit(proc, timeout):
+            note = f"\n[killed after {timeout}s]"
+            _kill_tree(proc)
+            await _wait_for_exit(proc, 5)
     finally:
         if watcher:
             watcher.cancel()
@@ -279,6 +299,18 @@ async def bash(args: dict, work: Path, stop=None, on_output=None) -> tuple[str, 
                 await watcher
         if proc.returncode is None:
             _kill_tree(proc)
+        # the process is gone; give the reader a moment to flush what is
+        # buffered, then stop waiting on it
+        try:
+            await asyncio.wait_for(reader, 2)
+        except asyncio.TimeoutError:
+            reader.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await reader
+        transport = getattr(proc, "_transport", None)
+        if transport is not None:
+            with contextlib.suppress(Exception):
+                transport.close()
 
     if stop is not None and stop.is_set():
         note += "\n[stopped by request]"
@@ -286,7 +318,7 @@ async def bash(args: dict, work: Path, stop=None, on_output=None) -> tuple[str, 
     if capped:
         note += f"\n[output limit reached, kept the first {config.BASH_OUTPUT_BYTES:,} bytes]"
 
-    text = out.decode(errors="replace")
+    text = bytes(out).decode(errors="replace")
     body = _clip(work, text, cmd)
     return f"{body}\n[exit code {proc.returncode}]{note}".strip(), proc.returncode == 0 and not capped
 

@@ -145,6 +145,24 @@ def test_read_file_past_end(work):
     assert "nothing at offset 10" in out
 
 
+def test_bash_detached_holder_does_not_hang(work):
+    # a detached process inherits the stdout pipe and outlives the shell;
+    # asyncio's Process.wait() never resolves in that state, so the tool must
+    # not wait for EOF or for wait() to finish
+    out, ok, _ = asyncio.run(
+        tools.execute(
+            "bash",
+            {
+                "cmd": "setsid nohup sleep 5 > hold.log 2>&1 < /dev/null & sleep 0.5; echo DONE",
+                "timeout": 10,
+            },
+            1,
+        )
+    )
+    assert "DONE" in out
+    assert ok
+
+
 def test_bash_killed_on_stop(work):
     async def scenario():
         stop = asyncio.Event()
