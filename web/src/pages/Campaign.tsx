@@ -7,8 +7,10 @@ import {
   ChevronDown,
   FileText,
   Paperclip,
+  Play,
   RefreshCw,
   Sparkles,
+  Square,
   Trash2,
   TriangleAlert,
 } from "@/components/icons"
@@ -67,12 +69,12 @@ export function Campaign() {
   const [files, setFiles] = useState<File[]>([])
   const [pending, setPending] = useState(false)
   const [stopping, setStopping] = useState(false)
+  const [resuming, setResuming] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [error, setError] = useState("")
   const [following, setFollowing] = useState(true)
   const initialIds = useRef<Set<number> | null>(null)
-  const abortRef = useRef<AbortController | null>(null)
   const viewportRef = useRef<HTMLElement | null>(null)
   const fileInput = useRef<HTMLInputElement>(null)
 
@@ -89,50 +91,124 @@ export function Campaign() {
       .catch((e: Error) => setError(e.message))
   }, [campaignId])
 
-  // Escape stops a run in flight — the composer's stop button is the visible
-  // path, this is the one people reach for
+  // Escape stops the agent — the visible path is the stop button, this is the
+  // one people reach for
   useEffect(() => {
-    if (!pending) return
+    if (!pending && !campaign?.running) return
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") stop()
     }
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
-  }, [pending, stopping])
+  }, [pending, campaign?.running, stopping])
 
   function jumpToLatest() {
     const viewport = viewportRef.current
     viewport?.scrollTo({ top: viewport.scrollHeight, behavior: "smooth" })
   }
 
+  // live turns stream over SSE so the transcript tracks the model token for
+  // token; the browser reconnects on drops and re-syncs from the snapshot
   useEffect(() => {
-    if (!campaign?.running || pending) return
+    if (!campaign?.running) return
 
-    let active = true
-    const tick = async () => {
-      try {
-        const live = await api.liveCampaign(campaignId)
-        if (!active) return
-        if (live.running) {
-          setStream({ parts: live.parts, pendingTool: live.pending })
-        } else {
-          setStream(null)
-          partsCache.clear()
-          setMessages(await api.listMessages(campaignId))
-          setCampaign((c) => (c ? { ...c, running: false } : c))
+    partsCache.clear()
+    setStream({ parts: [], pendingTool: null })
+
+    const source = new EventSource(`/api/campaigns/${campaignId}/stream`)
+
+    const refresh = async () => {
+      partsCache.clear()
+      setMessages(await api.listMessages(campaignId))
+    }
+
+    const append = (kind: "thinking" | "content", text: string) =>
+      setStream((s) => {
+        const base = s ?? { parts: [], pendingTool: null }
+        const last = base.parts[base.parts.length - 1]
+        if (last?.type === kind) {
+          return {
+            ...base,
+            parts: [...base.parts.slice(0, -1), { ...last, text: last.text + text }],
+          }
         }
-      } catch {
-        // the next tick retries
-      }
+        return { ...base, parts: [...base.parts, { type: kind, text }] }
+      })
+
+    const on = (event: string, handler: (data: any) => void) => {
+      source.addEventListener(event, (e) => {
+        try {
+          handler(JSON.parse((e as MessageEvent).data))
+        } catch {
+          // malformed frame; the next one will resync
+        }
+      })
     }
 
-    tick()
-    const timer = setInterval(tick, 1500)
-    return () => {
-      active = false
-      clearInterval(timer)
-    }
-  }, [campaign?.running, pending, campaignId])
+    on("snapshot", (d) => {
+      setStream({ parts: d.parts ?? [], pendingTool: d.pending ?? null })
+      void refresh()
+    })
+    on("thinking", (d) => append("thinking", d.text))
+    on("content", (d) => append("content", d.text))
+    on("tool_start", (d) => setStream((s) => (s ? { ...s, pendingTool: d.name } : s)))
+    on("tool_call", (d) =>
+      setStream((s) => {
+        const base = s ?? { parts: [], pendingTool: null }
+        return {
+          parts: [...base.parts, { type: "tool", id: d.id, name: d.name, args: d.args }],
+          pendingTool: null,
+        }
+      })
+    )
+    on("tool_output", (d) =>
+      setStream((s) =>
+        s
+          ? {
+              ...s,
+              parts: s.parts.map((part) =>
+                part.type === "tool" && part.id === d.id
+                  ? { ...part, output: `${part.output ?? ""}${d.chunk}` }
+                  : part
+              ),
+            }
+          : s
+      )
+    )
+    on("tool_result", (d) =>
+      setStream((s) =>
+        s
+          ? {
+              ...s,
+              parts: s.parts.map((part) =>
+                part.type === "tool" && part.id === d.id
+                  ? { ...part, output: d.output, ok: d.ok, ms: d.ms }
+                  : part
+              ),
+            }
+          : s
+      )
+    )
+    on("chain_end", () => {
+      setStream({ parts: [], pendingTool: null })
+      void refresh()
+    })
+    on("closed", async () => {
+      source.close()
+      setStream(null)
+      setCampaign((c) => (c ? { ...c, running: false } : c))
+      await refresh()
+    })
+    on("idle", async () => {
+      source.close()
+      setStream(null)
+      const fresh = await api.getCampaign(campaignId)
+      setCampaign(fresh)
+      await refresh()
+    })
+
+    return () => source.close()
+  }, [campaign?.running, campaignId])
 
   // only re-scan the full history when it changes, not on every streamed token
   const messageTodos = useMemo(
@@ -171,10 +247,6 @@ export function Campaign() {
     setFiles([])
     setError("")
     setPending(true)
-    setStream({ parts: [], pendingTool: null })
-
-    const controller = new AbortController()
-    abortRef.current = controller
 
     const optimistic: Message = {
       id: -Date.now(),
@@ -186,116 +258,53 @@ export function Campaign() {
     }
     setMessages((prev) => [...prev, optimistic])
 
-    const pushPart = (part: Part) =>
-      setStream((s) => {
-        if (!s) return s
-        const last = s.parts[s.parts.length - 1]
-
-        if (last?.type === "thinking" && part.type === "thinking") {
-          return { ...s, parts: [...s.parts.slice(0, -1), { ...last, text: last.text + part.text }] }
-        }
-        if (last?.type === "content" && part.type === "content") {
-          return { ...s, parts: [...s.parts.slice(0, -1), { ...last, text: last.text + part.text }] }
-        }
-        return { ...s, parts: [...s.parts, part] }
-      })
-
-    let failure = ""
-    let saved = false
-    let completed = false
-    let stopped = false
-
     try {
-      await api.streamMessage(
-        campaignId,
-        content,
-        sending,
-        (event) => {
-          if (event.type === "thinking") {
-            pushPart({ type: "thinking", text: event.text })
-          } else if (event.type === "content") {
-            pushPart({ type: "content", text: event.text })
-          } else if (event.type === "tool_start") {
-            setStream((s) => (s ? { ...s, pendingTool: event.name } : s))
-          } else if (event.type === "tool_call") {
-            pushPart({ type: "tool", id: event.id, name: event.name, args: event.args })
-            setStream((s) => (s ? { ...s, pendingTool: null } : s))
-          } else if (event.type === "tool_result") {
-            setStream((s) =>
-              s
-                ? {
-                    ...s,
-                    parts: s.parts.map((part) =>
-                      part.type === "tool" && part.id === event.id
-                        ? { ...part, output: event.output, ok: event.ok, ms: event.ms }
-                        : part
-                    ),
-                  }
-                : s
-            )
-          } else if (event.type === "done") {
-            completed = true
-            // swap the live stream for the saved message in one render, otherwise
-            // the reply (reasoning included) paints twice for a frame
-            setMessages((prev) => [
-              ...prev.filter((m) => m.id !== optimistic.id),
-              event.user,
-              event.assistant,
-            ])
-            setStream(null)
-          } else {
-            failure = event.detail
-            saved = event.saved ?? false
-          }
-        },
-        controller.signal
-      )
+      // the supervisor picks queued messages up when the next chain starts,
+      // the same way mid-task input works in a coding harness
+      const stored = await api.steerCampaign(campaignId, content, sending)
+      setMessages((prev) => [...prev.filter((m) => m.id !== optimistic.id), stored])
+      // steering a stopped campaign resumes the loop
+      setCampaign(await api.getCampaign(campaignId))
     } catch (e) {
-      if ((e as Error).name === "AbortError") stopped = true
-      else failure = (e as Error).message
-    }
-
-    if (!completed && !failure && !stopped) {
-      failure = "Connection lost before the reply finished. Retry to send it again."
-    }
-
-    if (failure && saved) {
-      // the server kept a partial reply (a user stop included) — reload it
-      try {
-        partsCache.clear()
-        setMessages(await api.listMessages(campaignId))
-      } catch {
-        // keep the optimistic message if the refresh fails
-      }
-    } else if (failure || stopped) {
-      // nothing was saved — drop the optimistic row and give it back
       setMessages((prev) => prev.filter((m) => m.id !== optimistic.id))
       setInput(content)
       setFiles(sending)
+      setError((e as Error).message)
+    } finally {
+      setPending(false)
     }
-
-    // a user stop is not an error worth surfacing
-    if (failure && failure !== "stopped by user") setError(failure)
-    abortRef.current = null
-    setStream(null)
-    setPending(false)
-    setStopping(false)
   }
 
   async function stop() {
-    if (!pending || stopping) return
+    if (stopping) return
     setStopping(true)
     try {
-      // ask the server to stop; it saves the partial reply and closes the
-      // stream, which send() then picks up via the "saved" error event
       await api.stopCampaign(campaignId)
-    } catch {
-      // server unreachable — fall back to cutting the local stream
-      abortRef.current?.abort()
-      abortRef.current = null
-      setStream(null)
-      setPending(false)
+      const fresh = await api.getCampaign(campaignId)
+      setCampaign(fresh)
+      if (!fresh.running) {
+        partsCache.clear()
+        setStream(null)
+        setMessages(await api.listMessages(campaignId))
+      }
+    } catch (e) {
+      toast.error("Could not stop the agent", { description: (e as Error).message })
+    } finally {
       setStopping(false)
+    }
+  }
+
+  async function resume() {
+    if (resuming) return
+    setResuming(true)
+    try {
+      await api.resumeCampaign(campaignId)
+      setCampaign(await api.getCampaign(campaignId))
+      toast.success("Agent resumed")
+    } catch (e) {
+      toast.error("Could not resume the agent", { description: (e as Error).message })
+    } finally {
+      setResuming(false)
     }
   }
 
@@ -367,6 +376,32 @@ export function Campaign() {
               {configured ? "ready" : "offline"}
             </span>
             <StatusBadge status={campaign.status} />
+            {campaign.running && (
+              <IconAction
+                variant="ghost"
+                size="icon-xs"
+                label="Stop the agent"
+                description="Stop the 24x7 loop"
+                onClick={stop}
+                disabled={stopping}
+                className="text-ink-3 hover:text-destructive"
+              >
+                <Square className="size-3.5" strokeWidth={1.5} />
+              </IconAction>
+            )}
+            {!campaign.running && (
+              <IconAction
+                variant="ghost"
+                size="icon-xs"
+                label="Resume the agent"
+                description="Restart the 24x7 loop from where it left off"
+                onClick={resume}
+                disabled={resuming || !configured}
+                className="text-ink-3 hover:text-ink"
+              >
+                <Play className="size-3.5 fill-current" strokeWidth={1.5} />
+              </IconAction>
+            )}
             <IconAction
               variant="ghost"
               size="icon-xs"
@@ -496,7 +531,13 @@ export function Campaign() {
             loading={pending}
             onStop={stop}
             disabled={!configured}
-            placeholder={configured ? "Message the agent…" : "Chat disabled"}
+            placeholder={
+              configured
+                ? campaign.running
+                  ? "Steer the agent — queued for the next turn…"
+                  : "Message the agent…"
+                : "Chat disabled"
+            }
             minRows={1}
             maxRows={8}
             onPaste={onPasteFiles}

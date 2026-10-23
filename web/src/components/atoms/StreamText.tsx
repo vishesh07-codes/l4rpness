@@ -18,6 +18,7 @@ export function StreamText({
   blurTail = 6,
   caret = true,
   live = false,
+  reveal = true,
   className,
   onProgress,
   onDone,
@@ -37,6 +38,12 @@ export function StreamText({
    * restarting on every chunk
    */
   live?: boolean;
+  /**
+   * false renders `text` the moment it arrives. a fixed-rate reveal cannot
+   * keep up with a fast provider (it falls further behind every chunk), so
+   * live surfaces that must track the model exactly turn it off.
+   */
+  reveal?: boolean;
   className?: string;
   /** fires each tick — useful for re-anchoring UI to reflowing text */
   onProgress?: () => void;
@@ -51,6 +58,11 @@ export function StreamText({
   onDoneRef.current = onDone;
 
   useEffect(() => {
+    if (!reveal) {
+      countRef.current = text.length;
+      onDoneRef.current?.();
+      return;
+    }
     if (!live) {
       countRef.current = 0;
       setCount(0);
@@ -71,10 +83,10 @@ export function StreamText({
       }
     }, tickMs);
     return () => clearInterval(id);
-  }, [text, charsPerTick, tickMs, live]);
+  }, [text, charsPerTick, tickMs, live, reveal]);
 
-  const streaming = count < text.length;
-  const shown = text.slice(0, count);
+  const streaming = reveal ? count < text.length : live;
+  const shown = reveal ? text.slice(0, count) : text;
   const split = streaming ? Math.max(0, shown.length - blurTail) : shown.length;
 
   return (

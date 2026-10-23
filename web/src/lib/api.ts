@@ -103,6 +103,7 @@ export type StreamEvent =
   | { type: "content"; text: string }
   | { type: "tool_start"; id: string; name: string }
   | { type: "tool_call"; id: string; name: string; args: Record<string, unknown> }
+  | { type: "tool_output"; id: string; chunk: string }
   | { type: "tool_result"; id: string; name: string; output: string; ok: boolean; ms: number }
   | { type: "done"; user: Message; assistant: Message }
   | { type: "error"; detail: string; saved?: boolean }
@@ -189,9 +190,19 @@ export const api = {
   stopCampaign: (id: number) =>
     req<{ stopped: boolean }>(`/api/campaigns/${id}/stop`, { method: "POST" }),
   liveCampaign: (id: number) =>
-    req<{ running: boolean; parts: Part[]; pending: string | null }>(
+    req<{ running: boolean; parts: Part[]; pending: string | null; seq: number }>(
       `/api/campaigns/${id}/live`
     ),
+  steerCampaign: (id: number, content: string, files: File[]) => {
+    const form = new FormData()
+    form.set("content", content)
+    for (const file of files) form.append("files", file)
+    return req<Message>(`/api/campaigns/${id}/steer`, { method: "POST", body: form })
+  },
+  resumeCampaign: (id: number) =>
+    req<{ status: string; campaign_id: number }>(`/api/campaigns/${id}/resume`, {
+      method: "POST",
+    }),
   listSkills: () => req<Skill[]>("/api/skills"),
   getSkill: (name: string) => req<SkillDetail>(`/api/skills/${encodeURIComponent(name)}`),
   createSkill: (skill: { name: string; description: string; body: string }) =>

@@ -93,7 +93,7 @@ function ReasoningBlock({ text, live, label }: { text: string; live?: boolean; l
         </div>
       )}
       <div className="text-[13px] leading-relaxed whitespace-pre-wrap text-ink-2">
-        {live ? <StreamText live text={text} /> : text}
+        {live ? <StreamText live text={text} reveal={false} /> : text}
       </div>
     </div>
   )
@@ -108,7 +108,8 @@ function toolLabel(part: ToolPart) {
 }
 
 function ToolBlock({ part }: { part: ToolPart }) {
-  const status = part.output == null ? "running" : part.ok ? "success" : "error"
+  // output streams in while the tool runs, so ok — not output — marks the end
+  const status = part.ok == null ? "running" : part.ok ? "success" : "error"
   return (
     <ToolResult
       tool={part.name}
