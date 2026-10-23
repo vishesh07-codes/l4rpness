@@ -27,8 +27,8 @@ It does not stop by itself. It stops when you pause or kill it. Right now there 
 
 - Create a campaign with a target, info, instructions, description and scope. Only the target is required, and it does not have to be a URL. You can paste a paragraph.
 - Every field can take file attachments. Text files (notes, logs, HAR, OpenAPI) get their contents passed to the agent when it replies.
-- Chat with the agent inside each campaign. The full history is stored in SQLite.
-- Pick the model per campaign: deepseek-chat, deepseek-flash, deepseek-reasoner.
+- Pick the model and the effort per campaign: deepseek-chat, deepseek-flash, deepseek-reasoner, with low, high or max effort.
+- Chat streams as it is written and replies render markdown as they arrive. Thinking is shown above every answer, always, and the full history including thinking is stored in SQLite.
 
 ## How it is built
 
@@ -50,7 +50,7 @@ Backend, Python and FastAPI:
 - `app/routes.py` has the API
 - `app/db.py` creates and connects to SQLite. Plain sqlite3, WAL mode, no ORM
 - `app/uploads.py` validates files, stores them, extracts text for the prompt
-- `app/agent.py` fills the prompt template and makes the one DeepSeek call
+- `app/agent.py` fills the prompt template and streams the DeepSeek reply, thinking included
 - `prompts/campaign_agent.md` is the system prompt. Edit it without touching code
 
 Frontend, React and TypeScript with Tailwind and shadcn components:
@@ -90,7 +90,7 @@ The Vite dev server proxies /api to port 4517.
 
     .venv/bin/pytest
 
-Eight tests cover the API and the prompt assembly. The DeepSeek call is stubbed, so tests run offline.
+Ten tests cover the API, the prompt assembly and the streaming reply. The DeepSeek call is stubbed, so tests run offline.
 
 ## Roadmap
 
