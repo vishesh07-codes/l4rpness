@@ -1,5 +1,7 @@
 import asyncio
 import json
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -248,6 +250,63 @@ def test_create_campaign_starts_the_supervisor(monkeypatch):
         res = client.post("/api/campaigns", data={"target": "target.example", "model": "m"})
         assert res.status_code == 201, res.text
         assert started == [res.json()["id"]]
+
+
+def test_compact_folds_old_messages_into_memory(monkeypatch):
+    monkeypatch.setattr(config, "COMPACT_KEEP_MESSAGES", 2)
+
+    with db.db() as conn:
+        conn.execute("INSERT INTO campaigns (id, target, model) VALUES (1, 't', 'm')")
+        for role, body in [
+            ("user", "first task"),
+            ("assistant", "first answer"),
+            ("user", "second task"),
+            ("assistant", "second answer"),
+            ("user", "newest task"),
+            ("assistant", "newest answer"),
+        ]:
+            conn.execute(
+                "INSERT INTO messages (campaign_id, role, content) VALUES (1, ?, ?)",
+                (role, body),
+            )
+
+    fake_resp = MagicMock()
+    fake_resp.choices = [MagicMock(message=SimpleNamespace(content="MEMORY: target t; admin token found."))]
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = AsyncMock(return_value=fake_resp)
+    monkeypatch.setattr("app.agent._client", lambda provider: mock_client)
+
+    folded = asyncio.run(supervisor.compact_campaign(1))
+    assert folded == 4
+
+    with db.db() as conn:
+        camp = conn.execute(
+            "SELECT memory_summary, compacted_until FROM campaigns WHERE id = 1"
+        ).fetchone()
+    assert "admin token" in camp["memory_summary"]
+    assert camp["compacted_until"] == 4
+
+    history = supervisor._history(1)
+    assert history[0]["role"] == "user"
+    assert "CAMPAIGN MEMORY" in history[0]["content"]
+    assert "admin token" in history[0]["content"]
+    # the newest messages stay verbatim; everything older is only in the summary
+    assert [m["role"] for m in history[1:]] == ["user", "assistant"]
+    assert history[-1]["content"] == "newest answer"
+
+
+def test_compact_needs_a_full_batch(monkeypatch):
+    monkeypatch.setattr(config, "COMPACT_KEEP_MESSAGES", 2)
+
+    with db.db() as conn:
+        conn.execute("INSERT INTO campaigns (id, target, model) VALUES (1, 't', 'm')")
+        for role, body in [("user", "a"), ("assistant", "b"), ("user", "c")]:
+            conn.execute(
+                "INSERT INTO messages (campaign_id, role, content) VALUES (1, ?, ?)",
+                (role, body),
+            )
+
+    assert asyncio.run(supervisor.compact_campaign(1)) == 0
 
 
 def test_restore_resumes_only_auto_running(monkeypatch):

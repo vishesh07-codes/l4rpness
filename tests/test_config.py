@@ -21,6 +21,8 @@ def test_defaults_when_no_file(tmp_path):
     assert settings["tools"]["read_max_lines"] == 2000
     assert settings["tools"]["http_timeout"] == 30
     assert settings["supervisor"]["error_backoff_seconds"] == 30
+    assert settings["supervisor"]["compact_at_tokens"] == 950000
+    assert settings["supervisor"]["compact_keep_messages"] == 8
 
 
 def test_file_overrides_defaults(tmp_path):

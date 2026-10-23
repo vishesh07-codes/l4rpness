@@ -48,3 +48,9 @@ http_timeout = 30
 # pause before retrying a chain that errored or came back empty (doubles up
 # to 120s); successful chains roll straight into the next chain
 error_backoff_seconds = 30
+
+# whenever the last request carried more than this many context tokens, fold
+# the older turns into a rolling memory summary, keeping the newest messages
+# verbatim (0 disables compaction)
+compact_at_tokens = 950000
+compact_keep_messages = 8

@@ -143,8 +143,13 @@ def _history(campaign_id: int) -> list[dict]:
     final text, so restarting a chain does not wipe how a result was produced.
     """
     with db.db() as conn:
+        campaign = conn.execute(
+            "SELECT memory_summary, compacted_until FROM campaigns WHERE id = ?", (campaign_id,)
+        ).fetchone()
+        compacted_until = campaign["compacted_until"] if campaign else 0
         rows = conn.execute(
-            "SELECT * FROM messages WHERE campaign_id = ? ORDER BY id", (campaign_id,)
+            "SELECT * FROM messages WHERE campaign_id = ? AND id > ? ORDER BY id",
+            (campaign_id, compacted_until),
         ).fetchall()
         files = conn.execute(
             "SELECT * FROM message_attachments WHERE campaign_id = ? ORDER BY id", (campaign_id,)
@@ -155,6 +160,14 @@ def _history(campaign_id: int) -> list[dict]:
         by_message.setdefault(file["message_id"], []).append(file)
 
     history: list[dict] = []
+    if campaign is not None and campaign["memory_summary"]:
+        history.append({
+            "role": "user",
+            "content": (
+                "[CAMPAIGN MEMORY] Earlier turns were compacted into this summary. "
+                "Treat it as established context.\n\n" + campaign["memory_summary"]
+            ),
+        })
     for row in rows:
         content = row["content"] or ""
         if row["role"] == "user":
@@ -215,6 +228,117 @@ def _history(campaign_id: int) -> list[dict]:
     return history
 
 
+COMPACT_SYSTEM = (
+    "You compact the memory of an autonomous penetration-testing campaign. "
+    "Write a dense, factual handoff of everything that matters and nothing that does not. "
+    "Preserve: the target and scope, discovered endpoints, hosts and tech stack, credentials "
+    "or tokens found, confirmed findings with file/line and how they were proven, hypotheses "
+    "tried and their outcomes, dead ends and rejected ideas, current access, and the open plan. "
+    "Keep exact values (paths, hosts, tokens, commands) where they matter. "
+    "No filler, no apologies, no caveats."
+)
+
+
+def _render_transcript(rows) -> str:
+    lines: list[str] = []
+    for row in rows:
+        content = (row["content"] or "").strip()
+        if row["role"] == "user":
+            lines.append(f"USER: {content[:4000]}")
+            continue
+
+        try:
+            calls = json.loads(row["tool_calls"] or "[]")
+        except json.JSONDecodeError:
+            calls = []
+        try:
+            parts = json.loads(row["parts"] or "[]")
+        except json.JSONDecodeError:
+            parts = []
+        outputs = {
+            part.get("id"): part.get("output")
+            for part in parts
+            if isinstance(part, dict) and part.get("type") == "tool" and part.get("id")
+        }
+
+        text = content[:4000]
+        for call in calls:
+            if not isinstance(call, dict):
+                continue
+            output = outputs.get(call.get("id"))
+            if output is None:
+                output = call.get("output")
+            args = json.dumps(call.get("args") or {})
+            text += (
+                f"\n\nTOOL {call.get('name', '?')} {args[:400]}"
+                f"\nOUTPUT {(str(output) if output is not None else '(none)')[:1500]}"
+            )
+        if text.strip():
+            lines.append(f"ASSISTANT: {text}")
+
+    return "\n\n".join(lines)[:240_000]
+
+
+async def compact_campaign(campaign_id: int) -> int:
+    """Fold older messages into the rolling memory summary.
+
+    Returns how many messages were folded (0 when nothing was compacted).
+    Failure is never fatal: the loop retries once more context has piled up.
+    """
+    if config.COMPACT_AT_TOKENS <= 0:
+        return 0
+
+    with db.db() as conn:
+        campaign = conn.execute("SELECT * FROM campaigns WHERE id = ?", (campaign_id,)).fetchone()
+        rows = conn.execute(
+            "SELECT * FROM messages WHERE campaign_id = ? ORDER BY id", (campaign_id,)
+        ).fetchall()
+    if campaign is None:
+        return 0
+
+    keep = max(1, config.COMPACT_KEEP_MESSAGES)
+    if len(rows) <= keep + 1:
+        return 0
+
+    boundary = rows[-keep - 1]["id"]
+    fold = [row for row in rows if campaign["compacted_until"] < row["id"] <= boundary]
+    if len(fold) < keep:
+        # wait for a meaningful batch instead of compacting tiny slices
+        return 0
+
+    prompt = (
+        f"Campaign memory so far:\n{campaign['memory_summary'] or '(none yet)'}\n\n"
+        f"Transcript to fold in:\n{_render_transcript(fold)}"
+    )
+
+    provider, bare_model = agent.split_model(campaign["model"])
+    client = agent._client(provider)
+    response = await client.chat.completions.create(
+        model=bare_model,
+        messages=[
+            {"role": "system", "content": COMPACT_SYSTEM},
+            {"role": "user", "content": prompt},
+        ],
+        temperature=0.2,
+    )
+    if not response or not getattr(response, "choices", None):
+        return 0
+    summary = (response.choices[0].message.content or "").strip()
+    if not summary:
+        return 0
+
+    with db.db() as conn:
+        conn.execute(
+            """
+            UPDATE campaigns SET memory_summary = ?, compacted_until = ?,
+                updated_at = datetime('now')
+            WHERE id = ?
+            """,
+            (summary, boundary, campaign_id),
+        )
+    return len(fold)
+
+
 async def _sleep(stop: asyncio.Event, seconds: float) -> None:
     try:
         await asyncio.wait_for(stop.wait(), timeout=seconds)
@@ -249,6 +373,24 @@ async def _loop(campaign_id: int) -> None:
                 ).fetchall()
             if campaign is None:
                 break
+
+            if (
+                config.COMPACT_AT_TOKENS > 0
+                and campaign["last_prompt_tokens"] >= config.COMPACT_AT_TOKENS
+            ):
+                routes.push_event(
+                    campaign_id,
+                    "notice",
+                    {"text": "context is large — compacting older turns into memory…"},
+                )
+                try:
+                    folded = await compact_campaign(campaign_id)
+                except Exception:
+                    log.exception("compaction failed for campaign %d", campaign_id)
+                    folded = 0
+                if folded:
+                    log.info("compacted %d messages for campaign %d", folded, campaign_id)
+                    routes.push_event(campaign_id, "compacted", {"messages": folded})
 
             history = _history(campaign_id)
             touched = any(message.get("role") == "assistant" for message in history)

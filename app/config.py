@@ -47,6 +47,8 @@ DEFAULTS = {
     },
     "supervisor": {
         "error_backoff_seconds": 30,
+        "compact_at_tokens": 950000,
+        "compact_keep_messages": 8,
     },
 }
 
@@ -114,6 +116,8 @@ FILE_CHAR_CAP = SETTINGS["uploads"]["file_char_cap"]
 TOTAL_CHAR_CAP = SETTINGS["uploads"]["total_char_cap"]
 
 SUPERVISOR_BACKOFF = SETTINGS["supervisor"]["error_backoff_seconds"]
+COMPACT_AT_TOKENS = SETTINGS["supervisor"]["compact_at_tokens"]
+COMPACT_KEEP_MESSAGES = SETTINGS["supervisor"]["compact_keep_messages"]
 
 MAX_TOOL_STEPS = SETTINGS["tools"]["max_steps"]
 BASH_TIMEOUT = SETTINGS["tools"]["bash_timeout"]
