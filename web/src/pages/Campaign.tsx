@@ -3,6 +3,7 @@ import { Link, useParams } from "react-router-dom"
 import { ArrowLeft, Send } from "lucide-react"
 
 import { StatusBadge } from "@/components/StatusBadge"
+import { Markdown } from "@/components/Markdown"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { api, type Attachment, type Campaign as CampaignData, type Message } from "@/lib/api"
@@ -15,12 +16,15 @@ const SECTIONS = [
   { key: "scope", label: "Scope" },
 ] as const
 
+type LiveReply = { thinking: string; content: string }
+
 export function Campaign() {
   const { id } = useParams()
   const campaignId = Number(id)
 
   const [campaign, setCampaign] = useState<CampaignData | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
+  const [stream, setStream] = useState<LiveReply | null>(null)
   const [configured, setConfigured] = useState(true)
   const [input, setInput] = useState("")
   const [pending, setPending] = useState(false)
@@ -40,7 +44,7 @@ export function Campaign() {
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" })
-  }, [messages, pending])
+  }, [messages, stream, pending])
 
   async function send() {
     const content = input.trim()
@@ -49,19 +53,51 @@ export function Campaign() {
     setInput("")
     setError("")
     setPending(true)
-    const optimistic: Message = { id: -Date.now(), role: "user", content, created_at: "" }
+    setStream({ thinking: "", content: "" })
+
+    const optimistic: Message = {
+      id: -Date.now(),
+      role: "user",
+      content,
+      reasoning: "",
+      created_at: "",
+    }
     setMessages((prev) => [...prev, optimistic])
 
+    let failure = ""
+    let completed = false
+
     try {
-      const res = await api.sendMessage(campaignId, content)
-      setMessages((prev) => [...prev.filter((m) => m.id !== optimistic.id), res.user, res.assistant])
+      await api.streamMessage(campaignId, content, (event) => {
+        if (event.type === "thinking") {
+          setStream((s) => (s ? { ...s, thinking: s.thinking + event.text } : s))
+        } else if (event.type === "content") {
+          setStream((s) => (s ? { ...s, content: s.content + event.text } : s))
+        } else if (event.type === "done") {
+          completed = true
+          setMessages((prev) => [
+            ...prev.filter((m) => m.id !== optimistic.id),
+            event.user,
+            event.assistant,
+          ])
+        } else {
+          failure = event.detail
+        }
+      })
     } catch (e) {
+      failure = (e as Error).message
+    }
+
+    if (!completed && !failure) failure = "connection lost before the reply finished"
+
+    if (failure) {
       setMessages((prev) => prev.filter((m) => m.id !== optimistic.id))
       setInput(content)
-      setError((e as Error).message)
-    } finally {
-      setPending(false)
+      setError(failure)
     }
+
+    setStream(null)
+    setPending(false)
   }
 
   function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
@@ -98,7 +134,7 @@ export function Campaign() {
             {campaign.target}
           </h1>
           <p className="mt-1 text-xs text-muted-foreground">
-            {campaign.model} · created {fmtDate(campaign.created_at)}
+            {campaign.model} · effort {campaign.effort} · created {fmtDate(campaign.created_at)}
           </p>
           {targetFiles.length > 0 && (
             <div className="mt-2 flex flex-wrap gap-2">
@@ -134,7 +170,7 @@ export function Campaign() {
 
       <div className="mt-6 flex min-h-0 flex-1 flex-col rounded-lg border">
         <div className="flex-1 space-y-4 overflow-y-auto p-4">
-          {messages.length === 0 && !pending && (
+          {messages.length === 0 && !stream && (
             <p className="text-sm text-muted-foreground">
               Ask about this target. The agent has no tools yet.
             </p>
@@ -147,12 +183,22 @@ export function Campaign() {
                 </div>
               </div>
             ) : (
-              <div key={m.id} className="max-w-[85%] whitespace-pre-wrap text-sm leading-relaxed">
-                {m.content}
+              <div key={m.id} className="max-w-[85%]">
+                {m.reasoning && <ThinkingBlock text={m.reasoning} />}
+                <Markdown text={m.content} />
               </div>
             )
           )}
-          {pending && <p className="text-sm text-muted-foreground">Thinking…</p>}
+          {stream && (
+            <div className="max-w-[85%]">
+              {stream.thinking && <ThinkingBlock text={stream.thinking} live />}
+              {stream.content ? (
+                <Markdown text={stream.content} />
+              ) : (
+                !stream.thinking && <p className="text-sm text-muted-foreground">Thinking…</p>
+              )}
+            </div>
+          )}
           <div ref={endRef} />
         </div>
 
@@ -178,6 +224,32 @@ export function Campaign() {
             </Button>
           </div>
         </div>
+      </div>
+    </div>
+  )
+}
+
+function ThinkingBlock({ text, live }: { text: string; live?: boolean }) {
+  const box = useRef<HTMLDivElement>(null)
+  const stick = useRef(true)
+
+  useEffect(() => {
+    const el = box.current
+    if (el && live && stick.current) el.scrollTop = el.scrollHeight
+  }, [text, live])
+
+  return (
+    <div className="mb-2 rounded-md border bg-muted/40 px-3 py-2">
+      <div className="text-xs font-medium text-muted-foreground">Thinking</div>
+      <div
+        ref={box}
+        onScroll={() => {
+          const el = box.current
+          if (el) stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24
+        }}
+        className="mt-1 max-h-72 overflow-y-auto whitespace-pre-wrap text-xs leading-relaxed text-muted-foreground"
+      >
+        {text}
       </div>
     </div>
   )

@@ -18,6 +18,8 @@ export function NewCampaign() {
   const nav = useNavigate()
   const [models, setModels] = useState<string[]>([])
   const [model, setModel] = useState("")
+  const [efforts, setEfforts] = useState<string[]>([])
+  const [effort, setEffort] = useState("")
   const [text, setText] = useState(EMPTY_TEXT)
   const [files, setFiles] = useState<FileMap>(NO_FILES)
   const [error, setError] = useState("")
@@ -29,6 +31,8 @@ export function NewCampaign() {
       .then((c) => {
         setModels(c.models)
         setModel(c.default_model)
+        setEfforts(c.efforts)
+        setEffort(c.default_effort)
       })
       .catch((e: Error) => setError(e.message))
   }, [])
@@ -43,6 +47,7 @@ export function NewCampaign() {
     e.preventDefault()
     const form = new FormData()
     form.set("model", model)
+    form.set("effort", effort)
     for (const field of FIELDS) {
       form.set(field, text[field])
       for (const file of files[field]) form.append(`${field}_files`, file)
@@ -84,19 +89,36 @@ export function NewCampaign() {
           <FieldAttachments files={files.target} onChange={attach("target")} disabled={busy} />
         </Field>
 
-        <div className="flex flex-col gap-2">
-          <Label>Model</Label>
-          <select
-            value={model}
-            onChange={(e) => setModel(e.target.value)}
-            className="h-9 w-full rounded-md border bg-transparent px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
-          >
-            {models.map((m) => (
-              <option key={m} value={m}>
-                {m}
-              </option>
-            ))}
-          </select>
+        <div className="grid grid-cols-2 gap-4">
+          <div className="flex flex-col gap-2">
+            <Label>Model</Label>
+            <select
+              value={model}
+              onChange={(e) => setModel(e.target.value)}
+              className="h-9 w-full rounded-md border bg-transparent px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+            >
+              {models.map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="flex flex-col gap-2">
+            <Label>Effort</Label>
+            <select
+              value={effort}
+              onChange={(e) => setEffort(e.target.value)}
+              className="h-9 w-full rounded-md border bg-transparent px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+            >
+              {efforts.map((level) => (
+                <option key={level} value={level}>
+                  {level}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
 
         <Field label="Info" hint="What the application is, anything the agent should know.">
