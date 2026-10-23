@@ -1,9 +1,15 @@
-FROM node:22-alpine AS web
+# The web build only emits static assets, so its toolchain never reaches the
+# final image. Bun installs the same tree far faster than npm on a cold cache
+# (no npm cache layer to layer between builds) and produces a byte-identical
+# dist. node:22-alpine is deliberately NOT used here: the platform-specific
+# optional deps (rollup/tailwind-oxide) have to resolve to the musl variants,
+# and a glibc builder removes that whole question.
+FROM oven/bun:1.4.2-slim AS web
 WORKDIR /web
-COPY web/package.json web/package-lock.json ./
-RUN npm ci
+COPY web/package.json web/bun.lock ./
+RUN bun install --frozen-lockfile
 COPY web/ ./
-RUN npm run build
+RUN bun run build
 
 # uv is a static binary (no python, no pip) — copy it in so the build never has
 # to download a resolver. It installs the exact same wheels pip would, but
