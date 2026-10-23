@@ -10,6 +10,7 @@ import {
   Folder,
   RefreshCw,
   Search,
+  SidebarToggle,
 } from "@/components/icons";
 import { SegmentedControl } from "@/components/ui/segmented";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -200,6 +201,8 @@ export function FilesPane({
   const [contentError, setContentError] = useState("");
   const [preview, setPreview] = useState(false);
   const [query, setQuery] = useState("");
+  const [showFilter, setShowFilter] = useState(false);
+  const [treeOpen, setTreeOpen] = useState(true);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   // Monaco is heavy; load its chunk (and configure its workers) only once the
   // files pane is actually mounted, not with the Campaign route.
@@ -269,21 +272,55 @@ export function FilesPane({
   const isMarkdown = /\.(md|markdown)$/i.test(content?.path ?? "");
 
   return (
-    <div className="flex min-h-0 flex-1 gap-2">
+    <div className="flex min-h-0 flex-1 flex-col gap-2">
+      {/* IDE toolbar: tree toggle + Code/Preview, like the reference layout */}
+      <div className="flex shrink-0 items-center gap-2 rounded-xl bg-surface px-2 py-1.5 shadow-card">
+        <button
+          type="button"
+          onClick={() => setTreeOpen((v) => !v)}
+          aria-label={treeOpen ? "Hide file tree" : "Show file tree"}
+          aria-pressed={treeOpen}
+          className="grid size-7 place-items-center rounded-md text-ink-3 outline-none transition-colors hover:bg-hover hover:text-ink focus-visible:ring-2 focus-visible:ring-ring/60 active:scale-[0.96]"
+        >
+          <SidebarToggle className="size-4" strokeWidth={1.5} />
+        </button>
+        <SegmentedControl
+          value={preview && isMarkdown ? "preview" : "code"}
+          onValueChange={(v) => setPreview(v === "preview")}
+          layoutId="workspace-view"
+          options={[
+            { value: "code", label: "Code" },
+            { value: "preview", label: "Preview", disabled: !isMarkdown },
+          ]}
+        />
+      </div>
+
+      <div className="flex min-h-0 flex-1 gap-2">
       {/* file tree */}
-      <div className="flex w-44 shrink-0 flex-col overflow-hidden rounded-xl bg-surface shadow-card">
+      {treeOpen && (
+      <div className="flex w-56 shrink-0 flex-col overflow-hidden rounded-xl bg-surface shadow-card">
         <div className="flex shrink-0 items-center gap-1 border-b border-line py-1.5 pr-1.5 pl-2.5">
           <span className="text-[12px] font-medium text-ink-2">Files</span>
           <button
             type="button"
+            onClick={() => setShowFilter((v) => !v)}
+            aria-label="Search files"
+            aria-pressed={showFilter}
+            className="ml-auto grid size-6 place-items-center rounded-md text-ink-3 outline-none transition-colors hover:bg-hover hover:text-ink focus-visible:ring-2 focus-visible:ring-ring/60"
+          >
+            <Search className="size-3.5" strokeWidth={1.5} />
+          </button>
+          <button
+            type="button"
             onClick={onRefresh}
             aria-label="Refresh files"
-            className="ml-auto grid size-6 place-items-center rounded-md text-ink-3 outline-none transition-colors hover:bg-hover hover:text-ink focus-visible:ring-2 focus-visible:ring-ring/60"
+            className="grid size-6 place-items-center rounded-md text-ink-3 outline-none transition-colors hover:bg-hover hover:text-ink focus-visible:ring-2 focus-visible:ring-ring/60"
           >
             <RefreshCw className="size-3.5" strokeWidth={1.5} />
           </button>
         </div>
 
+        {showFilter && (
         <div className="relative shrink-0 border-b border-line p-1.5">
           <Search
             className="pointer-events-none absolute top-1/2 left-3.5 size-3 -translate-y-1/2 text-ink-3"
@@ -298,6 +335,7 @@ export function FilesPane({
             className="h-7 w-full rounded-md bg-inset pr-2 pl-7 text-[12px] outline-none placeholder:text-ink-3 focus-visible:ring-2 focus-visible:ring-ring/40"
           />
         </div>
+        )}
 
         <div className="min-h-0 flex-1 overflow-y-auto p-1">
           {files === null ? (
@@ -342,6 +380,7 @@ export function FilesPane({
           )}
         </div>
       </div>
+      )}
 
       {/* viewer */}
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-xl bg-surface shadow-card">
@@ -359,8 +398,8 @@ export function FilesPane({
           </div>
         ) : content ? (
           <>
-            <div className="flex shrink-0 items-center gap-2 border-b border-line py-1.5 pr-2 pl-3">
-              <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5 font-mono text-[11px]">
+            <div className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-2">
+              <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5 font-mono text-[12px]">
                 {content.path.split("/").map((segment, i, all) => (
                   <span key={i} className="flex items-center gap-1.5">
                     {i > 0 && <span className="text-ink-3">/</span>}
@@ -380,23 +419,11 @@ export function FilesPane({
                   </span>
                 ))}
               </div>
-              {isMarkdown && (
-                <SegmentedControl
-                  value={preview ? "preview" : "code"}
-                  onValueChange={(v) => setPreview(v === "preview")}
-                  layoutId="file-view"
-                  className="shrink-0"
-                  options={[
-                    { value: "code", label: "Code" },
-                    { value: "preview", label: "Preview" },
-                  ]}
-                />
-              )}
               <a
                 href={api.workFileRawUrl(campaignId, content.path)}
                 target="_blank"
                 rel="noreferrer"
-                className="shrink-0 text-[11px] text-ink-3 outline-none transition-colors hover:text-ink focus-visible:ring-2 focus-visible:ring-ring/60"
+                className="shrink-0 text-[12px] text-ink-3 outline-none transition-colors hover:text-ink focus-visible:ring-2 focus-visible:ring-ring/60"
               >
                 raw
               </a>
@@ -442,6 +469,7 @@ export function FilesPane({
             {contentError || "Could not load this file."}
           </p>
         )}
+      </div>
       </div>
     </div>
   );

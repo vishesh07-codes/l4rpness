@@ -80,3 +80,70 @@ def test_models_cached_after_success(monkeypatch):
     assert asyncio.run(agent.models()) == ["up/m1"]
     assert asyncio.run(agent.models()) == ["up/m1"]
     assert calls == ["up"]
+
+
+def _stream_client(chunks):
+    """Fake OpenAI client yielding prebuilt stream chunks."""
+
+    async def create(**kwargs):
+        async def gen():
+            for chunk in chunks:
+                yield chunk
+
+        return gen()
+
+    return SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+    )
+
+
+def _chunk(reasoning=None, content=None):
+    delta = SimpleNamespace(
+        reasoning_content=reasoning, content=content, tool_calls=None
+    )
+    return SimpleNamespace(choices=[SimpleNamespace(delta=delta)], usage=None)
+
+
+def _collect_step(monkeypatch, provider_conf, model):
+    _providers(monkeypatch, {"gw": provider_conf})
+    monkeypatch.setattr(agent.tools, "schemas_for", lambda *a: [])
+    chunks = [
+        _chunk(content="I'll run a "),
+        _chunk(reasoning="batch."),
+        _chunk(content=" done"),
+    ]
+    monkeypatch.setattr(agent, "_client", lambda *a, **k: _stream_client(chunks))
+    campaign = {"model": model, "effort": "high"}
+    calls = []
+    client = _stream_client(chunks)
+
+    async def run():
+        return [
+            (kind, data)
+            async for kind, data in agent._step(client, campaign, [], calls)
+        ]
+
+    return asyncio.run(run())
+
+
+def test_step_folds_reasoning_into_content_for_plain_chat_endpoints(monkeypatch):
+    events = _collect_step(
+        monkeypatch,
+        {"api_key_env": "GW_KEY", "thinking": False},
+        "gw/deepseek-chat",
+    )
+    kinds = [kind for kind, _ in events if kind in ("thinking", "content")]
+    assert "thinking" not in kinds
+    assert "".join(data for kind, data in events if kind == "content") == (
+        "I'll run a batch. done"
+    )
+
+
+def test_step_keeps_reasoning_separate_for_thinking_endpoints(monkeypatch):
+    events = _collect_step(
+        monkeypatch,
+        {"api_key_env": "GW_KEY", "thinking": True},
+        "gw/deepseek-reasoner",
+    )
+    kinds = [kind for kind, _ in events if kind in ("thinking", "content")]
+    assert kinds == ["content", "thinking", "content"]

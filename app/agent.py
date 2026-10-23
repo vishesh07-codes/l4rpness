@@ -135,14 +135,20 @@ def model_limit(model: str) -> int:
 
 
 def limit_source(model: str) -> str:
-    """Where model_limit's answer came from: api, table, or fallback."""
+    """Where model_limit's answer came from: table, api, or fallback."""
     return _limit_with_source(model)[1]
+
+
+# Warn once per model (per process) when its window resolves to the guess, so
+# the operator learns the pin option exists without log spam from every step.
+_fallback_warned: set[str] = set()
 
 
 def _limit_with_source(model: str) -> tuple[int, str]:
     try:
-        if model in _model_limits:
-            return _model_limits[model], _limit_sources.get(model, "api")
+        # Explicit [llm.limits] pins win over the provider listing: a hand-set
+        # window is the operator's way to set one the provider reports wrong
+        # or not at all (a cold listing cache included).
         table = config.LIMITS or {}
         _, sep, bare = model.partition("/")
         for key in (model, bare if sep else model):
@@ -152,8 +158,18 @@ def _limit_with_source(model: str) -> tuple[int, str]:
                 continue
             if value > 0:
                 return value, "table"
+        if model in _model_limits:
+            return _model_limits[model], _limit_sources.get(model, "api")
     except Exception:
         log.warning("model limit lookup failed for %r", model)
+    if model not in _fallback_warned:
+        _fallback_warned.add(model)
+        log.warning(
+            "context window unknown for %r — using the %dk fallback; "
+            "pin it under [llm.limits] in config.toml to set it",
+            model,
+            FALLBACK_LIMIT // 1000,
+        )
     return FALLBACK_LIMIT, "fallback"
 
 
@@ -388,6 +404,13 @@ async def _step(client, campaign, messages, calls: list, tool_kind: str | None =
     provider, model = split_model(campaign["model"])
     conf = config.PROVIDERS.get(provider, {})
 
+    # Non-thinking endpoints (plain chat models) never produce real reasoning,
+    # but quirky gateways still spray text into reasoning_content deltas —
+    # mid-sentence, alternating with content. Fold those deltas into content so
+    # the transcript reads as one narration instead of fragments split by
+    # phantom reasoning blocks.
+    fold_reasoning = not conf.get("thinking")
+
     extra: dict = {}
     if conf.get("thinking"):
         extra["reasoning_effort"] = cast(Any, campaign["effort"] or config.DEFAULT_EFFORT)
@@ -441,7 +464,7 @@ async def _step(client, campaign, messages, calls: list, tool_kind: str | None =
         reasoning = getattr(delta, "reasoning_content", None)
         if reasoning:
             output_chars += len(reasoning)
-            yield "thinking", reasoning
+            yield ("content" if fold_reasoning else "thinking"), reasoning
         if delta.content:
             output_chars += len(delta.content)
             yield "content", delta.content

@@ -246,7 +246,9 @@ function ContextBar({
     <span
       className="inline-flex items-center gap-1.5 font-mono text-[11px] tabular-nums text-ink-3"
       title={`Context: ${ctx.toLocaleString()} of ${limit.toLocaleString()} tokens (${fmtTokens(ctx)} / ${fmtTokens(limit)})${
-        guessed ? " — window unknown for this model, 128k guess" : ""
+        guessed
+          ? " — window unknown for this model, 128k guess. Pin it under [llm.limits] in config.toml."
+          : ""
       }`}
     >
       <span
@@ -454,7 +456,6 @@ export function Campaign() {
         setRuntimeConfig(cfg);
         setGenerators(gens);
         setHypotheses(hypos);
-        setSelectedGenerator((prev) => prev ?? gens[0]?.id ?? null);
         setHypothesesShown(HYPOTHESIS_PAGE);
         initialIds.current = new Set(
           page.messages.map((message) => message.id),
@@ -1528,116 +1529,124 @@ export function Campaign() {
             />
 
             {tab === "generators" && (
-              <div className="flex min-h-0 flex-1 flex-col gap-3">
-                {/* navigation */}
-                <div className="flex max-h-52 shrink-0 flex-col overflow-hidden rounded-xl bg-surface shadow-card">
-                  <div className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-2">
-                    <span className="text-[12px] font-medium text-ink-2">
-                      Workers
-                    </span>
-                    <span className="font-mono text-[11px] tabular-nums text-ink-3">
-                      {generators.length}
-                    </span>
-                  </div>
-                  <div className="min-h-0 flex-1 overflow-y-auto p-1">
-                    {generators.length === 0 ? (
-                      <p className="p-3 text-[12px] text-ink-3">
-                        No hypothesis workers yet. The supervisor spawns them
-                        when the backlog runs dry.
-                      </p>
-                    ) : (
-                      generators.map((generator) => (
-                        <button
-                          key={generator.id}
-                          type="button"
-                          aria-current={
-                            selectedGenerator === generator.id
-                              ? "true"
-                              : undefined
-                          }
-                          onClick={() => openGenerator(generator.id)}
-                          className={cn(
-                            "flex w-full flex-col gap-1 rounded-md px-2.5 py-2 text-left transition-colors",
-                            selectedGenerator === generator.id
-                              ? "material-key"
-                              : "hover:bg-hover",
-                          )}
-                        >
-                          <span className="flex items-center gap-2">
-                            <span className="font-mono text-[11px] text-ink-3">
-                              #{generator.id}
-                            </span>
-                            <span className="min-w-0 flex-1 truncate text-[12px] font-medium">
-                              {generator.focus || "general"}
-                            </span>
-                            <StatusBadge status={generator.status} />
-                          </span>
-                          <span className="flex items-center gap-2 text-[11px] text-ink-3">
-                            <span className="shrink-0">
-                              {generator.hypothesis_count} hypotheses
-                            </span>
-                            {generator.last_snippet && (
-                              <span className="min-w-0 flex-1 truncate">
-                                {generator.last_snippet}
+              <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl bg-surface shadow-card">
+                {selectedGenerator === null || !selectedGeneratorInfo ? (
+                  <>
+                    <div className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-2">
+                      <span className="text-[12px] font-medium text-ink-2">
+                        Workers
+                      </span>
+                      <span className="font-mono text-[11px] tabular-nums text-ink-3">
+                        {generators.length}
+                      </span>
+                    </div>
+                    <div className="min-h-0 flex-1 overflow-y-auto p-2">
+                      {generators.length === 0 ? (
+                        <p className="p-3 text-[12px] text-ink-3">
+                          No hypothesis workers yet. The supervisor spawns them
+                          when the backlog runs dry.
+                        </p>
+                      ) : (
+                        <div className="flex flex-col gap-1.5">
+                        {generators.map((generator, index) => (
+                          <button
+                            key={generator.id}
+                            type="button"
+                            onClick={() => openGenerator(generator.id)}
+                            style={
+                              index < 8
+                                ? { animationDelay: `${index * 35}ms` }
+                                : undefined
+                            }
+                            className="generator-row material-key flex w-full flex-col gap-1 rounded-md px-2.5 py-2 text-left transition-[background-color,box-shadow,color,transform] duration-150 ease-[var(--ease-out-strong)] active:scale-[0.98]"
+                          >
+                            <span className="flex items-center gap-2">
+                              <span className="font-mono text-[11px] text-ink-3">
+                                #{generator.id}
                               </span>
-                            )}
-                          </span>
-                        </button>
-                      ))
-                    )}
-                  </div>
-                </div>
-
-                {/* detail */}
-                <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl bg-surface shadow-card">
-                  <div className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-2">
-                    {selectedGeneratorInfo ? (
-                      <>
+                              <span className="min-w-0 flex-1 truncate text-[12px] font-medium">
+                                {generator.focus || "general"}
+                              </span>
+                              <StatusBadge status={generator.status} />
+                            </span>
+                            <span className="flex items-center gap-2 text-[11px] text-ink-3">
+                              <span className="shrink-0">
+                                {generator.hypothesis_count} hypotheses
+                              </span>
+                              {generator.last_snippet && (
+                                <span className="min-w-0 flex-1 truncate">
+                                  {generator.last_snippet}
+                                </span>
+                              )}
+                            </span>
+                          </button>
+                        ))}
+                        </div>
+                      )}
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="flex shrink-0 flex-col gap-1.5 border-b border-line px-4 py-3">
+                      <button
+                        type="button"
+                        onClick={() => setSelectedGenerator(null)}
+                        className="-ml-1 flex w-fit items-center gap-1 rounded-md px-1 py-1 text-[13px] text-ink-2 outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 active:scale-[0.97]"
+                      >
+                        <ArrowLeft
+                          className="size-4"
+                          strokeWidth={1.5}
+                        />
+                        Workers
+                      </button>
+                      <div className="flex items-center gap-2">
                         <span className="font-mono text-[11px] text-ink-3">
                           #{selectedGeneratorInfo.id}
                         </span>
-                        <span className="min-w-0 flex-1 truncate text-[12px] font-medium">
+                        <span
+                          className="min-w-0 flex-1 truncate text-[13px] font-medium text-ink"
+                          title={selectedGeneratorInfo.focus || "general"}
+                        >
                           {selectedGeneratorInfo.focus || "general"}
                         </span>
                         <StatusBadge status={selectedGeneratorInfo.status} />
-                      </>
-                    ) : (
-                      <span className="text-[12px] font-medium text-ink-2">
-                        Activity
-                      </span>
-                    )}
-                  </div>
-                  <div className="min-h-0 flex-1 overflow-y-auto p-3">
-                    {selectedGenerator === null ? (
-                      <p className="text-[12px] text-ink-3">
-                        Pick a worker above to see its activity.
-                      </p>
-                    ) : generatorMessages.length === 0 ? (
-                      <LoadingState label="Loading worker" />
-                    ) : (
-                      <div className="flex flex-col gap-3">
-                        {(generatorHasEarlier ||
-                          generatorMessages.length > generatorWindowSize) && (
-                          <div className="flex justify-center">
-                            <button
-                              type="button"
-                              onClick={loadEarlierGenerator}
-                              className="material-key rounded-full px-3 py-1 text-[12px] text-ink-2 outline-none transition-[background-color,box-shadow,color,scale] duration-150 ease-[var(--ease-out-strong)] hover:text-ink focus-visible:ring-2 focus-visible:ring-ring/60 active:scale-[0.96]"
-                            >
-                              Load earlier output
-                            </button>
-                          </div>
-                        )}
-                        {visibleGeneratorMessages.map((message) => (
-                          <AssistantMessage
-                            key={message.id}
-                            parts={message.parts}
-                          />
-                        ))}
                       </div>
-                    )}
-                  </div>
-                </div>
+                      <span className="text-[11px] text-ink-3">
+                        {selectedGeneratorInfo.hypothesis_count} hypotheses
+                        {selectedGeneratorInfo.last_snippet
+                          ? ` · ${selectedGeneratorInfo.last_snippet}`
+                          : ""}
+                      </span>
+                    </div>
+                    <div className="generator-detail min-h-0 flex-1 overflow-y-auto p-3">
+                      {generatorMessages.length === 0 ? (
+                        <LoadingState label="Loading worker" />
+                      ) : (
+                        <div className="flex flex-col gap-3">
+                          {(generatorHasEarlier ||
+                            generatorMessages.length >
+                              generatorWindowSize) && (
+                            <div className="flex justify-center">
+                              <button
+                                type="button"
+                                onClick={loadEarlierGenerator}
+                                className="material-key rounded-full px-3 py-1 text-[12px] text-ink-2 outline-none transition-[background-color,box-shadow,color,scale] duration-150 ease-[var(--ease-out-strong)] hover:text-ink focus-visible:ring-2 focus-visible:ring-ring/60 active:scale-[0.96]"
+                              >
+                                Load earlier output
+                              </button>
+                            </div>
+                          )}
+                          {visibleGeneratorMessages.map((message) => (
+                            <AssistantMessage
+                              key={message.id}
+                              parts={message.parts}
+                            />
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </>
+                )}
               </div>
             )}
 

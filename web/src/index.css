@@ -573,3 +573,34 @@ body {
     opacity: 1;
   }
 }
+
+/* Generators master-detail: list rows cascade barely-there, detail slides
+ * in from the right. Transform + opacity only, interruptible, under 200ms. */
+.generator-row {
+  animation: generator-row-in 180ms var(--ease-out-strong) backwards;
+}
+
+.generator-detail {
+  animation: generator-detail-in 200ms var(--ease-out-strong) backwards;
+}
+
+@keyframes generator-row-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+@keyframes generator-detail-in {
+  from {
+    opacity: 0;
+    transform: translateX(12px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .generator-row,
+  .generator-detail {
+    animation: none;
+  }
+}

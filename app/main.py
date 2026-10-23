@@ -7,7 +7,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.gzip import GZipMiddleware
 
-from . import config, db, mcp, supervisor
+from . import agent, config, db, mcp, supervisor
 from .routes import router
 
 # the app logs to "l4rpness"; without a handler only warnings+ show (python's
@@ -33,6 +33,10 @@ async def _watch_host_env() -> None:
             continue
         if changed:
             agent.reset_model_cache()
+            try:
+                await agent.models()
+            except Exception:
+                pass
             settings.note_auto_applied(changed)
             log.info("auto-applied host .env changes: %s", ", ".join(changed))
 
@@ -54,6 +58,10 @@ async def _watch_host_config() -> None:
             continue
         if changed:
             agent.reset_model_cache()
+            try:
+                await agent.models()
+            except Exception:
+                pass
             settings.note_config_auto_applied(changed)
             log.info("auto-applied host config.toml changes: %s", ", ".join(changed))
 
@@ -63,6 +71,13 @@ async def lifespan(_app):
     db.init()
     db.recover()
     await mcp.start()
+    # Warm provider model listings before resumed campaigns resolve context
+    # windows: with a cold cache every window silently falls back to 128k,
+    # which mis-sizes both the compaction trigger and the in-chain budget.
+    try:
+        await agent.models()
+    except Exception as exc:
+        log.warning("l4rpness: model listing warm-up failed: %s", exc)
     supervisor.restore()
     watchers = [
         asyncio.create_task(_watch_host_env()),

@@ -20,10 +20,14 @@ base_url = "http://178.83.181.199:8888/v1"
 api_key_env = "ROUTER9_API_KEY"
 thinking = false
 
-# Context windows the provider API cannot report (9router reports its own
-# live via /v1/models; DeepSeek's /v1/models is id-only, so these come from
-# https://api-docs.deepseek.com/quick_start/pricing — "CONTEXT LENGTH 1M").
-# Unknown models fall back to 128k. Used for the auto compaction trigger.
+# Context-window pins, keyed by model as shown in the picker (the bare id
+# after the provider prefix works too, e.g. "ds/deepseek-v4-flash" for
+# "localhost-9/ds/deepseek-v4-flash"). A pin wins over the provider listing,
+# so use it to set a window the listing reports wrong or not at all — the
+# 9router ones report their own live via /v1/models; DeepSeek's /v1/models is
+# id-only, so deepseek-* come from https://api-docs.deepseek.com/quick_start/pricing
+# ("CONTEXT LENGTH 1M"). Models with neither a pin nor a reported window fall
+# back to 128k. Used for the auto compaction trigger and the in-chain budget.
 [llm.limits]
 "deepseek-flash" = 1000000
 "deepseek-v4-pro" = 1000000

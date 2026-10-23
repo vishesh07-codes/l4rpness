@@ -114,6 +114,17 @@ def test_model_limit_cache_table_fallback_order(monkeypatch):
     assert agent.model_limit("mystery-model") == agent.FALLBACK_LIMIT
 
 
+def test_limit_pin_overrides_api_cache(monkeypatch):
+    """An explicit [llm.limits] pin wins over a (possibly wrong or stale)
+    value from the provider listing: it is the operator's way to set the
+    window when the API reports the wrong one or none at all."""
+    monkeypatch.setattr(agent, "_model_limits", {"p/a": 128_000})
+    monkeypatch.setattr(agent, "_limit_sources", {"p/a": "api"})
+    monkeypatch.setattr(config, "LIMITS", {"a": 1_000_000})
+    assert agent.model_limit("p/a") == 1_000_000
+    assert agent.limit_source("p/a") == "table"
+
+
 def test_limit_from_entry_shapes():
     assert agent._limit_from_entry({"capabilities": {"contextWindow": 262144}}) == 262144
     assert agent._limit_from_entry({"context_length": 1048576}) == 1048576
