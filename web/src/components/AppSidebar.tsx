@@ -1,12 +1,9 @@
-import { BarChart3, LayoutGrid } from "lucide-react"
+import { LayoutGrid } from "lucide-react"
 import { Link, useLocation } from "react-router-dom"
 
 import { cn } from "@/lib/utils"
 
-const nav = [
-  { to: "/", label: "Dashboard", icon: LayoutGrid },
-  { to: "/usage", label: "Usage", icon: BarChart3 },
-]
+const nav = [{ to: "/", label: "Dashboard", icon: LayoutGrid }]
 
 export function AppSidebar() {
   const { pathname } = useLocation()
@@ -28,7 +25,7 @@ export function AppSidebar() {
                 active && "bg-accent text-foreground"
               )}
             >
-              <Icon className="size-4" strokeWidth={1.5} />
+              <Icon className="size-4" />
               {label}
             </Link>
           )

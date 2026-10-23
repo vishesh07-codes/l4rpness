@@ -33,13 +33,6 @@ DEFAULTS = {
         "read_max_lines": 2000,
         "http_timeout": 30,
     },
-    "pricing": {
-        # USD per 1M tokens, used only to show billed spend. Leave at 0 to
-        # report token usage with no dollar amount.
-        "input": 0.0,
-        "cached_input": 0.0,
-        "output": 0.0,
-    },
 }
 
 
@@ -90,18 +83,3 @@ BASH_OUTPUT_BYTES = SETTINGS["tools"]["bash_output_bytes"]
 TOOL_OUTPUT_CHARS = SETTINGS["tools"]["output_chars"]
 READ_MAX_LINES = SETTINGS["tools"]["read_max_lines"]
 HTTP_TIMEOUT = SETTINGS["tools"]["http_timeout"]
-
-PRICE_INPUT = float(SETTINGS["pricing"]["input"])
-PRICE_CACHED_INPUT = float(SETTINGS["pricing"]["cached_input"])
-PRICE_OUTPUT = float(SETTINGS["pricing"]["output"])
-
-
-def cost_usd(input_tokens: int, cached_tokens: int, output_tokens: int) -> float:
-    """Billed spend from configured per-1M-token prices; 0 until prices are set."""
-    uncached = max(input_tokens - cached_tokens, 0)
-    return round(
-        uncached / 1_000_000 * PRICE_INPUT
-        + cached_tokens / 1_000_000 * PRICE_CACHED_INPUT
-        + output_tokens / 1_000_000 * PRICE_OUTPUT,
-        6,
-    )

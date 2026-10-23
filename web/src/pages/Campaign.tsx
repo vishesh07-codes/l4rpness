@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { Link, useNavigate, useParams } from "react-router-dom"
 import {
   ArrowDown,
@@ -12,9 +12,11 @@ import {
   TriangleAlert,
 } from "lucide-react"
 
-import { ThinkingShimmer } from "@/components/agents/loading-states/thinking-shimmer"
+import { AgentProgress } from "@/components/agents/loading-states/agent-progress"
+import { ReasoningText } from "@/components/agents/loading-states/reasoning-text"
 import { MessageScroller } from "@/components/agents/message-scroller"
 import { PromptInput } from "@/components/agents/prompt-input"
+import { TodoList } from "@/components/agents/todo-list"
 import { StatusBadge } from "@/components/StatusBadge"
 import { AssistantMessage, MessageRow, UserMessage } from "@/components/chat/Message"
 import LoadingState from "@/components/primitives/LoadingState"
@@ -27,6 +29,7 @@ import {
   type Part,
   type ToolCall,
 } from "@/lib/api"
+import { latestTodos } from "@/lib/todos"
 import { cn, fmtDate } from "@/lib/utils"
 
 const SECTIONS = [
@@ -61,6 +64,9 @@ export function Campaign() {
   const initialIds = useRef<Set<number> | null>(null)
   const abortRef = useRef<AbortController | null>(null)
   const viewportRef = useRef<HTMLElement | null>(null)
+  const stoppedRef = useRef(false)
+  const optimisticRef = useRef<number | null>(null)
+  const contentRef = useRef("")
 
   useEffect(() => {
     if (!campaignId) return
@@ -107,10 +113,20 @@ export function Campaign() {
     }
   }, [campaign?.running, pending, campaignId])
 
+  const todos = useMemo(
+    () =>
+      latestTodos(
+        ...messages.map((m) => (m.role === "assistant" ? partsOf(m) : [])),
+        stream?.parts ?? []
+      ),
+    [messages, stream]
+  )
+
   async function send() {
     const content = input.trim()
     if (!content || pending) return
 
+    stoppedRef.current = false
     setInput("")
     setError("")
     setPending(true)
@@ -118,6 +134,7 @@ export function Campaign() {
 
     const controller = new AbortController()
     abortRef.current = controller
+    contentRef.current = content
 
     const optimistic: Message = {
       id: -Date.now(),
@@ -127,6 +144,7 @@ export function Campaign() {
       created_at: "",
     }
     setMessages((prev) => [...prev, optimistic])
+    optimisticRef.current = optimistic.id
 
     const pushPart = (part: Part) =>
       setStream((s) => {
@@ -152,6 +170,7 @@ export function Campaign() {
         campaignId,
         content,
         (event) => {
+          if (stoppedRef.current) return
           if (event.type === "thinking") {
             pushPart({ type: "thinking", text: event.text })
           } else if (event.type === "content") {
@@ -196,31 +215,44 @@ export function Campaign() {
       else failure = (e as Error).message
     }
 
-    if (!completed && !failure && !stopped) {
-      failure = "connection lost before the reply finished"
-    }
-
-    if (stopped || failure) {
-      if (saved) {
+    if (stoppedRef.current) {
+      // stop() already reset the composer and dropped the optimistic row
+    } else {
+      if (!completed && !failure && !stopped) {
+        failure = "connection lost before the reply finished"
+      }
+      if (failure && saved) {
         try {
           setMessages(await api.listMessages(campaignId))
         } catch {
           // keep the optimistic message if the refresh fails
         }
-      } else {
+      } else if (failure) {
         setMessages((prev) => prev.filter((m) => m.id !== optimistic.id))
         setInput(content)
       }
       if (failure) setError(failure)
+      abortRef.current = null
+      setStream(null)
+      setPending(false)
     }
-
-    abortRef.current = null
-    setStream(null)
-    setPending(false)
+    optimisticRef.current = null
   }
 
   function stop() {
-    abortRef.current?.abort()
+    stoppedRef.current = true
+    const controller = abortRef.current
+    abortRef.current = null
+    controller?.abort()
+
+    if (optimisticRef.current != null) {
+      const id = optimisticRef.current
+      setMessages((prev) => prev.filter((m) => m.id !== id))
+      optimisticRef.current = null
+    }
+    setInput(contentRef.current)
+    setStream(null)
+    setPending(false)
   }
 
   async function remove() {
@@ -340,16 +372,18 @@ export function Campaign() {
           {stream && (
             <MessageRow role="assistant">
               <div className="flex w-full flex-col gap-3">
-                {stream.pendingTool && (
-                  <div className="text-[13px]">
-                    <ThinkingShimmer>
-                      {stream.pendingTool === "write_todos"
-                        ? "Planning…"
-                        : `Calling ${stream.pendingTool}…`}
-                    </ThinkingShimmer>
-                  </div>
-                )}
-                <AssistantMessage parts={stream.parts} live />
+                {stream.pendingTool ? (
+                  <AgentProgress
+                    label={
+                      stream.pendingTool === "write_todos"
+                        ? "Planning"
+                        : `Running ${stream.pendingTool}`
+                    }
+                  />
+                ) : stream.parts.length === 0 ? (
+                  <ReasoningText />
+                ) : null}
+                {stream.parts.length > 0 && <AssistantMessage parts={stream.parts} live />}
               </div>
             </MessageRow>
           )}
@@ -383,6 +417,11 @@ export function Campaign() {
         )}
 
         <div className="pt-1">
+          {todos.length > 0 && (
+            <div className="mb-2">
+              <TodoList items={todos} title="Plan" defaultOpen />
+            </div>
+          )}
           <PromptInput
             value={input}
             onValueChange={setInput}

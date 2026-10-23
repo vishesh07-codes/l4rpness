@@ -61,46 +61,6 @@ def list_campaigns():
     return [{**row_dict(r), "running": r["id"] in RUNNING} for r in rows]
 
 
-@router.get("/usage")
-def usage(days: int = 7):
-    window = 30 if days > 7 else 7
-    with db.db() as conn:
-        rows = conn.execute(
-            """
-            SELECT date(m.created_at) AS date,
-                   c.model AS model,
-                   c.target AS target,
-                   SUM(m.input_tokens) AS input_tokens,
-                   SUM(m.cached_tokens) AS cached_tokens,
-                   SUM(m.output_tokens) AS output_tokens,
-                   SUM(m.requests) AS requests,
-                   SUM(m.cost_usd) AS cost_usd
-            FROM messages m
-            JOIN campaigns c ON c.id = m.campaign_id
-            WHERE m.role = 'assistant'
-              AND m.created_at >= date('now', ?)
-            GROUP BY date(m.created_at), c.model, c.target
-            ORDER BY date(m.created_at)
-            """,
-            (f"-{window - 1} days",),
-        ).fetchall()
-
-    return [
-        {
-            "date": row["date"],
-            "provider": "deepseek",
-            "model": row["model"],
-            "agent": (row["target"] or "").split("\n")[0][:60] or "l4rpness",
-            "inputTokens": row["input_tokens"] or 0,
-            "cachedInputTokens": row["cached_tokens"] or 0,
-            "outputTokens": row["output_tokens"] or 0,
-            "requests": row["requests"] or 0,
-            "costUsd": row["cost_usd"] or 0,
-        }
-        for row in rows
-    ]
-
-
 @router.post("/campaigns", status_code=201)
 async def create_campaign(
     target: str = Form(""),
@@ -266,7 +226,6 @@ async def send_message(campaign_id: int, body: MessageIn):
         calls = []
         failure = ""
         stopped = False
-        usage = {"input_tokens": 0, "cached_tokens": 0, "output_tokens": 0, "requests": 0}
 
         def add_text(kind: str, text: str):
             if parts and parts[-1]["type"] == kind:
@@ -275,7 +234,7 @@ async def send_message(campaign_id: int, body: MessageIn):
                 parts.append({"type": kind, "text": text})
 
         try:
-            async for kind, data in agent.run(campaign, attachments, history, campaign_id, stop, usage):
+            async for kind, data in agent.run(campaign, attachments, history, campaign_id, stop):
                 if kind == "thinking":
                     thinking.append(data)
                     add_text("thinking", data)
@@ -325,16 +284,10 @@ async def send_message(campaign_id: int, body: MessageIn):
                 )
                 assistant_row = None
                 if has_output:
-                    cost = config.cost_usd(
-                        usage["input_tokens"], usage["cached_tokens"], usage["output_tokens"]
-                    )
                     assistant_cur = conn.execute(
                         """
-                        INSERT INTO messages (
-                            campaign_id, role, content, reasoning, tool_calls, parts,
-                            input_tokens, cached_tokens, output_tokens, requests, cost_usd
-                        )
-                        VALUES (?, 'assistant', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        INSERT INTO messages (campaign_id, role, content, reasoning, tool_calls, parts)
+                        VALUES (?, 'assistant', ?, ?, ?, ?)
                         """,
                         (
                             campaign_id,
@@ -342,11 +295,6 @@ async def send_message(campaign_id: int, body: MessageIn):
                             "".join(thinking).strip(),
                             json.dumps(calls),
                             json.dumps(parts),
-                            usage["input_tokens"],
-                            usage["cached_tokens"],
-                            usage["output_tokens"],
-                            usage["requests"],
-                            cost,
                         ),
                     )
                     assistant_row = conn.execute(

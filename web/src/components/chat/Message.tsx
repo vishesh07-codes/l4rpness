@@ -3,7 +3,6 @@ import type { ReactNode } from "react"
 import { ThinkingShimmer } from "@/components/agents/loading-states/thinking-shimmer"
 import { MessageBubble, MessageBubbleContent } from "@/components/agents/message-bubble"
 import { StreamingResponse } from "@/components/agents/streaming-response"
-import { TodoList, type TodoItem, type TodoItemStatus } from "@/components/agents/todo-list"
 import { ToolResult, ToolResultOutput } from "@/components/agents/tool-result"
 import { StreamText } from "@/components/atoms/StreamText"
 import { Markdown } from "@/components/Markdown"
@@ -75,25 +74,6 @@ function ToolBlock({ part }: { part: ToolPart }) {
   )
 }
 
-function normalizeTodoStatus(value: unknown): TodoItemStatus {
-  const status = String(value ?? "").toLowerCase()
-  if (["in-progress", "in_progress", "active", "running"].includes(status)) return "in-progress"
-  if (["completed", "complete", "done"].includes(status)) return "completed"
-  if (["cancelled", "canceled"].includes(status)) return "cancelled"
-  return "pending"
-}
-
-function todosFrom(args: Record<string, unknown>): TodoItem[] {
-  const raw = Array.isArray(args.todos) ? args.todos : []
-  return raw
-    .map((entry, index) => {
-      const todo = (entry && typeof entry === "object" ? entry : {}) as Record<string, unknown>
-      const title = typeof todo.title === "string" ? todo.title : String(todo.title ?? "")
-      return { id: String(todo.id ?? index), title, status: normalizeTodoStatus(todo.status) }
-    })
-    .filter((todo) => todo.title)
-}
-
 export function AssistantMessage({ parts, live = false }: { parts: Part[]; live?: boolean }) {
   if (parts.length === 0) {
     return (
@@ -107,13 +87,6 @@ export function AssistantMessage({ parts, live = false }: { parts: Part[]; live?
     .filter((part): part is Extract<Part, { type: "content" }> => part.type === "content")
     .map((part) => part.text)
     .join("")
-
-  // the plan is rewritten on every write_todos call, so show only the latest
-  const lastTodoIndex = parts.reduce(
-    (latest, part, index) =>
-      part.type === "tool" && part.name === "write_todos" ? index : latest,
-    -1
-  )
 
   // reasoning runs once per tool step, so label the first block only and shimmer the active one
   const firstThinkingIndex = parts.findIndex((part) => part.type === "thinking")
@@ -137,11 +110,8 @@ export function AssistantMessage({ parts, live = false }: { parts: Part[]; live?
           )
         }
         if (part.type === "tool") {
-          if (part.name === "write_todos") {
-            return index === lastTodoIndex ? (
-              <TodoList key={`todo-${index}`} items={todosFrom(part.args)} />
-            ) : null
-          }
+          // the plan is shown attached to the composer, not in the transcript
+          if (part.name === "write_todos") return null
           return <ToolBlock key={part.id || `tool-${index}`} part={part} />
         }
         return (

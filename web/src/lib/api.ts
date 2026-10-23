@@ -49,18 +49,6 @@ export type Part =
   | { type: "content"; text: string }
   | ({ type: "tool" } & ToolCall)
 
-export type UsageRecord = {
-  date: string
-  provider: string
-  model: string
-  agent?: string
-  inputTokens: number
-  cachedInputTokens?: number
-  outputTokens: number
-  requests: number
-  costUsd: number
-}
-
 export type AppConfig = {
   models: string[]
   default_model: string
@@ -147,7 +135,6 @@ async function streamMessage(
 
 export const api = {
   config: () => req<AppConfig>("/api/config"),
-  usage: (days = 30) => req<UsageRecord[]>(`/api/usage?days=${days}`),
   listCampaigns: () => req<Campaign[]>("/api/campaigns"),
   getCampaign: (id: number) => req<Campaign>(`/api/campaigns/${id}`),
   createCampaign: (form: FormData) =>

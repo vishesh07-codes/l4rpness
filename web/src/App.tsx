@@ -8,7 +8,6 @@ import { cn } from "@/lib/utils"
 import { Campaign } from "@/pages/Campaign"
 import { Dashboard } from "@/pages/Dashboard"
 import { NewCampaign } from "@/pages/NewCampaign"
-import { Usage } from "@/pages/Usage"
 
 export default function App() {
   const [darkMode, setDarkMode] = useState(() => {
@@ -68,7 +67,6 @@ export default function App() {
       <main className="pl-56">
         <Routes>
           <Route path="/" element={<Dashboard />} />
-          <Route path="/usage" element={<Usage />} />
           <Route path="/campaigns/new" element={<NewCampaign />} />
           <Route path="/campaigns/:id" element={<Campaign />} />
           <Route path="*" element={<Navigate to="/" replace />} />
