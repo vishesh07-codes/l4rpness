@@ -155,6 +155,19 @@ def test_write_file_cannot_touch_skill_dir(work, tmp_path, monkeypatch):
     assert "escapes" in out
 
 
+def test_execute_routes_mcp_tools(work, monkeypatch):
+    async def fake_call(name, args):
+        return "row1\nrow2", True
+
+    monkeypatch.setattr(tools.mcp, "is_tool", lambda name: name == "frank_dns_lookup")
+    monkeypatch.setattr(tools.mcp, "call", fake_call)
+
+    out, ok, _ = asyncio.run(tools.execute("frank_dns_lookup", {"hostname": "x"}, 1))
+    assert ok
+    assert "row1" in out
+    assert "row2" in out
+
+
 def test_path_escape_rejected(work):
     out, ok, _ = asyncio.run(tools.execute("read_file", {"path": "../secret"}, 1))
     assert not ok

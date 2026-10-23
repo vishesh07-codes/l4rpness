@@ -14,6 +14,7 @@ const NewCampaign = lazy(() =>
 )
 const Campaign = lazy(() => import("@/pages/Campaign").then((m) => ({ default: m.Campaign })))
 const Skills = lazy(() => import("@/pages/Skills").then((m) => ({ default: m.Skills })))
+const Mcp = lazy(() => import("@/pages/Mcp").then((m) => ({ default: m.Mcp })))
 
 export default function App() {
   const [darkMode, setDarkMode] = useState(() => {
@@ -104,6 +105,7 @@ export default function App() {
             <Route path="/campaigns/new" element={<NewCampaign />} />
             <Route path="/campaigns/:id" element={<Campaign />} />
             <Route path="/skills" element={<Skills />} />
+            <Route path="/mcp" element={<Mcp />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </Suspense>

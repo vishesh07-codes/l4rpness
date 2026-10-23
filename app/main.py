@@ -5,14 +5,16 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.gzip import GZipMiddleware
 
-from . import config, db
+from . import config, db, mcp
 from .routes import router
 
 
 @asynccontextmanager
 async def lifespan(_app):
     db.init()
+    await mcp.start()
     yield
+    await mcp.stop()
 
 
 app = FastAPI(title="l4rpness", lifespan=lifespan)

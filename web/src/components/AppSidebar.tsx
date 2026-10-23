@@ -1,7 +1,7 @@
 import { useEffect, useState, type MouseEvent } from "react"
 import { Link, useLocation } from "react-router-dom"
 
-import { BookOpenText, Compose, LayoutGrid, Moon, Shield, SidebarToggle, Sun } from "@/components/icons"
+import { BookOpenText, Compose, LayoutGrid, Moon, Shield, SidebarToggle, Sun, Wrench } from "@/components/icons"
 import { api, type Campaign } from "@/lib/api"
 import { IconAction } from "@/components/IconAction"
 import { cn } from "@/lib/utils"
@@ -11,6 +11,7 @@ const nav = [
   // a sparkle collapses into a solid blob at 18px; a book also says
   // "methodology the agent loads on demand" better than a sparkle did
   { to: "/skills", label: "Skills", icon: BookOpenText },
+  { to: "/mcp", label: "MCP", icon: Wrench },
 ]
 
 export function AppSidebar({

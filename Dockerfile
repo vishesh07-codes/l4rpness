@@ -24,6 +24,25 @@ RUN if [ "$TOOLSET" = "custom" ]; then \
       echo "minimal image, no extra tools"; \
     fi && rm -f /tmp/tools.txt
 
+RUN if [ "$TOOLSET" = "custom" ]; then \
+      echo "installing mcp tool binaries" && \
+      pip install semgrep pip-audit && \
+      apt-get update && \
+      apt-get install -y --no-install-recommends nodejs npm && \
+      rm -rf /var/lib/apt/lists/* && \
+      python -c "import io, tarfile, urllib.request; d = urllib.request.urlopen('https://github.com/gitleaks/gitleaks/releases/download/v8.24.3/gitleaks_8.24.3_linux_x64.tar.gz').read(); tarfile.open(fileobj=io.BytesIO(d)).extract('gitleaks', '/usr/local/bin', filter='data')" && \
+      chmod +x /usr/local/bin/gitleaks; \
+    else \
+      echo "minimal image, no mcp tool binaries"; \
+    fi
+
+COPY vendor/frank/ /frank/
+COPY vendor/specter/ /opt/specter/
+COPY docker/specter /usr/local/bin/specter
+RUN chmod +x /usr/local/bin/specter && \
+    mkdir -p /home/cran/Documents/pentest/scripts/search_method && \
+    chown -R app:app /home/cran
+
 COPY app/ ./app/
 COPY prompts/ ./prompts/
 COPY skills/ ./skills/

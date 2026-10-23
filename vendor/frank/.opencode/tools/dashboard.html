@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>frank — dashboard</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #0a0a0f; color: #c0c0d0; font-family: "JetBrains Mono", "Fira Code", monospace; padding: 24px; }
+  h1 { color: #7af; font-size: 18px; margin-bottom: 20px; letter-spacing: 1px; }
+  h1 span { color: #555; }
+  #log { list-style: none; }
+  .entry { padding: 10px 14px; margin-bottom: 6px; border-left: 3px solid #333; background: #111118; font-size: 13px; line-height: 1.5; }
+  .entry .time { color: #555; font-size: 11px; }
+  .entry .tool { color: #7af; font-weight: bold; }
+  .entry .status-badge { display: inline-block; font-size: 10px; padding: 1px 7px; border-radius: 3px; margin-left: 8px; text-transform: uppercase; }
+  .status-start { border-left-color: #7af; }
+  .status-start .status-badge { background: #1a3a5a; color: #7af; }
+  .status-complete { border-left-color: #4c4; }
+  .status-complete .status-badge { background: #1a3a1a; color: #4c4; }
+  .status-error { border-left-color: #f44; }
+  .status-error .status-badge { background: #3a1a1a; color: #f44; }
+  .entry .msg { margin-top: 4px; color: #888; word-break: break-all; max-height: 80px; overflow-y: auto; }
+  .connected { color: #4c4; font-size: 12px; float: right; }
+  #status { color: #555; font-size: 12px; margin-bottom: 12px; }
+</style>
+</head>
+<body>
+<h1>┃ frank <span>— real-time tool dashboard</span></h1>
+<div id="status">connecting...</div>
+<ul id="log"></ul>
+<script>
+const es = new EventSource("/events");
+const log = document.getElementById("log");
+const status = document.getElementById("status");
+
+es.addEventListener("open", () => status.textContent = "● connected  ·  listening for tool calls");
+es.addEventListener("error", () => status.textContent = "○ disconnected");
+
+es.onmessage = (e) => {
+  const ev = JSON.parse(e.data);
+  const li = document.createElement("li");
+  li.className = `entry status-${ev.status}`;
+
+  const t = new Date(ev.time * 1000).toLocaleTimeString();
+  const statusLabel = ev.status === "start" ? "running" : ev.status;
+
+  li.innerHTML = `
+    <span class="time">${t}</span>
+    <span class="tool">${ev.tool}</span>
+    <span class="status-badge">${statusLabel}</span>
+    <div class="msg">${escapeHtml(ev.message)}</div>
+  `;
+  log.prepend(li);
+};
+
+function escapeHtml(s) {
+  const d = document.createElement("div");
+  d.textContent = s;
+  return d.innerHTML;
+}
+</script>
+</body>
+</html>

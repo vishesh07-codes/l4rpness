@@ -7,7 +7,7 @@ import time
 from itertools import islice
 from pathlib import Path
 
-from . import config, skills
+from . import config, mcp, skills
 
 SCHEMAS = [
     {
@@ -318,6 +318,13 @@ HANDLERS = {
 
 async def execute(name: str, args: dict, campaign_id: int, stop=None) -> tuple[str, bool, int]:
     work = _work_dir(campaign_id)
+
+    if mcp.is_tool(name):
+        started = time.monotonic()
+        text, ok = await mcp.call(name, args or {})
+        ms = int((time.monotonic() - started) * 1000)
+        return _clip(work, text, name), ok, ms
+
     handler = HANDLERS.get(name)
     if handler is None:
         return f"error: unknown tool {name}", False, 0

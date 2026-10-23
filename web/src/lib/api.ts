@@ -75,6 +75,20 @@ export type SkillDetail = Skill & {
   files: string[]
 }
 
+export type McpServer = {
+  name: string
+  command: string[]
+  url: string
+  env: Record<string, string>
+  headers: Record<string, string>
+  enabled: string[]
+  connected: boolean
+  error: string
+  available: string[]
+}
+
+export type McpStatus = { servers: McpServer[] }
+
 export type AppConfig = {
   models: string[]
   default_model: string
@@ -190,6 +204,13 @@ export const api = {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(skill),
+    }),
+  mcp: () => req<McpStatus>("/api/mcp"),
+  saveMcp: (servers: McpServer[]) =>
+    req<McpStatus>("/api/mcp", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(servers),
     }),
   listMessages: (id: number) => req<Message[]>(`/api/campaigns/${id}/messages`),
   streamMessage,
