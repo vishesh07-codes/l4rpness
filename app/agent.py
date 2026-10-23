@@ -7,7 +7,7 @@ from typing import Any, cast
 from openai import AsyncOpenAI
 from openai.types.chat import ChatCompletionMessageParam
 
-from . import config, tools, uploads
+from . import config, skills, tools, uploads
 
 log = logging.getLogger("l4rpness")
 
@@ -46,21 +46,52 @@ def build_prompt(campaign, attachment_rows) -> str:
         if value.strip():
             sections.append(f"{label}:\n{value.strip()}")
 
-    return SYSTEM.substitute(
+    prompt = SYSTEM.substitute(
         campaign="\n\n".join(sections),
         attachments=uploads.prompt_text(attachment_rows),
     )
 
+    parts = []
+    for file in config.INSTRUCTION_FILES:
+        try:
+            content = file.read_text(errors="replace").strip()
+        except OSError:
+            log.warning("instruction file missing: %s", file)
+            continue
+        parts.append(f"Instructions from: {file}\n\n{content}")
+
+    parts.append(prompt)
+
+    block = skills.index()
+    if block:
+        parts.append(block)
+
+    return "\n\n---\n\n".join(parts)
+
+
+def _parse_args(raw: str) -> tuple[dict, str]:
+    try:
+        return json.loads(raw), ""
+    except json.JSONDecodeError as first:
+        try:
+            return json.loads(raw, strict=False), ""
+        except json.JSONDecodeError:
+            return {}, str(first)
+
 
 async def _step(client, campaign, messages, calls: list) -> AsyncIterator[tuple[str, Any]]:
+    extra: dict = {}
+    if config.THINKING:
+        extra["reasoning_effort"] = cast(Any, campaign["effort"] or config.DEFAULT_EFFORT)
+        extra["extra_body"] = {"thinking": {"type": "enabled"}}
+
     response = await client.chat.completions.create(
         model=campaign["model"],
         messages=cast(Any, messages),
         tools=cast(Any, tools.SCHEMAS),
         stream=True,
         temperature=config.TEMPERATURE,
-        reasoning_effort=cast(Any, campaign["effort"] or config.DEFAULT_EFFORT),
-        extra_body={"thinking": {"type": "enabled"}},
+        **extra,
     )
 
     assembled: dict[int, dict] = {}
@@ -89,11 +120,9 @@ async def _step(client, campaign, messages, calls: list) -> AsyncIterator[tuple[
 
     for index in sorted(assembled):
         entry = assembled[index]
-        try:
-            args = json.loads(entry["arguments"] or "{}")
-        except json.JSONDecodeError:
-            args = {}
-        calls.append({**entry, "args": args})
+        raw = entry["arguments"] or "{}"
+        args, parse_error = _parse_args(raw)
+        calls.append({**entry, "args": args, "raw": raw, "parse_error": parse_error})
 
 
 async def run(campaign, attachment_rows, history, campaign_id, stop=None) -> AsyncIterator[tuple[str, Any]]:
@@ -149,7 +178,15 @@ async def run(campaign, attachment_rows, history, campaign_id, stop=None) -> Asy
 
         for call in calls:
             yield "tool_call", {"id": call["id"], "name": call["name"], "args": call["args"]}
-            output, ok, ms = await tools.execute(call["name"], call["args"], campaign_id, stop)
+            if call.get("parse_error"):
+                output = (
+                    f"error: arguments were not valid JSON, {call['name']} did not run. "
+                    f"{call['parse_error']}. Send the call again with valid JSON. "
+                    f"Raw arguments: {call.get('raw', '')[:400]}"
+                )
+                ok, ms = False, 0
+            else:
+                output, ok, ms = await tools.execute(call["name"], call["args"], campaign_id, stop)
             yield "tool_result", {"id": call["id"], "name": call["name"], "output": output, "ok": ok, "ms": ms}
             messages.append({"role": "tool", "tool_call_id": call["id"], "content": output})
 

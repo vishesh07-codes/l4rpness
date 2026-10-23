@@ -10,15 +10,27 @@ ROOT = Path(__file__).resolve().parent.parent
 
 DEFAULTS = {
     "server": {"host": "0.0.0.0", "port": 4517},
-    "deepseek": {
-        "base_url": "https://api.deepseek.com",
+    "llm": {
+        "provider": "deepseek",
         "model": "deepseek-flash",
         "effort": "high",
         "efforts": ["low", "high", "max"],
         "request_timeout": 180,
         "temperature": 0.3,
+        "providers": {
+            "deepseek": {
+                "base_url": "https://api.deepseek.com",
+                "api_key_env": "DEEPSEEK_API_KEY",
+                "thinking": True,
+            },
+        },
     },
     "storage": {"data_dir": "data"},
+    "skills": {"dirs": ["skills"]},
+    "agent": {
+        "instructions": ["AGENTS.md", "prompts/operator_policy.md"],
+        "seed_history": "prompts/seed_history.json",
+    },
     "uploads": {
         "max_bytes": 10 * 1024 * 1024,
         "max_files_per_field": 5,
@@ -54,13 +66,17 @@ SETTINGS = load()
 SERVER_HOST = SETTINGS["server"]["host"]
 SERVER_PORT = SETTINGS["server"]["port"]
 
-API_KEY = os.getenv("DEEPSEEK_API_KEY", "").strip()
-BASE_URL = SETTINGS["deepseek"]["base_url"]
-DEFAULT_MODEL = SETTINGS["deepseek"]["model"]
-DEFAULT_EFFORT = SETTINGS["deepseek"]["effort"]
-EFFORTS = list(SETTINGS["deepseek"]["efforts"])
-REQUEST_TIMEOUT = SETTINGS["deepseek"]["request_timeout"]
-TEMPERATURE = SETTINGS["deepseek"]["temperature"]
+PROVIDER = SETTINGS["llm"]["provider"]
+PROVIDER_CONF = SETTINGS["llm"]["providers"].get(PROVIDER, {})
+
+API_KEY = os.getenv(PROVIDER_CONF.get("api_key_env", "DEEPSEEK_API_KEY"), "").strip()
+BASE_URL = PROVIDER_CONF.get("base_url", "https://api.deepseek.com")
+THINKING = bool(PROVIDER_CONF.get("thinking", False))
+DEFAULT_MODEL = SETTINGS["llm"]["model"]
+DEFAULT_EFFORT = SETTINGS["llm"]["effort"]
+EFFORTS = list(SETTINGS["llm"]["efforts"])
+REQUEST_TIMEOUT = SETTINGS["llm"]["request_timeout"]
+TEMPERATURE = SETTINGS["llm"]["temperature"]
 
 data_dir = os.getenv("L4RP_DATA_DIR") or SETTINGS["storage"]["data_dir"]
 DATA_DIR = Path(data_dir)
@@ -71,6 +87,19 @@ DB_PATH = DATA_DIR / "l4rpness.db"
 UPLOAD_DIR = DATA_DIR / "uploads"
 WORK_DIR = DATA_DIR / "work"
 WEB_DIST = ROOT / "web" / "dist"
+
+SKILL_DIRS = [
+    Path(path) if Path(path).is_absolute() else ROOT / path
+    for path in SETTINGS["skills"]["dirs"]
+]
+
+INSTRUCTION_FILES = [
+    Path(path) if Path(path).is_absolute() else ROOT / path
+    for path in SETTINGS["agent"]["instructions"]
+]
+
+seed_history = SETTINGS["agent"].get("seed_history") or ""
+SEED_HISTORY = (Path(seed_history) if Path(seed_history).is_absolute() else ROOT / seed_history) if seed_history else None
 
 MAX_UPLOAD_BYTES = SETTINGS["uploads"]["max_bytes"]
 MAX_FILES_PER_FIELD = SETTINGS["uploads"]["max_files_per_field"]

@@ -24,6 +24,7 @@ def fresh_db(monkeypatch):
         return ["deepseek-chat", "deepseek-flash"]
 
     monkeypatch.setattr(agent, "models", fake_models)
+    monkeypatch.setattr(config, "SEED_HISTORY", None)
 
 
 @pytest.fixture()
@@ -108,6 +109,47 @@ def test_prompt_includes_attachment_text(client):
     assert "hello world" in prompt
     assert "only /app" in prompt
     assert "bash" in prompt
+
+
+def test_parse_args_handles_control_chars():
+    args, error = agent._parse_args('{"cmd": "echo a\nb"}')
+    assert args == {"cmd": "echo a\nb"}
+    assert error == ""
+
+    args, error = agent._parse_args("{not json")
+    assert args == {}
+    assert error
+
+
+def test_invalid_tool_arguments_reported_not_executed(client, monkeypatch):
+    state = {"steps": 0, "executed": 0}
+
+    async def fake_step(http, campaign, messages, calls, usage=None):
+        state["steps"] += 1
+        if state["steps"] > 1:
+            yield "content", "done"
+            return
+        calls.append({
+            "id": "c1",
+            "name": "bash",
+            "arguments": "{not json",
+            "args": {},
+            "raw": "{not json",
+            "parse_error": "Expecting property name enclosed in double quotes",
+        })
+        yield "content", "calling"
+
+    async def fake_execute(name, args, campaign_id, stop=None):
+        state["executed"] += 1
+        return "should not run", True, 1
+
+    monkeypatch.setattr(agent, "_step", fake_step)
+    monkeypatch.setattr(tools, "execute", fake_execute)
+    campaign = create(client)
+
+    res = client.post(f"/api/campaigns/{campaign['id']}/messages", json={"content": "go"})
+    assert "not valid JSON" in res.text
+    assert state["executed"] == 0
 
 
 def test_chat_streams_and_stores_messages(client, monkeypatch):
@@ -242,6 +284,91 @@ def test_delete_campaign(client, monkeypatch):
     assert client.get(f"/api/campaigns/{cid}").status_code == 404
     assert client.get("/api/campaigns").json() == []
     assert not upload_dir.exists()
+
+
+def test_prompt_lists_skills(client, monkeypatch, tmp_path):
+    builtin = tmp_path / "skills"
+    directory = builtin / "demo"
+    directory.mkdir(parents=True)
+    (directory / "SKILL.md").write_text("---\nname: demo\ndescription: Use when demo\n---\n\nBody.\n")
+    monkeypatch.setattr(config, "SKILL_DIRS", [builtin])
+
+    campaign = create(client)
+    prompt = agent.build_prompt(campaign, [])
+    assert "<available_skills>" in prompt
+    assert "- demo: Use when demo" in prompt
+
+
+def test_prompt_includes_instruction_files(client):
+    campaign = create(client)
+    prompt = agent.build_prompt(campaign, [])
+
+    assert prompt.startswith("Instructions from:")
+    assert "Creating a campaign is the authorization" in prompt
+    assert prompt.index("Instructions from:") < prompt.index("You are the agent attached")
+
+
+def test_skills_endpoints(client, monkeypatch, tmp_path):
+    builtin = tmp_path / "skills"
+    directory = builtin / "demo"
+    directory.mkdir(parents=True)
+    (directory / "SKILL.md").write_text("---\nname: demo\ndescription: Use when demo\n---\n\nBuilt-in body.\n")
+
+    monkeypatch.setattr(config, "SKILL_DIRS", [builtin])
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path / "data")
+
+    listed = client.get("/api/skills").json()
+    assert [entry["name"] for entry in listed] == ["demo"]
+    assert listed[0]["source"] == "built-in"
+
+    detail = client.get("/api/skills/demo").json()
+    assert detail["body"] == "Built-in body."
+    assert client.get("/api/skills/nope").status_code == 404
+
+    created = client.post(
+        "/api/skills",
+        json={"name": "custom-one", "description": "Use when custom", "body": "Custom."},
+    )
+    assert created.status_code == 201
+    assert "custom-one" in [entry["name"] for entry in client.get("/api/skills").json()]
+
+    res = client.put("/api/skills/demo", json={"description": "new", "body": "new"})
+    assert res.status_code == 403
+
+    res = client.put(
+        "/api/skills/custom-one",
+        json={"description": "updated desc", "body": "updated body"},
+    )
+    assert res.status_code == 200
+    assert client.get("/api/skills/custom-one").json()["body"] == "updated body"
+
+    res = client.post(
+        "/api/skills",
+        json={"name": "custom-one", "description": "again", "body": "x"},
+    )
+    assert res.status_code == 409
+
+    res = client.post("/api/skills", json={"name": "Bad Name", "description": "x", "body": ""})
+    assert res.status_code == 400
+
+
+def test_seed_history_creates_messages(client, monkeypatch, tmp_path):
+    path = tmp_path / "seed.json"
+    path.write_text(json.dumps([
+        {"role": "user", "content": "Begin {{target}}."},
+        {
+            "role": "assistant",
+            "content": "Initialized {{target}}.",
+            "parts": [{"type": "content", "text": "Initialized {{target}}."}],
+        },
+    ]))
+    monkeypatch.setattr(config, "SEED_HISTORY", path)
+
+    campaign = create(client, target="seed.example")
+    messages = client.get(f"/api/campaigns/{campaign['id']}/messages").json()
+    assert [m["role"] for m in messages] == ["user", "assistant"]
+    assert messages[0]["content"] == "Begin seed.example."
+    assert "Initialized seed.example." in messages[1]["parts"]
 
 
 def test_chat_without_key(client, monkeypatch):

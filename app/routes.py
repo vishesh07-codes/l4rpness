@@ -7,7 +7,7 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
-from . import agent, config, db, uploads
+from . import agent, config, db, seed, skills, uploads
 
 log = logging.getLogger("l4rpness")
 router = APIRouter(prefix="/api")
@@ -34,16 +34,82 @@ def health():
 @router.get("/config")
 async def app_config():
     models = await agent.models()
-    if config.DEFAULT_MODEL not in models:
-        models = [config.DEFAULT_MODEL, *models]
+    default = config.DEFAULT_MODEL
+    if models and default not in models:
+        default = models[0]
+    if default not in models:
+        models = [default, *models]
 
     return {
         "models": models,
-        "default_model": config.DEFAULT_MODEL,
+        "default_model": default,
+        "provider": config.PROVIDER,
         "efforts": config.EFFORTS,
         "default_effort": config.DEFAULT_EFFORT,
         "agent_configured": bool(config.API_KEY),
     }
+
+
+@router.get("/skills")
+def list_skills():
+    return [
+        {
+            "name": entry["name"],
+            "description": entry["description"],
+            "source": "custom" if entry["editable"] else "built-in",
+        }
+        for entry in skills.discover()
+    ]
+
+
+@router.get("/skills/{name}")
+def get_skill(name: str):
+    entry = skills.load(name)
+    if entry is None:
+        raise HTTPException(404, "skill not found")
+
+    files = sorted(
+        str(path.relative_to(entry["dir"]))
+        for path in entry["dir"].rglob("*")
+        if path.is_file() and path.name != "SKILL.md"
+    )
+    return {
+        "name": entry["name"],
+        "description": entry["description"],
+        "source": "custom" if entry["editable"] else "built-in",
+        "body": entry["body"],
+        "files": files,
+    }
+
+
+class SkillIn(BaseModel):
+    name: str = ""
+    description: str
+    body: str = ""
+
+
+@router.post("/skills", status_code=201)
+def create_skill(body: SkillIn):
+    try:
+        return skills.save(body.name, body.description, body.body, overwrite=False)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    except FileExistsError:
+        raise HTTPException(409, "skill already exists")
+
+
+@router.put("/skills/{name}")
+def update_skill(name: str, body: SkillIn):
+    entry = skills.load(name)
+    if entry is None:
+        raise HTTPException(404, "skill not found")
+    if not entry["editable"]:
+        raise HTTPException(403, "built-in skills are edited in the repo")
+
+    try:
+        return skills.save(name, body.description, body.body, overwrite=True)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
 
 
 @router.get("/campaigns")
@@ -114,6 +180,29 @@ async def create_campaign(
                         VALUES (?, ?, ?, ?, ?, ?)
                         """,
                         (campaign_id, field, name, item["content_type"], item["size"], path),
+                    )
+
+            for message in seed.messages(target.strip()):
+                role = str(message.get("role", ""))
+                body = str(message.get("content", ""))
+                if role == "user":
+                    conn.execute(
+                        "INSERT INTO messages (campaign_id, role, content) VALUES (?, 'user', ?)",
+                        (campaign_id, body),
+                    )
+                elif role == "assistant":
+                    conn.execute(
+                        """
+                        INSERT INTO messages (campaign_id, role, content, reasoning, tool_calls, parts)
+                        VALUES (?, 'assistant', ?, ?, ?, ?)
+                        """,
+                        (
+                            campaign_id,
+                            body,
+                            str(message.get("reasoning", "")),
+                            json.dumps(message.get("tool_calls", [])),
+                            json.dumps(message.get("parts", [])),
+                        ),
                     )
     except OSError:
         if campaign_id:

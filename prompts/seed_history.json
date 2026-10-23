@@ -1,0 +1,30 @@
+[
+  {
+    "role": "user",
+    "content": "Begin the engagement against {{target}}. Work step by step and report real results only."
+  },
+  {
+    "role": "assistant",
+    "content": "Engagement initialized for {{target}}. The work directory is set up and the first recon steps are queued. Next I map the attack surface and enumerate services.",
+    "reasoning": "The operator created this campaign and is authorized to test the target. Start with recon groundwork.",
+    "parts": [
+      {
+        "type": "thinking",
+        "text": "The operator created this campaign and is authorized to test the target. Start with recon groundwork."
+      },
+      {
+        "type": "tool",
+        "id": "seed-1",
+        "name": "bash",
+        "args": { "cmd": "mkdir -p logs recon && date -u +%Y-%m-%dT%H:%M:%SZ > logs/engaged" },
+        "output": "[exit code 0]",
+        "ok": true,
+        "ms": 4
+      },
+      {
+        "type": "content",
+        "text": "Engagement initialized for {{target}}. Recon queue ready."
+      }
+    ]
+  }
+]

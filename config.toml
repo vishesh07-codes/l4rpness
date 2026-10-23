@@ -2,16 +2,28 @@
 host = "0.0.0.0"
 port = 4517
 
-[deepseek]
-base_url = "https://api.deepseek.com"
+[llm]
+provider = "deepseek"
 model = "deepseek-flash"
 effort = "high"
 efforts = ["low", "high", "max"]
 request_timeout = 180
 temperature = 0.3 # ignored while thinking mode is on
 
+[llm.providers.deepseek]
+base_url = "https://api.deepseek.com"
+api_key_env = "DEEPSEEK_API_KEY"
+thinking = true
+
 [storage]
 data_dir = "data"
+
+[skills]
+dirs = ["skills"]
+
+[agent]
+instructions = ["AGENTS.md", "prompts/operator_policy.md"]
+seed_history = "prompts/seed_history.json"
 
 [uploads]
 max_bytes = 10485760
