@@ -228,6 +228,22 @@ export const api = {
       body: JSON.stringify(servers),
     }),
   listMessages: (id: number) => req<Message[]>(`/api/campaigns/${id}/messages`),
+  listMessagesPage: async (
+    id: number,
+    options: { limit?: number; after?: number; before?: number } = {}
+  ): Promise<{ messages: Message[]; hasMore: boolean }> => {
+    const params = new URLSearchParams()
+    if (options.limit) params.set("limit", String(options.limit))
+    if (options.after) params.set("after", String(options.after))
+    if (options.before) params.set("before", String(options.before))
+    const query = params.toString()
+    const res = await fetch(`/api/campaigns/${id}/messages${query ? `?${query}` : ""}`)
+    if (!res.ok) throw new Error(await errorText(res))
+    return {
+      messages: (await res.json()) as Message[],
+      hasMore: res.headers.get("x-has-more") === "1",
+    }
+  },
   streamMessage,
   attachmentUrl: (id: number) => `/api/attachments/${id}`,
 }

@@ -58,6 +58,62 @@ const SUGGESTIONS = [
 
 type LiveReply = { parts: Part[]; pendingTool: string | null }
 
+// a window, not the whole history: the transcript can hold thousands of rows
+// and each one carries markdown and tool cards that are expensive to render
+const PAGE_SIZE = 60
+const PREVIEW_TITLE = 56
+const PREVIEW_DESCRIPTION = 88
+
+function mergeMessages(prev: Message[], incoming: Message[]): Message[] {
+  if (incoming.length === 0) return prev
+  const byId = new Map(prev.map((message) => [message.id, message]))
+  let changed = false
+  for (const message of incoming) {
+    const old = byId.get(message.id)
+    if (
+      !old ||
+      old.content !== message.content ||
+      old.reasoning !== message.reasoning ||
+      old.parts !== message.parts ||
+      old.tool_calls !== message.tool_calls
+    ) {
+      if (old) partsCache.delete(message.id)
+      changed = true
+    }
+    byId.set(message.id, message)
+  }
+  if (!changed) return prev
+  return [...byId.values()].sort((a, b) => a.id - b.id)
+}
+
+function previewText(message: Message) {
+  if (message.role === "user") {
+    return (message.content ?? "").replace(/\s+/g, " ").trim()
+  }
+  return partsOf(message)
+    .filter((part): part is Extract<Part, { type: "content" }> => part.type === "content")
+    .map((part) => part.text)
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim()
+}
+
+function truncatePreview(text: string, limit: number) {
+  if (text.length <= limit) return text
+  const excerpt = text.slice(0, limit)
+  const boundary = excerpt.lastIndexOf(" ")
+  return `${excerpt.slice(0, boundary > limit * 0.65 ? boundary : limit).trim()}…`
+}
+
+function messagePreview(message: Message, nextMessage?: Message) {
+  const label = truncatePreview(previewText(message) || "Message", PREVIEW_TITLE)
+  const nextText = nextMessage ? previewText(nextMessage) : ""
+  return {
+    label,
+    description: nextText ? truncatePreview(nextText, PREVIEW_DESCRIPTION) : undefined,
+  }
+}
+
 export function Campaign() {
   const { id } = useParams()
   const nav = useNavigate()
@@ -77,22 +133,78 @@ export function Campaign() {
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [error, setError] = useState("")
   const [following, setFollowing] = useState(true)
+  const [hasEarlier, setHasEarlier] = useState(false)
+  const [windowSize, setWindowSize] = useState(PAGE_SIZE)
+  const [loadingEarlier, setLoadingEarlier] = useState(false)
   const initialIds = useRef<Set<number> | null>(null)
+  const lastIdRef = useRef(0)
   const viewportRef = useRef<HTMLElement | null>(null)
   const fileInput = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     if (!campaignId) return
-    Promise.all([api.getCampaign(campaignId), api.listMessages(campaignId), api.config()])
-      .then(([c, m, cfg]) => {
+    Promise.all([
+      api.getCampaign(campaignId),
+      api.listMessagesPage(campaignId, { limit: PAGE_SIZE }),
+      api.config(),
+    ])
+      .then(([c, page, cfg]) => {
         setCampaign(c)
         partsCache.clear()
-        setMessages(m)
+        setMessages(page.messages)
+        setHasEarlier(page.hasMore)
+        setWindowSize(Math.max(page.messages.length, PAGE_SIZE))
+        lastIdRef.current = page.messages.length
+          ? page.messages[page.messages.length - 1].id
+          : 0
         setConfigured(cfg.agent_configured)
-        initialIds.current = new Set(m.map((message) => message.id))
+        initialIds.current = new Set(page.messages.map((message) => message.id))
       })
       .catch((e: Error) => setError(e.message))
   }, [campaignId])
+
+  // incremental sync: fetch only what is new (plus a small overlap so the
+  // in-flight assistant row is replaced by its final version)
+  async function catchUpMessages() {
+    const page = lastIdRef.current
+      ? // a small overlap lets the in-flight assistant row be replaced by its
+        // final version once the chain ended
+        await api.listMessagesPage(campaignId, {
+          after: Math.max(1, lastIdRef.current - 3),
+        })
+      : await api.listMessagesPage(campaignId, { limit: PAGE_SIZE })
+    if (page.messages.length === 0) return
+    lastIdRef.current = Math.max(
+      lastIdRef.current,
+      page.messages[page.messages.length - 1].id
+    )
+    setMessages((prev) => mergeMessages(prev, page.messages))
+  }
+
+  async function loadEarlier() {
+    if (loadingEarlier) return
+    if (messages.length > windowSize) {
+      setWindowSize((size) => size + PAGE_SIZE)
+      return
+    }
+    if (!hasEarlier || messages.length === 0) return
+    setLoadingEarlier(true)
+    try {
+      const page = await api.listMessagesPage(campaignId, {
+        before: messages[0].id,
+        limit: PAGE_SIZE,
+      })
+      if (page.messages.length > 0) {
+        setMessages((prev) => mergeMessages(prev, page.messages))
+        setWindowSize((size) => size + page.messages.length)
+      }
+      setHasEarlier(page.hasMore)
+    } catch (e) {
+      toast.error("Could not load earlier messages", { description: (e as Error).message })
+    } finally {
+      setLoadingEarlier(false)
+    }
+  }
 
   // Escape stops the agent — the visible path is the stop button, this is the
   // one people reach for
@@ -121,8 +233,11 @@ export function Campaign() {
     const source = new EventSource(`/api/campaigns/${campaignId}/stream`)
 
     const refresh = async () => {
-      partsCache.clear()
-      setMessages(await api.listMessages(campaignId))
+      try {
+        await catchUpMessages()
+      } catch {
+        // the next chain_end or reconnect retries
+      }
     }
 
     const append = (kind: "thinking" | "content", text: string) =>
@@ -236,13 +351,31 @@ export function Campaign() {
     return () => source.close()
   }, [campaign?.running, campaignId])
 
-  // only re-scan the full history when it changes, not on every streamed token
+  // only re-scan the tail of the history when it changes, not every message
+  // and not on every streamed token
   const messageTodos = useMemo(
-    () => latestTodos(...messages.map((m) => (m.role === "assistant" ? partsOf(m) : []))),
+    () =>
+      latestTodos(
+        ...messages
+          .slice(-8)
+          .map((m) => (m.role === "assistant" ? partsOf(m) : []))
+      ),
     [messages]
   )
   const streamTodos = latestTodos(stream?.parts ?? [])
   const todos = streamTodos.length > 0 ? streamTodos : messageTodos
+
+  const visibleMessages = useMemo(
+    () => (windowSize >= messages.length ? messages : messages.slice(-windowSize)),
+    [messages, windowSize]
+  )
+  const railPreviews = useMemo(
+    () =>
+      visibleMessages.map((message, index) =>
+        messagePreview(message, visibleMessages[index + 1])
+      ),
+    [visibleMessages]
+  )
 
   function addFiles(picked: File[]) {
     if (picked.length === 0) return
@@ -288,7 +421,10 @@ export function Campaign() {
       // the supervisor picks queued messages up when the next chain starts,
       // the same way mid-task input works in a coding harness
       const stored = await api.steerCampaign(campaignId, content, sending)
-      setMessages((prev) => [...prev.filter((m) => m.id !== optimistic.id), stored])
+      lastIdRef.current = Math.max(lastIdRef.current, stored.id)
+      setMessages((prev) =>
+        mergeMessages(prev.filter((m) => m.id !== optimistic.id), [stored])
+      )
       // steering a stopped campaign resumes the loop
       setCampaign(await api.getCampaign(campaignId))
     } catch (e) {
@@ -309,9 +445,8 @@ export function Campaign() {
       const fresh = await api.getCampaign(campaignId)
       setCampaign(fresh)
       if (!fresh.running) {
-        partsCache.clear()
         setStream(null)
-        setMessages(await api.listMessages(campaignId))
+        await catchUpMessages()
       }
     } catch (e) {
       toast.error("Could not stop the agent", { description: (e as Error).message })
@@ -472,7 +607,8 @@ export function Campaign() {
           )}
           label="Conversation"
           busy={pending}
-          navigation={messages.length > 4 ? "rail" : undefined}
+          navigation={visibleMessages.length > 4 ? "rail" : undefined}
+          previews={railPreviews}
           viewportRef={viewportRef}
           onFollowChange={setFollowing}
         >
@@ -480,7 +616,20 @@ export function Campaign() {
             <EmptyState configured={configured} onPick={setInput} />
           )}
 
-          {messages.map((m) => {
+          {(hasEarlier || messages.length > windowSize) && (
+            <div className="flex justify-center pb-1">
+              <button
+                type="button"
+                onClick={loadEarlier}
+                disabled={loadingEarlier}
+                className="rounded-full border border-line bg-surface px-3 py-1 text-[12px] text-ink-2 outline-none transition-colors hover:bg-hover hover:text-ink focus-visible:ring-2 focus-visible:ring-ring/60 disabled:opacity-60"
+              >
+                {loadingEarlier ? "Loading earlier messages…" : "Load earlier messages"}
+              </button>
+            </div>
+          )}
+
+          {visibleMessages.map((m) => {
             // an empty assistant row is the placeholder of a run that is still
             // streaming; the live block below already renders it
             if (m.role === "assistant" && !m.content && partsOf(m).length === 0) return null

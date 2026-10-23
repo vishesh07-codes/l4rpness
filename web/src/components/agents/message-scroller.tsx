@@ -89,6 +89,11 @@ export interface MessageScrollerProps extends ComponentPropsWithRef<"div"> {
   busy?: boolean;
   /** Adds a compact rail for navigating between rendered Message rows. */
   navigation?: "rail";
+  /**
+   * Rail labels aligned with the rendered message rows. When provided the
+   * rail never reads text from the DOM, which keeps large transcripts cheap.
+   */
+  previews?: Array<{ label: string; description?: string }>;
   /** Accessible label for the optional message navigation rail. */
   navigationLabel?: string;
   viewportClassName?: string;
@@ -113,6 +118,7 @@ export function MessageScroller({
   label = "Conversation",
   busy,
   navigation,
+  previews,
   navigationLabel = "Message navigation",
   viewportClassName,
   contentClassName,
@@ -135,6 +141,7 @@ export function MessageScroller({
   const railIdRef = useRef(new WeakMap<HTMLElement, string>());
   const railIdCounterRef = useRef(0);
   const railTargetsRef = useRef(new Map<string, HTMLElement>());
+  const railOffsetsRef = useRef<Array<{ id: string; top: number }>>([]);
   const [railItems, setRailItems] = useState<PreviewRailItem[]>([]);
   const [activeRailId, setActiveRailId] = useState("");
   const [railOverflowing, setRailOverflowing] = useState(false);
@@ -170,12 +177,11 @@ export function MessageScroller({
   const updateActiveRailItem = useCallback(() => {
     if (navigation !== "rail") return;
     const viewport = viewportRef.current;
-    const targets = [...railTargetsRef.current.entries()];
-    if (!viewport || targets.length === 0) return;
+    const offsets = railOffsetsRef.current;
+    if (!viewport || offsets.length === 0) return;
 
-    const viewportRect = viewport.getBoundingClientRect();
     if (viewport.scrollTop <= followThreshold) {
-      const firstId = targets[0]?.[0] ?? "";
+      const firstId = offsets[0].id;
       setActiveRailId((current) => (current === firstId ? current : firstId));
       return;
     }
@@ -183,28 +189,29 @@ export function MessageScroller({
     const distanceFromEnd =
       viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
     if (distanceFromEnd <= followThreshold) {
-      const lastId = targets.at(-1)?.[0] ?? "";
+      const lastId = offsets[offsets.length - 1].id;
       setActiveRailId((current) => (current === lastId ? current : lastId));
       return;
     }
 
-    const viewportCenter = viewportRect.top + viewportRect.height / 2;
-    let nearestId = targets[0]?.[0] ?? "";
-    let nearestDistance = Number.POSITIVE_INFINITY;
-
-    for (const [id, element] of targets) {
-      const rect = element.getBoundingClientRect();
-      const messageCenter = rect.top + rect.height / 2;
-      const distance = Math.abs(messageCenter - viewportCenter);
-      if (distance < nearestDistance) {
-        nearestDistance = distance;
-        nearestId = id;
-      }
+    // offsets were measured on the last sync, so scrolling does no layout reads
+    const center = viewport.scrollTop + viewport.clientHeight / 2;
+    let low = 0;
+    let high = offsets.length - 1;
+    while (low < high) {
+      const mid = (low + high) >> 1;
+      if (offsets[mid].top < center) low = mid + 1;
+      else high = mid;
+    }
+    let nearest = offsets[low];
+    if (
+      low > 0 &&
+      Math.abs(offsets[low - 1].top - center) < Math.abs(nearest.top - center)
+    ) {
+      nearest = offsets[low - 1];
     }
 
-    setActiveRailId((current) =>
-      current === nearestId ? current : nearestId,
-    );
+    setActiveRailId((current) => (current === nearest.id ? current : nearest.id));
   }, [followThreshold, navigation]);
 
   const syncRailItems = useCallback(() => {
@@ -216,7 +223,9 @@ export function MessageScroller({
     const messages = Array.from(
       content.querySelectorAll<HTMLElement>('[data-slot="message"]'),
     );
+    const viewportRect = viewport.getBoundingClientRect();
     const targets = new Map<string, HTMLElement>();
+    const offsets: Array<{ id: string; top: number }> = [];
     const nextItems = messages.map((message, index) => {
       let id = railIdRef.current.get(message);
       if (!id) {
@@ -225,14 +234,24 @@ export function MessageScroller({
         railIdRef.current.set(message, id);
       }
       targets.set(id, message);
+      offsets.push({
+        id,
+        top:
+          message.getBoundingClientRect().top -
+          viewportRect.top +
+          viewport.scrollTop,
+      });
       const sender = message.dataset.from ?? "conversation";
-      const assistantResponse =
-        sender === "user"
-          ? messages
-              .slice(index + 1)
-              .find((candidate) => candidate.dataset.from === "assistant")
-          : undefined;
-      const preview = getMessagePreview(message, assistantResponse);
+      let preview = previews?.[index];
+      if (!preview) {
+        const assistantResponse =
+          sender === "user"
+            ? messages
+                .slice(index + 1)
+                .find((candidate) => candidate.dataset.from === "assistant")
+            : undefined;
+        preview = getMessagePreview(message, assistantResponse);
+      }
 
       return {
         id,
@@ -243,6 +262,7 @@ export function MessageScroller({
     });
 
     railTargetsRef.current = targets;
+    railOffsetsRef.current = offsets;
     setRailItems((current) => {
       const unchanged =
         current.length === nextItems.length &&
@@ -258,7 +278,7 @@ export function MessageScroller({
     setRailOverflowing(
       viewport.scrollHeight > viewport.clientHeight + 1 && messages.length > 1,
     );
-  }, [navigation]);
+  }, [navigation, previews]);
 
   const scheduleRailSync = useCallback(() => {
     if (navigation !== "rail") return;
@@ -326,6 +346,7 @@ export function MessageScroller({
   useEffect(() => {
     if (navigation !== "rail") {
       railTargetsRef.current.clear();
+      railOffsetsRef.current = [];
       setRailItems([]);
       setRailOverflowing(false);
       return;
@@ -340,9 +361,10 @@ export function MessageScroller({
       typeof MutationObserver === "undefined"
         ? null
         : new MutationObserver(scheduleRailSync);
+    // childList only: streaming text mutates character data on every token and
+    // resyncing the rail for each of those is what made big transcripts crawl
     mutationObserver?.observe(content, {
       childList: true,
-      characterData: true,
       subtree: true,
     });
 
@@ -358,6 +380,11 @@ export function MessageScroller({
       resizeObserver?.disconnect();
     };
   }, [navigation, scheduleRailSync]);
+
+  useEffect(() => {
+    if (navigation !== "rail" || !previews) return;
+    scheduleRailSync();
+  }, [navigation, previews, scheduleRailSync]);
 
   useEffect(
     () => () => {
