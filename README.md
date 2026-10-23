@@ -86,6 +86,18 @@ To get a shell inside the container (add `-u root` if you need root, or `-w /app
 
     docker compose exec l4rpness bash
 
+## Container tools
+
+The image ships a small network toolkit so bash has something to work with: curl, wget, jq, dnsutils, nmap, netcat-openbsd, whois, iputils-ping and traceroute. The list lives in `tools.txt`, one line, comma separated. Edit it and rebuild:
+
+    docker compose up --build -d
+
+For a slim image without them:
+
+    L4RP_TOOLSET=minimal docker compose up --build -d
+
+The app runs as the unprivileged `app` user, so nmap connect scans work but raw socket flags like `-sS` or `-O` need root.
+
 ## Development
 
     uv venv && uv pip install -r requirements.txt -r requirements-dev.txt

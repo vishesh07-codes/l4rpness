@@ -1,6 +1,9 @@
 services:
   l4rpness:
-    build: .
+    build:
+      context: .
+      args:
+        TOOLSET: ${L4RP_TOOLSET:-custom}
     image: l4rpness:local
     ports:
       - "127.0.0.1:4517:4517"

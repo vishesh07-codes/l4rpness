@@ -13,6 +13,17 @@ RUN useradd -m -u 1000 app
 COPY requirements.txt .
 RUN pip install -r requirements.txt
 
+ARG TOOLSET=custom
+COPY tools.txt /tmp/tools.txt
+RUN if [ "$TOOLSET" = "custom" ]; then \
+      echo "installing tools: $(cat /tmp/tools.txt)" && \
+      apt-get update && \
+      apt-get install -y --no-install-recommends $(tr ',' ' ' < /tmp/tools.txt) && \
+      rm -rf /var/lib/apt/lists/*; \
+    else \
+      echo "minimal image, no extra tools"; \
+    fi && rm -f /tmp/tools.txt
+
 COPY app/ ./app/
 COPY prompts/ ./prompts/
 COPY config.toml ./config.toml
