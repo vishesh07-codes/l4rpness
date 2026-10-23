@@ -11,6 +11,9 @@ from fastapi.testclient import TestClient
 
 from app import config, mcp
 from app.main import app
+# conftest replaces mcp.stop with a no-op for every test; keep a direct
+# reference to the real teardown so the ordering can be exercised
+from app.mcp import stop as _real_stop
 
 
 @pytest.fixture(autouse=True)
@@ -32,8 +35,16 @@ def client():
 
 def test_defaults_without_file():
     servers = mcp.definitions()
-    assert servers[0]["name"] == "frank"
-    assert "net_scan" in servers[0]["tools"]
+    assert [server["name"] for server in servers] == ["frank", "playwright"]
+
+    frank = servers[0]
+    assert "net_scan" in frank["tools"]
+
+    playwright = servers[1]
+    assert playwright["command"][0] == "playwright-mcp"
+    assert "--headless" in playwright["command"]
+    assert "--no-sandbox" in playwright["command"]
+    assert playwright["tools"] == []
 
 
 def test_save_and_load():
@@ -112,6 +123,26 @@ def test_tool_error_is_not_ok():
     text, ok = asyncio.run(mcp.call("frank_net_scan", {"host": "example.com"}))
     assert not ok
     assert text == "scan failed"
+
+
+def test_stop_closes_sessions_in_reverse_order():
+    # the stdio sessions nest anyio cancel scopes; tearing them down in
+    # insertion order raises and leaves the rest of the teardown broken
+    closed: list[str] = []
+
+    class FakeStack:
+        def __init__(self, name):
+            self.name = name
+
+        async def aclose(self):
+            closed.append(self.name)
+
+    mcp._stacks.clear()
+    mcp._stacks["first"] = FakeStack("first")
+    mcp._stacks["second"] = FakeStack("second")
+
+    asyncio.run(_real_stop())
+    assert closed == ["second", "first"]
 
 
 def test_mcp_endpoints(client, tmp_path):

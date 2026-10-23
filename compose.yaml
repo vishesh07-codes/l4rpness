@@ -12,6 +12,9 @@ services:
     # root inside the container (runtime package installs, raw-socket tools),
     # pinned here so image defaults cannot silently change it
     user: "0:0"
+    # chromium (the playwright browser) wants more than docker's default
+    # 64 MB /dev/shm; heavier pages crash without this
+    shm_size: "1gb"
     # escape hardening: the container never gains privileges, cannot mount or
     # load modules (no SYS_ADMIN/SYS_MODULE) and keeps only the capabilities a
     # pentest toolbox needs. The docker socket is never mounted.

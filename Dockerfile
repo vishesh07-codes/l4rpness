@@ -45,6 +45,18 @@ RUN if [ "$TOOLSET" = "custom" ]; then \
       echo "minimal image, no mcp tool binaries"; \
     fi
 
+# Headless Chromium behind the Playwright MCP server: the agent drives it
+# through the playwright_* tools (see app/mcp.py). Its own layer so browser
+# downloads survive edits to the tool block above.
+RUN if [ "$TOOLSET" = "custom" ]; then \
+      echo "installing the playwright browser server" && \
+      npm install -g @playwright/mcp@0.0.83 && \
+      cd /usr/local/lib/node_modules/@playwright/mcp && \
+      npx playwright install --with-deps chromium; \
+    else \
+      echo "minimal image, no playwright browser"; \
+    fi
+
 COPY vendor/frank/ /frank/
 COPY vendor/specter/ /opt/specter/
 COPY docker/specter /usr/local/bin/specter

@@ -30,6 +30,7 @@ It does not stop by itself. It stops when you pause or kill it. Right now there 
 - Pick the model and the effort per campaign. The model list comes from the DeepSeek API; effort is low, high or max.
 - Chat streams as it is written and replies render markdown as they arrive. Thinking is shown above every answer, always, and the full history including thinking is stored in SQLite.
 - The agent runs tools: bash for shell commands, read_file and write_file for files, all inside a per-campaign work directory. Long command output is saved to a file the model can page through. Every tool call shows up in the chat as a card you can expand.
+- The agent drives a real headless Chromium through the Playwright MCP server (`playwright_*` tools): navigate, read pages as accessibility snapshots, click and fill forms, run JavaScript, inspect network traffic, take screenshots. It runs inside the container, so JavaScript-heavy and WAF-protected targets can be tested the way a browser would.
 - Skills: the agent sees the list of available skills in its prompt and loads the matching one with the skill tool. Built-ins live in `skills/` in the repo, custom ones are created and edited on the Skills page and stored in the data volume.
 
 ## How it is built
@@ -54,6 +55,7 @@ Backend, Python and FastAPI:
 - `app/uploads.py` validates files, stores them, extracts text for the prompt
 - `app/agent.py` runs the model and tool loop, streaming thinking, content and tool events
 - `app/tools.py` has the tools the agent can call and their limits
+- `app/mcp.py` connects external tool servers over MCP: frank's recon and scan tools, and the headless Playwright browser
 - `app/skills.py` finds SKILL.md files and feeds the skill index to the prompt
 - `skills/` holds the built-in playbooks
 - `prompts/operator_policy.md` is appended to every campaign agent prompt as the operator directive. `AGENTS.md` is the repo guide for coding agents, not injected at runtime
@@ -97,6 +99,8 @@ The image ships a small network toolkit so bash has something to work with: curl
 
     docker compose up --build -d
 
+The image also ships a headless Chromium with the [Playwright MCP](https://github.com/microsoft/playwright-mcp) server, which the agent uses through the `playwright_*` tools. It is one shared browser per container, kept in memory (`--isolated`), logged out at start, and it closes itself after an hour without use. To skip it, build the minimal toolset above.
+
 For a slim image without them:
 
     L4RP_TOOLSET=minimal docker compose up --build -d
@@ -129,5 +133,5 @@ The Vite dev server proxies /api to port 4517.
 - [ ] coverage map and the scheduler that picks work from it
 - [ ] verifier that replays findings
 - [x] skills (SKILL.md, loaded on demand, Skills page)
-- [ ] browser tool, MCP servers
+- [x] browser tool (Playwright MCP server inside the container), MCP servers
 - [ ] the boring 24/7 parts: watchdog, resume after crash, log rotation

@@ -11,24 +11,63 @@ from . import config
 
 log = logging.getLogger("l4rpness")
 
-DEFAULTS = [
-    {
-        "name": "frank",
-        "command": ["python", "/frank/server.py"],
-        "tools": [
-            "dns_lookup",
-            "web_fetch",
-            "web_search",
-            "web_answer",
-            "method_search",
-            "codebase_identify",
-            "scan_vulns",
-            "scan_secrets",
-            "audit_deps",
-            "net_scan",
-        ],
-    }
-]
+# Chromium's stock UA string says "HeadlessChrome", which WAFs block on
+# sight; override it with the same Chrome string minus that marker. The
+# version tracks the chromium build that the pinned @playwright/mcp in the
+# Dockerfile installs (`playwright-mcp` reports which with `browser.version`).
+BROWSER_UA = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/155.0.8059.12 Safari/537.36"
+)
+
+
+def defaults() -> list[dict]:
+    """The built-in MCP servers, built fresh so paths follow the live data
+    dir (the browser's output dir must match where start() creates it)."""
+    return [
+        {
+            "name": "frank",
+            "command": ["python", "/frank/server.py"],
+            "tools": [
+                "dns_lookup",
+                "web_fetch",
+                "web_search",
+                "web_answer",
+                "method_search",
+                "codebase_identify",
+                "scan_vulns",
+                "scan_secrets",
+                "audit_deps",
+                "net_scan",
+            ],
+        },
+        {
+            # headless Chromium the agent drives through the playwright_*
+            # tools. --no-sandbox is required as root; --isolated keeps the
+            # profile in memory so nothing leaks between campaigns; the rest
+            # is the difference from curl: page JavaScript runs, sessions
+            # stick, and the traffic looks like Chrome. An empty tool list
+            # exposes every tool the server offers.
+            "name": "playwright",
+            "command": [
+                "playwright-mcp",
+                "--headless",
+                "--browser",
+                "chromium",
+                "--no-sandbox",
+                "--isolated",
+                "--ignore-https-errors",
+                "--file-paths",
+                "absolute",
+                "--user-agent",
+                BROWSER_UA,
+                "--output-dir",
+                str(config.DATA_DIR / "browser"),
+            ],
+            "tools": [],
+        },
+    ]
+
 
 _sessions: dict[str, Any] = {}
 _stacks: dict[str, AsyncExitStack] = {}
@@ -43,7 +82,7 @@ def _file():
 
 def definitions() -> list[dict]:
     if not _file().is_file():
-        return [dict(server) for server in DEFAULTS]
+        return defaults()
 
     try:
         data = json.loads(_file().read_text())
@@ -98,6 +137,11 @@ async def _connect(spec: dict) -> ClientSession:
 
 
 async def start() -> None:
+    # the playwright server writes auto-named screenshots and traces into
+    # this directory; it must exist before _connect's guard checks the
+    # absolute --output-dir argument
+    (config.DATA_DIR / "browser").mkdir(parents=True, exist_ok=True)
+
     for spec in definitions():
         name = spec["name"]
         log.info("mcp server %s: starting %s", name, spec.get("command") or spec.get("url"))
@@ -170,7 +214,10 @@ async def call(name: str, args: dict) -> tuple[str, bool]:
 
 
 async def stop() -> None:
-    for name, stack in list(_stacks.items()):
+    # every stdio session nests an anyio cancel scope, so they must be
+    # exited in reverse order of entry; closing the first one first corrupts
+    # the rest of the teardown (RuntimeError, then stray CancelledError)
+    for name, stack in reversed(list(_stacks.items())):
         try:
             await stack.aclose()
         except Exception:
