@@ -431,7 +431,7 @@ def test_running_flag_and_409(client):
 def test_live_snapshot(client):
     campaign = create(client)
     idle = client.get(f"/api/campaigns/{campaign['id']}/live").json()
-    assert idle == {"running": False, "parts": [], "pending": None, "seq": 0}
+    assert idle == {"running": False, "parts": [], "pending": None, "seq": 0, "usage": None}
 
     routes.RUNNING[campaign["id"]] = {
         "stop": asyncio.Event(),
@@ -798,6 +798,26 @@ def test_tool_output_streams_live(client, monkeypatch):
     tool = next(part for part in parts if part["type"] == "tool")
     assert tool["output"] == "first second\n[exit code 0]"
     assert tool["ok"] is True
+
+
+def test_usage_is_tracked_and_streamed(client, monkeypatch):
+    async def fake_run(campaign, attachments, history, campaign_id, stop=None, on_tool_output=None):
+        yield "usage", {"prompt_tokens": 1200, "completion_tokens": 300}
+        yield "content", "step one"
+        yield "usage", {"prompt_tokens": 5000, "completion_tokens": 100}
+
+    monkeypatch.setattr(agent, "run", fake_run)
+    campaign = create(client)
+
+    res = client.post(f"/api/campaigns/{campaign['id']}/messages", data={"content": "go"})
+    assert "event: usage" in res.text
+    assert '"in": 1200' in res.text
+
+    row = client.get(f"/api/campaigns/{campaign['id']}").json()
+    assert row["usage_in"] == 6200
+    assert row["usage_out"] == 400
+    # the newest request's prompt size is the context gauge compaction reads
+    assert row["last_prompt_tokens"] == 5000
 
 
 def test_message_upload(client, monkeypatch):

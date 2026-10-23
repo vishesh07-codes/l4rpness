@@ -23,6 +23,9 @@ export type Campaign = {
   message_count?: number
   running?: boolean
   attachments?: Attachment[]
+  usage_in?: number
+  usage_out?: number
+  last_prompt_tokens?: number
 }
 
 export type MessageAttachment = {

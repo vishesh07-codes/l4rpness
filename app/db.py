@@ -16,6 +16,11 @@ CREATE TABLE IF NOT EXISTS campaigns (
     effort TEXT NOT NULL DEFAULT 'high',
     status TEXT NOT NULL DEFAULT 'created',
     auto_running INTEGER NOT NULL DEFAULT 0,
+    usage_in INTEGER NOT NULL DEFAULT 0,
+    usage_out INTEGER NOT NULL DEFAULT 0,
+    last_prompt_tokens INTEGER NOT NULL DEFAULT 0,
+    memory_summary TEXT NOT NULL DEFAULT '',
+    compacted_until INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -87,6 +92,16 @@ def migrate(conn):
         conn.execute("ALTER TABLE campaigns ADD COLUMN effort TEXT NOT NULL DEFAULT 'high'")
     if "auto_running" not in _columns(conn, "campaigns"):
         conn.execute("ALTER TABLE campaigns ADD COLUMN auto_running INTEGER NOT NULL DEFAULT 0")
+    if "usage_in" not in _columns(conn, "campaigns"):
+        conn.execute("ALTER TABLE campaigns ADD COLUMN usage_in INTEGER NOT NULL DEFAULT 0")
+    if "usage_out" not in _columns(conn, "campaigns"):
+        conn.execute("ALTER TABLE campaigns ADD COLUMN usage_out INTEGER NOT NULL DEFAULT 0")
+    if "last_prompt_tokens" not in _columns(conn, "campaigns"):
+        conn.execute("ALTER TABLE campaigns ADD COLUMN last_prompt_tokens INTEGER NOT NULL DEFAULT 0")
+    if "memory_summary" not in _columns(conn, "campaigns"):
+        conn.execute("ALTER TABLE campaigns ADD COLUMN memory_summary TEXT NOT NULL DEFAULT ''")
+    if "compacted_until" not in _columns(conn, "campaigns"):
+        conn.execute("ALTER TABLE campaigns ADD COLUMN compacted_until INTEGER NOT NULL DEFAULT 0")
     if "reasoning" not in _columns(conn, "messages"):
         conn.execute("ALTER TABLE messages ADD COLUMN reasoning TEXT NOT NULL DEFAULT ''")
     if "tool_calls" not in _columns(conn, "messages"):

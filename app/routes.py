@@ -272,8 +272,14 @@ def live_campaign(campaign_id: int):
 
     run = RUNNING.get(campaign_id)
     if run is None:
-        return {"running": False, "parts": [], "pending": None, "seq": 0}
-    return {"running": True, "parts": run["parts"], "pending": run["pending"], "seq": run.get("seq", 0)}
+        return {"running": False, "parts": [], "pending": None, "seq": 0, "usage": None}
+    return {
+        "running": True,
+        "parts": run["parts"],
+        "pending": run["pending"],
+        "seq": run.get("seq", 0),
+        "usage": run.get("usage"),
+    }
 
 
 @router.get("/campaigns/{campaign_id}/stream")
@@ -300,6 +306,7 @@ async def stream_campaign(campaign_id: int):
                 "parts": run["parts"],
                 "pending": run["pending"],
                 "seq": run.get("seq", 0),
+                "usage": run.get("usage"),
             })
             while True:
                 try:
@@ -360,13 +367,29 @@ def sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data)}\n\n"
 
 
-def close_run(campaign_id: int) -> None:
-    """Tell every SSE subscriber that the run is over."""
+def push_event(campaign_id: int, name: str, data: dict) -> None:
+    """Send an event to live subscribers without touching the chat queue."""
     run = RUNNING.get(campaign_id)
     if run is None:
         return
     for queue in list(run.get("subscribers") or ()):
-        queue.put_nowait(("closed", {}))
+        queue.put_nowait((name, data))
+
+
+def close_run(campaign_id: int) -> None:
+    """Tell every SSE subscriber that the run is over."""
+    push_event(campaign_id, "closed", {})
+
+
+def _campaign_usage(campaign_id: int) -> dict:
+    with db.db() as conn:
+        row = conn.execute(
+            "SELECT usage_in, usage_out, last_prompt_tokens FROM campaigns WHERE id = ?",
+            (campaign_id,),
+        ).fetchone()
+    if row is None:
+        return {"in": 0, "out": 0, "ctx": 0}
+    return {"in": row["usage_in"], "out": row["usage_out"], "ctx": row["last_prompt_tokens"]}
 
 
 async def _run(campaign_id, campaign, attachments, history, content, run, files=(), store_user=True, keep=False):
@@ -513,6 +536,30 @@ async def _run(campaign_id, campaign, attachments, history, content, run, files=
             elif kind == "stopped":
                 stopped = True
                 break
+            elif kind == "usage":
+                tokens_in = int(data.get("prompt_tokens") or 0)
+                tokens_out = int(data.get("completion_tokens") or 0)
+                usage = run.get("usage")
+                if usage is None:
+                    usage = _campaign_usage(campaign_id)
+                    run["usage"] = usage
+                usage["in"] += tokens_in
+                usage["out"] += tokens_out
+                usage["ctx"] = tokens_in
+                try:
+                    with db.db() as conn:
+                        conn.execute(
+                            """
+                            UPDATE campaigns
+                            SET usage_in = usage_in + ?, usage_out = usage_out + ?,
+                                last_prompt_tokens = ?
+                            WHERE id = ?
+                            """,
+                            (tokens_in, tokens_out, tokens_in, campaign_id),
+                        )
+                except Exception:
+                    log.exception("storing usage failed")
+                emit("usage", dict(usage))
             elif kind == "tool_result":
                 for call in calls:
                     if call["id"] == data["id"]:

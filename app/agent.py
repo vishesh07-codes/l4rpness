@@ -5,7 +5,7 @@ from collections.abc import AsyncIterator
 from string import Template
 from typing import Any, cast
 
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, BadRequestError
 from openai.types.chat import ChatCompletionMessageParam
 
 from . import config, mcp, skills, tools, uploads
@@ -114,7 +114,7 @@ async def _step(client, campaign, messages, calls: list) -> AsyncIterator[tuple[
         extra["reasoning_effort"] = cast(Any, campaign["effort"] or config.DEFAULT_EFFORT)
         extra["extra_body"] = {"thinking": {"type": "enabled"}}
 
-    response = await client.chat.completions.create(
+    request: dict = dict(
         model=model,
         messages=cast(Any, messages),
         tools=cast(Any, tools.SCHEMAS + mcp.schemas()),
@@ -122,17 +122,38 @@ async def _step(client, campaign, messages, calls: list) -> AsyncIterator[tuple[
         temperature=config.TEMPERATURE,
         **extra,
     )
+    try:
+        response = await client.chat.completions.create(
+            **request, stream_options={"include_usage": True}
+        )
+    except BadRequestError:
+        # the provider refuses stream_options; fall back to the estimate below
+        log.info("provider %s rejected stream_options, usage will be estimated", provider)
+        response = await client.chat.completions.create(**request)
 
     assembled: dict[int, dict] = {}
     announced: set[int] = set()
+    reported = False
+    output_chars = 0
     async for chunk in response:
+        # the final usage chunk carries no choices, so read it before skipping
+        usage = getattr(chunk, "usage", None)
+        if usage is not None:
+            reported = True
+            yield "usage", {
+                "prompt_tokens": int(getattr(usage, "prompt_tokens", 0) or 0),
+                "completion_tokens": int(getattr(usage, "completion_tokens", 0) or 0),
+            }
+
         if not chunk.choices:
             continue
         delta = chunk.choices[0].delta
         reasoning = getattr(delta, "reasoning_content", None)
         if reasoning:
+            output_chars += len(reasoning)
             yield "thinking", reasoning
         if delta.content:
+            output_chars += len(delta.content)
             yield "content", delta.content
 
         for call in delta.tool_calls or []:
@@ -152,6 +173,15 @@ async def _step(client, campaign, messages, calls: list) -> AsyncIterator[tuple[
         raw = entry["arguments"] or "{}"
         args, parse_error = _parse_args(raw)
         calls.append({**entry, "args": args, "raw": raw, "parse_error": parse_error})
+
+    if not reported:
+        # rough fallback (~4 chars per token) so compaction still gets a signal
+        prompt_chars = sum(len(str(m.get("content") or "")) for m in messages)
+        yield "usage", {
+            "prompt_tokens": max(prompt_chars // 4, 1),
+            "completion_tokens": max(output_chars // 4, 1),
+            "estimated": True,
+        }
 
 
 async def run(campaign, attachment_rows, history, campaign_id, stop=None, on_tool_output=None) -> AsyncIterator[tuple[str, Any]]:

@@ -15,7 +15,7 @@ import { Input } from "@/components/ui/input"
 import { Marker, MarkerContent } from "@/components/ui/marker"
 import { Skeleton } from "@/components/ui/skeleton"
 import { api, FIELDS, type Campaign } from "@/lib/api"
-import { cn, fmtDate } from "@/lib/utils"
+import { cn, fmtDate, fmtTokens } from "@/lib/utils"
 
 const SUGGESTIONS = [
   "https://example.com",
@@ -332,6 +332,17 @@ export function Dashboard() {
                   <span className="font-mono">{c.model}</span>
                   <span aria-hidden>·</span>
                   <span className="tabular-nums">{c.message_count ?? 0} messages</span>
+                  {(c.usage_in ?? 0) + (c.usage_out ?? 0) > 0 && (
+                    <>
+                      <span aria-hidden>·</span>
+                      <span
+                        className="tabular-nums"
+                        title={`${(c.usage_in ?? 0).toLocaleString()} in / ${(c.usage_out ?? 0).toLocaleString()} out`}
+                      >
+                        {fmtTokens((c.usage_in ?? 0) + (c.usage_out ?? 0))} tokens
+                      </span>
+                    </>
+                  )}
                   <span aria-hidden>·</span>
                   <span className="tabular-nums">{fmtDate(c.created_at)}</span>
                 </div>

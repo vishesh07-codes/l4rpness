@@ -39,7 +39,7 @@ import {
 import { ConfirmDialog } from "@/components/ConfirmDialog"
 import { IconAction } from "@/components/IconAction"
 import { latestTodos } from "@/lib/todos"
-import { cn, fmtDate } from "@/lib/utils"
+import { cn, fmtDate, fmtTokens } from "@/lib/utils"
 
 const SECTIONS = [
   { key: "info", label: "Info" },
@@ -70,6 +70,7 @@ export function Campaign() {
   const [pending, setPending] = useState(false)
   const [stopping, setStopping] = useState(false)
   const [resuming, setResuming] = useState(false)
+  const [liveUsage, setLiveUsage] = useState<{ in: number; out: number; ctx: number } | null>(null)
   const [deleting, setDeleting] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [error, setError] = useState("")
@@ -147,10 +148,33 @@ export function Campaign() {
 
     on("snapshot", (d) => {
       setStream({ parts: d.parts ?? [], pendingTool: d.pending ?? null })
+      if (d.usage) setLiveUsage(d.usage)
       void refresh()
     })
     on("thinking", (d) => append("thinking", d.text))
     on("content", (d) => append("content", d.text))
+    on("usage", (d) => setLiveUsage({ in: d.in, out: d.out, ctx: d.ctx }))
+    on("notice", (d) =>
+      setStream((s) => {
+        const base = s ?? { parts: [], pendingTool: null }
+        return { ...base, parts: [...base.parts, { type: "notice", text: d.text }] }
+      })
+    )
+    on("compacted", (d) =>
+      setStream((s) => {
+        const base = s ?? { parts: [], pendingTool: null }
+        return {
+          ...base,
+          parts: [
+            ...base.parts,
+            {
+              type: "notice",
+              text: `context compacted — ${d.messages} earlier messages folded into memory`,
+            },
+          ],
+        }
+      })
+    )
     on("tool_start", (d) => setStream((s) => (s ? { ...s, pendingTool: d.name } : s)))
     on("tool_call", (d) =>
       setStream((s) => {
@@ -333,6 +357,9 @@ export function Campaign() {
 
   const attachments = campaign.attachments ?? []
   const targetFiles = attachments.filter((a) => a.field === "target")
+  const usageIn = liveUsage?.in ?? campaign.usage_in ?? 0
+  const usageOut = liveUsage?.out ?? campaign.usage_out ?? 0
+  const usageCtx = liveUsage?.ctx ?? campaign.last_prompt_tokens ?? 0
 
   return (
     <div className="mx-auto flex h-svh max-w-3xl flex-col gap-4 px-6 py-6 max-md:pt-16">
@@ -353,6 +380,17 @@ export function Campaign() {
             <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs text-ink-2">
               <Badge variant="secondary">{campaign.model}</Badge>
               <Badge variant="secondary">effort · {campaign.effort}</Badge>
+              {(usageIn > 0 || usageOut > 0) && (
+                <Badge
+                  variant="secondary"
+                  className="font-mono"
+                  title={`${usageIn.toLocaleString()} input · ${usageOut.toLocaleString()} output${
+                    usageCtx ? ` · context ${usageCtx.toLocaleString()} tokens` : ""
+                  }`}
+                >
+                  ↑{fmtTokens(usageIn)} ↓{fmtTokens(usageOut)}
+                </Badge>
+              )}
               <span className="px-0.5">created {fmtDate(campaign.created_at)}</span>
             </div>
             {targetFiles.length > 0 && (
