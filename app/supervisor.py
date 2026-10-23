@@ -13,6 +13,7 @@ import json
 import logging
 import random
 import re
+import time
 
 from . import agent, config, db, generator, tools, uploads
 
@@ -27,6 +28,17 @@ MAX_CONTEXT_ERRORS = 3
 # Consecutive failed compactions before the loop stops instead of retrying
 # the same fold forever.
 MAX_COMPACT_FAILURES = 5
+
+# compact_campaign() sentinel: nothing worth folding this pass (a batch that
+# small has nothing older to fold, or everything already is). A no-op, never
+# counted against the failure budget — counting it stopped healthy campaigns.
+NOTHING_TO_FOLD = -1
+
+# Provider model listings live in an in-process cache; once cold (startup,
+# key/endpoint edits) every context window silently resolves to the fallback.
+# The loop re-warms at most this often so a dead provider cannot stall every
+# iteration.
+MODELS_WARM_RETRY_SECONDS = 60
 
 BEGIN_PROMPT = (
     "Begin the engagement against {target}. Work continuously until the "
@@ -588,13 +600,36 @@ def _preserve_keep(base_keep: int, failures: int) -> int:
 SUMMARY_MAX_CHARS = 20_000
 
 
+def _row_tokens(row) -> int:
+    """Rough model-facing token estimate for one stored message row.
+
+    Mirrors the read-time replay shape: content and tool-call arguments count
+    as stored (argument clipping happens later), tool outputs count at their
+    replay clip so a fat stored blob cannot force an over-aggressive fold.
+    """
+    chars = len(row["content"] or "") + len(row["tool_calls"] or "")
+    try:
+        parts = json.loads(row["parts"] or "[]")
+    except json.JSONDecodeError:
+        parts = []
+    for part in parts:
+        if isinstance(part, dict) and part.get("type") == "tool":
+            chars += min(len(str(part.get("output") or "")), HISTORY_OUTPUT_CHARS)
+    return chars // agent.EST_CHARS_PER_TOKEN
+
+
 async def compact_campaign(campaign_id: int, keep_override: int | None = None) -> int:
     """Fold older messages into the rolling memory summary.
 
-    Returns how many messages were folded (0 when nothing was compacted).
-    Transcript and brief caps derive from the campaign model's usable context
-    so the summarizer call itself fits the window performing it. Failure is
-    never fatal: the loop retries with a smaller fold (see _loop).
+    Returns how many messages were folded. NOTHING_TO_FOLD means the pass
+    found nothing worth folding (small benign batch, everything already
+    folded, compaction disabled) — a no-op callers must not count as a
+    failure. 0 means a real attempt failed to produce a summary (the
+    checkpoint stays frozen, so a retry cannot mistake failure for
+    completion). Transcript and brief caps derive from the campaign model's
+    usable context so the summarizer call itself fits the window performing
+    it. Failure is never fatal: the loop retries with a smaller fold (see
+    _loop).
     """
     with db.db() as conn:
         campaign = conn.execute("SELECT * FROM campaigns WHERE id = ?", (campaign_id,)).fetchone()
@@ -602,9 +637,9 @@ async def compact_campaign(campaign_id: int, keep_override: int | None = None) -
             "SELECT * FROM messages WHERE campaign_id = ? ORDER BY id", (campaign_id,)
         ).fetchall()
     if campaign is None:
-        return 0
+        return NOTHING_TO_FOLD
     if agent.compact_trigger(campaign["model"]) is None:
-        return 0
+        return NOTHING_TO_FOLD
 
     try:
         usable = agent.usable_context(campaign["model"])
@@ -625,14 +660,28 @@ async def compact_campaign(campaign_id: int, keep_override: int | None = None) -
     brief_cap = max(2_000, min(20_000, usable) // cap_divisor)
     summary_cap = max(4_000, SUMMARY_MAX_CHARS // cap_divisor)
 
-    keep = max(1, eff_keep)
-    if len(rows) <= keep + 1:
-        return 0
+    # Keep target: the configured newest-message count, clamped so at least
+    # one older message always folds; then size-aware shrink — when the kept
+    # tail alone still outgrows the usable window, fold deeper (down to the
+    # newest single message) so recovery can actually make room. A fat row is
+    # one whole chain here, so counting rows alone says nothing about size.
+    if len(rows) < 2:
+        return NOTHING_TO_FOLD
+    target_keep = max(1, min(eff_keep if eff_keep > 0 else base_keep, len(rows) - 1))
+    keep = target_keep
+    budget = max(16_000, usable - agent.COMPACT_RESERVE)
+    while keep > 1 and sum(_row_tokens(row) for row in rows[-keep:]) > budget:
+        keep -= 1
+
+    if keep == target_keep and len(rows) <= eff_keep + 1:
+        # A small benign batch whose tail fits: there is no older history to
+        # win by folding, so do not burn a summarizer call on it.
+        return NOTHING_TO_FOLD
 
     boundary = rows[-keep - 1]["id"]
     fold = [row for row in rows if campaign["compacted_until"] < row["id"] <= boundary]
     if not fold:
-        return 0
+        return NOTHING_TO_FOLD
 
     prompt = (
         f"Campaign memory so far:\n{campaign['memory_summary'] or '(none yet)'}\n\n"
@@ -698,6 +747,53 @@ async def compact_campaign(campaign_id: int, keep_override: int | None = None) -
             (summary, boundary, campaign_id),
         )
     return len(fold)
+
+
+def _degrade_over_budget(campaign, history: list[dict]) -> int:
+    """Clear older in-memory tool outputs when the request would not fit the
+    usable window. Read-path only: the database rows stay intact for the
+    transcript and crash recovery. Returns how many outputs were cleared.
+
+    The next chain gets the same treatment before it starts, so callers that
+    judge whether a recovery actually reduced the input must apply it too —
+    otherwise a perfectly recoverable history reads as no progress.
+    """
+    from . import routes
+
+    try:
+        usable = agent.usable_context(campaign["model"])
+    except Exception:
+        usable = agent.FALLBACK_LIMIT - agent.COMPACT_RESERVE
+    if agent.estimate_messages_tokens(history) < usable:
+        return 0
+
+    degraded = 0
+    tool_idx = [
+        i for i, message in enumerate(history) if message.get("role") == "tool"
+    ]
+    for i in tool_idx[:-RECENT_OUTPUT_KEEP_COUNT] if len(
+        tool_idx
+    ) > RECENT_OUTPUT_KEEP_COUNT else []:
+        content = history[i].get("content")
+        if isinstance(content, str) and not content.startswith(
+            "[old tool output cleared"
+        ):
+            history[i] = {
+                **history[i],
+                "content": _cleared_output(content),
+            }
+            degraded += 1
+    routes.push_event(
+        campaign["id"],
+        "notice",
+        {"text": "context over budget — older tool outputs cleared for this chain…"},
+    )
+    log.warning(
+        "campaign %d history over usable context; degraded %d outputs in-memory",
+        campaign["id"],
+        degraded,
+    )
+    return degraded
 
 
 def _backlog_line(campaign_id: int) -> str:
@@ -771,6 +867,8 @@ async def _loop(campaign_id: int) -> None:
     cancelled = False
     context_errors = 0
     compact_failures = 0
+    # last opportunistic model-listing re-warm (see the loop body)
+    warm_attempted_at = 0.0
 
     try:
         while True:
@@ -798,6 +896,22 @@ async def _loop(campaign_id: int) -> None:
 
             mode = campaign["mode"] or "continuous"
 
+            # Provider model listings are cached in-process and go cold on
+            # startup and on provider/key edits; without them every context
+            # window silently resolves to the 128k fallback, which mis-sizes
+            # both the trigger and the in-chain budget. Re-warm here so a
+            # running campaign heals without a restart. The cooldown keeps an
+            # unreachable provider from stalling every iteration.
+            if (
+                not agent._models
+                and time.monotonic() - warm_attempted_at > MODELS_WARM_RETRY_SECONDS
+            ):
+                warm_attempted_at = time.monotonic()
+                try:
+                    await agent.models()
+                except Exception:
+                    log.warning("campaign %d: model listing warm-up failed", campaign_id)
+
             # compact against the model-derived trigger (zero config = auto):
             # last_prompt_tokens is provider-reported usage of what was really
             # sent, so pruning can never hide real growth from this check
@@ -822,10 +936,19 @@ async def _loop(campaign_id: int) -> None:
                 except Exception:
                     log.exception("compaction failed for campaign %d", campaign_id)
                     folded = 0
-                if folded:
+                if folded > 0:
                     compact_failures = 0
                     log.info("compacted %d messages for campaign %d", folded, campaign_id)
                     routes.push_event(campaign_id, "compacted", {"messages": folded})
+                elif folded == NOTHING_TO_FOLD:
+                    # No-op: nothing foldable this pass (small batch or
+                    # everything already folded). Not a failure — counting it
+                    # used to stop healthy campaigns after five rounds.
+                    log.info(
+                        "campaign %d: nothing to fold this pass (gauge %d tokens)",
+                        campaign_id,
+                        campaign["last_prompt_tokens"],
+                    )
                 else:
                     # Progress invariant: an unsuccessful attempt must not leave
                     # a monotonically growing input for the next attempt.
@@ -834,6 +957,11 @@ async def _loop(campaign_id: int) -> None:
                         # Finite failure policy: repeated compaction failures
                         # across iterations stop durably instead of retrying
                         # the same fold forever.
+                        log.warning(
+                            "campaign %d: compaction failed %d times in a row — stopping",
+                            campaign_id,
+                            compact_failures,
+                        )
                         routes.push_event(
                             campaign_id,
                             "notice",
@@ -867,37 +995,7 @@ async def _loop(campaign_id: int) -> None:
             # must fit usable context (the system prompt and schemas ride on
             # top inside agent.run, which enforces its own in-chain budget).
             # Degrade in-memory only — DB rows stay intact for the transcript.
-            try:
-                usable = agent.usable_context(campaign["model"])
-            except Exception:
-                usable = agent.FALLBACK_LIMIT - agent.COMPACT_RESERVE
-            if agent.estimate_messages_tokens(history) >= usable:
-                degraded = 0
-                tool_idx = [
-                    i for i, m in enumerate(history) if m.get("role") == "tool"
-                ]
-                for i in tool_idx[:-RECENT_OUTPUT_KEEP_COUNT] if len(
-                    tool_idx
-                ) > RECENT_OUTPUT_KEEP_COUNT else []:
-                    content = history[i].get("content")
-                    if isinstance(content, str) and not content.startswith(
-                        "[old tool output cleared"
-                    ):
-                        history[i] = {
-                            **history[i],
-                            "content": _cleared_output(content),
-                        }
-                        degraded += 1
-                routes.push_event(
-                    campaign_id,
-                    "notice",
-                    {"text": "context over budget — older tool outputs cleared for this chain…"},
-                )
-                log.warning(
-                    "campaign %d history over usable context; degraded %d outputs in-memory",
-                    campaign_id,
-                    degraded,
-                )
+            _degrade_over_budget(campaign, history)
 
             run["parts"] = []
             run["pending"] = None
@@ -957,7 +1055,8 @@ async def _loop(campaign_id: int) -> None:
                 # A truncated chain is NOT successful completion: the provider
                 # was never called with the full history. Force recovery
                 # independently of last_prompt_tokens/compact_trigger, then
-                # prove the next input is smaller before continuing.
+                # decide from a like-for-like comparison whether the next
+                # chain can run.
                 est_before = agent.estimate_messages_tokens(history)
                 try:
                     folded = await compact_campaign(campaign_id)
@@ -968,20 +1067,48 @@ async def _loop(campaign_id: int) -> None:
                     folded = 0
                 new_history = _history(campaign_id)
                 # Compare like with like: the pre-recovery estimate covered
-                # history+prompt, so the post-recovery one must too. (The live
-                # `history` may additionally carry in-memory degrade; the fresh
-                # rebuild is the canonical next input either way.)
+                # history+prompt, so the post-recovery one must too — and it
+                # must include the same in-memory output degrade the next
+                # chain would apply, or a recoverable input reads as no
+                # progress.
                 new_history.append({"role": "user", "content": prompt})
+                _degrade_over_budget(campaign, new_history)
                 est_after = agent.estimate_messages_tokens(new_history)
+                # Did the truncated chain have any chance? If its own input
+                # already filled the window (schemas and system prompt on
+                # top), the provider was never called at all and retrying the
+                # same size is a spin: only a strictly smaller next input may
+                # continue. Otherwise the chain did real work, the next one
+                # rolls over, and the loop keeps going.
+                immediate = False
+                try:
+                    usable = agent.usable_context(campaign["model"])
+                    schemas = agent.measured_schema_tokens("supervisor", campaign)
+                    system = agent.build_prompt(
+                        campaign,
+                        attachments,
+                        include_attachments=not touched,
+                        tool_kind="supervisor",
+                    )
+                    immediate = (
+                        est_before
+                        + schemas
+                        + len(system) // agent.EST_CHARS_PER_TOKEN
+                        >= usable - agent.SAFETY_MARGIN_TOKENS
+                    )
+                except Exception:
+                    immediate = False
                 (run.setdefault("context_recovery", [])).append({
                     "est_before": est_before,
                     "est_after": est_after,
                     "folded": folded,
+                    "immediate": immediate,
                 })
-                if est_after < est_before:
+                if est_after < est_before or not immediate:
                     log.info(
-                        "campaign %d truncated-chain recovery shrank estimate %d -> %d",
-                        campaign_id, est_before, est_after,
+                        "campaign %d truncated-chain recovery: %d -> %d "
+                        "(folded %s, immediate %s)",
+                        campaign_id, est_before, est_after, folded, immediate,
                     )
                     continue
                 # No progress: durable recoverable stop. The truncated text and
@@ -989,6 +1116,11 @@ async def _loop(campaign_id: int) -> None:
                 # _run; the newest user message is untouched. Clearing
                 # auto_running stops the exit-time restart (same as goal-done
                 # and manual stop); steer or resume restarts the loop.
+                log.warning(
+                    "campaign %d: truncated-chain recovery made no progress "
+                    "(estimate %d -> %d, folded %s) — stopping",
+                    campaign_id, est_before, est_after, folded,
+                )
                 routes.push_event(
                     campaign_id,
                     "notice",
@@ -1034,6 +1166,11 @@ async def _loop(campaign_id: int) -> None:
                     # Bounded stop: compaction and pruning did not reduce the
                     # input, so retrying the identical request is futile.
                     # Durable recoverable stop, same as truncated no-progress.
+                    log.warning(
+                        "campaign %d: context errors persist after %d attempts "
+                        "(estimate %d) — stopping",
+                        campaign_id, context_errors, est,
+                    )
                     routes.push_event(
                         campaign_id,
                         "notice",

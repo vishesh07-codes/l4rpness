@@ -297,7 +297,10 @@ def test_compact_folds_old_messages_into_memory(monkeypatch):
     assert history[-1]["content"] == "newest answer"
 
 
-def test_compact_needs_a_full_batch(monkeypatch):
+def test_compact_small_benign_batch_is_noop_not_failure(monkeypatch):
+    """Three tiny messages with keep=2: nothing older to fold and the tail
+    fits, so the pass is a no-op (NOTHING_TO_FOLD), never a failure the loop
+    could count toward stopping the campaign."""
     monkeypatch.setattr(config, "COMPACT_KEEP_MESSAGES", 2)
 
     with db.db() as conn:
@@ -308,7 +311,58 @@ def test_compact_needs_a_full_batch(monkeypatch):
                 (role, body),
             )
 
-    assert asyncio.run(supervisor.compact_campaign(1)) == 0
+    assert asyncio.run(supervisor.compact_campaign(1)) == supervisor.NOTHING_TO_FOLD
+
+
+def test_compact_folds_fat_small_batch_by_size(monkeypatch):
+    """Five fat rows (a whole chain each) under the row keep-count still fold:
+    the keep target shrinks by size so recovery can make room instead of
+    declaring no progress. This is the shape that stopped campaign 2."""
+    monkeypatch.setattr(config, "LIMITS", {"m": 128_000})
+    monkeypatch.setattr(config, "COMPACT_KEEP_MESSAGES", 8)
+
+    with db.db() as conn:
+        conn.execute("INSERT INTO campaigns (id, target, model) VALUES (1, 't', 'm')")
+        for i in range(5):
+            calls = [
+                {"id": f"c{i}-{j}", "name": "bash", "args": {"cmd": "id"}}
+                for j in range(6)
+            ]
+            parts = [
+                {
+                    "type": "tool",
+                    "id": f"c{i}-{j}",
+                    "name": "bash",
+                    "output": "X" * 100_000,
+                }
+                for j in range(6)
+            ]
+            conn.execute(
+                "INSERT INTO messages (campaign_id, role, content, tool_calls, parts)"
+                " VALUES (1, 'assistant', ?, ?, ?)",
+                (f"reply {i}", json.dumps(calls), json.dumps(parts)),
+            )
+
+    fake_resp = MagicMock()
+    fake_resp.choices = [MagicMock(message=SimpleNamespace(content="MEMORY: folded fat batch"))]
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = AsyncMock(return_value=fake_resp)
+    monkeypatch.setattr("app.agent._client", lambda provider: mock_client)
+
+    folded = asyncio.run(supervisor.compact_campaign(1))
+    assert folded >= 2  # the keep-count alone (8 > 5) would have folded nothing
+
+    with db.db() as conn:
+        campaign = conn.execute(
+            "SELECT memory_summary, compacted_until FROM campaigns WHERE id = 1"
+        ).fetchone()
+        total = conn.execute(
+            "SELECT COUNT(*) AS c FROM messages WHERE campaign_id = 1"
+        ).fetchone()["c"]
+    assert campaign["compacted_until"] > 0
+    assert campaign["compacted_until"] < total  # newest evidence stays verbatim
+    history = supervisor._history(1)
+    assert "CAMPAIGN MEMORY" in history[0]["content"]
 
 
 def test_restore_resumes_only_auto_running(monkeypatch):

@@ -375,9 +375,12 @@ def test_truncated_single_oversized_result_stops_without_second_run(monkeypatch)
     assert run is None  # loop popped the run on exit
 
 
-def test_truncated_newest_eight_over_budget_progress_or_stop(monkeypatch):
-    """Eight 100k newest outputs alone exceed the window: the second iteration
-    either runs on demonstrably smaller input or does not run at all."""
+def test_truncated_chain_with_fitting_input_keeps_rolling(monkeypatch):
+    """Eight 100k newest outputs: the first recovery shrinks the input, and a
+    later chain whose input fits the window (schemas and system prompt on
+    top) rolls over instead of durably stopping. The old rule demanded a
+    strictly smaller input on every recovery, which stopped healthy campaigns
+    whose chains truncate from in-chain growth."""
     monkeypatch.setattr(config, "LIMITS", {"m": 128_000})
     _seed_fat_history(2, [100_000] * 8)
 
@@ -410,15 +413,21 @@ def test_truncated_newest_eight_over_budget_progress_or_stop(monkeypatch):
 
     async def main():
         assert supervisor_mod.start(2)
-        await _drive_loop_to_end(2)
+        task = supervisor_mod.SUPERVISORS[2]
+        for _ in range(400):
+            if run_calls["n"] >= 4:
+                break
+            await asyncio.sleep(0.01)
+        supervisor_mod.stop(2)
+        await asyncio.wait_for(task, timeout=5)
 
     asyncio.run(main())
-    assert run_calls["n"] == 2
+    # well past the one-recovery stop the old invariant imposed
+    assert run_calls["n"] >= 4
     with db.db() as conn:
         row = conn.execute(
-            "SELECT status, compacted_until FROM campaigns WHERE id = 2"
+            "SELECT compacted_until FROM campaigns WHERE id = 2"
         ).fetchone()
-    assert row["status"] == "idle"
     assert row["compacted_until"] > 0
 
 
@@ -855,6 +864,52 @@ def test_compact_failures_stop_loop_after_max(monkeypatch):
         ).fetchone()
     assert row["status"] == "idle"
     assert row["auto_running"] == 0
+
+
+def test_loop_ignores_noop_compaction(monkeypatch):
+    """A pinned gauge plus compaction passes that report NOTHING_TO_FOLD must
+    not trip the failure stop: nothing-to-fold is not a failure. The old code
+    counted it, so a healthy campaign stopped after five rounds."""
+    monkeypatch.setattr(config, "LIMITS", {"m": 128_000})
+    monkeypatch.setattr(config, "SUPERVISOR_BACKOFF", 0)
+    with db.db() as conn:
+        conn.execute(
+            "INSERT INTO campaigns (id, target, model, last_prompt_tokens) "
+            "VALUES (1, 't', 'm', 99999)"
+        )
+
+    async def nosleep(stop, seconds):
+        return None
+
+    monkeypatch.setattr(supervisor, "_sleep", nosleep)
+
+    async def fake_run(campaign_id, campaign, attachments, history, content, run, files=(), store_user=True, keep=False, tool_kind=None, include_attachments=True):
+        return {"ok": True, "stopped": False, "empty": False, "error": ""}
+
+    noops = {"n": 0}
+
+    async def nothing_compact(campaign_id, keep_override=None):
+        noops["n"] += 1
+        return supervisor.NOTHING_TO_FOLD
+
+    monkeypatch.setattr(routes, "_run", fake_run)
+    monkeypatch.setattr(supervisor, "compact_campaign", nothing_compact)
+    import app.supervisor as supervisor_mod
+
+    target = supervisor.MAX_COMPACT_FAILURES + 2
+
+    async def main():
+        assert supervisor_mod.start(1)
+        task = supervisor_mod.SUPERVISORS[1]
+        for _ in range(400):
+            if noops["n"] >= target:
+                break
+            await asyncio.sleep(0.01)
+        supervisor.stop(1)
+        await asyncio.wait_for(task, timeout=5)
+
+    asyncio.run(main())
+    assert noops["n"] >= target
 
 
 class _HangingSession:
