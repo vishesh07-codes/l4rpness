@@ -9,6 +9,24 @@ FROM python:3.13-slim
 ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 PIP_BREAK_SYSTEM_PACKAGES=1 PIP_ROOT_USER_ACTION=ignore
 WORKDIR /app
 
+# Some ISPs (Jio/India among them) throttle the IPv4 route to the Fastly edge
+# behind deb.debian.org down to ~90 KB/s while the same host is fine over
+# IPv6 or from other mirrors. Build containers are IPv4-only, so apt crawls.
+# Point apt at a mirror that peers well and keep retries/timeouts sane. This
+# applies to every apt call below, including the one `playwright
+# install --with-deps` runs for Chromium's system libraries.
+RUN set -eux; \
+    if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
+      sed -i 's|deb.debian.org|mirror.init7.net|g' /etc/apt/sources.list.d/debian.sources; \
+    elif [ -f /etc/apt/sources.list ]; then \
+      sed -i 's|deb.debian.org|mirror.init7.net|g' /etc/apt/sources.list; \
+    fi; \
+    printf '%s\n' \
+      'Acquire::Retries "5";' \
+      'Acquire::http::Timeout "30";' \
+      'Acquire::https::Timeout "30";' \
+      > /etc/apt/apt.conf.d/99-pentest-net
+
 RUN useradd -m -u 1000 app
 
 # passwordless sudo as a fallback for tools that insist on it; the container
@@ -20,7 +38,18 @@ RUN apt-get update && \
     chmod 0440 /etc/sudoers.d/app && \
     visudo -cf /etc/sudoers.d/app
 COPY requirements.txt .
-RUN pip install -r requirements.txt
+# pip's default index (files.pythonhosted.org) sits on the same Fastly edge that
+# gets throttled on some ISPs (~70 KB/s here vs ~4 MB/s from a mirror). Point
+# pip at a mirror that peers well, and cache the config in the image so
+# runtime `pip install` (agents do this) benefits too.
+RUN printf '%s\n' \
+      '[global]' \
+      'index-url = https://mirrors.aliyun.com/pypi/simple/' \
+      'extra-index-url = https://pypi.org/simple/' \
+      'timeout = 60' \
+      'retries = 5' \
+      > /etc/pip.conf && \
+    pip install -r requirements.txt
 
 ARG TOOLSET=custom
 COPY tools.txt /tmp/tools.txt
