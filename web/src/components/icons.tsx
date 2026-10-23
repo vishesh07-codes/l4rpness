@@ -59,6 +59,8 @@ import {
   ThumbsUpIcon,
   UnavailableIcon,
   Video01Icon,
+  VolumeHighIcon,
+  VolumeMute02Icon,
   Wrench01Icon,
   Zip01Icon,
 } from "@hugeicons/core-free-icons"
@@ -98,6 +100,8 @@ export const Folder = icon(Folder01Icon)
 export const Sheet = icon(Table01Icon)
 export const AudioFile = icon(MusicNote01Icon)
 export const VideoFile = icon(Video01Icon)
+export const VolumeHigh = icon(VolumeHighIcon)
+export const VolumeMute = icon(VolumeMute02Icon)
 export const ArchiveFile = icon(Zip01Icon)
 export const Globe2 = icon(Globe02Icon)
 export const ImageIcon = icon(Image01Icon)

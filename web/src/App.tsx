@@ -47,12 +47,14 @@ export default function App() {
     window.localStorage.setItem("sidebar", collapsed ? "collapsed" : "expanded")
   }, [collapsed])
 
-  function toggleTheme(event: MouseEvent<HTMLButtonElement>) {
-    const bounds = event.currentTarget.getBoundingClientRect()
-    const root = document.documentElement
-    root.style.setProperty("--theme-x", `${bounds.left + bounds.width / 2}px`)
-    root.style.setProperty("--theme-y", `${bounds.top + bounds.height / 2}px`)
+  const flipping = useRef(false)
 
+  function toggleTheme(_event: MouseEvent<HTMLButtonElement>) {
+    // the masked reveal runs ~1.7s; ignore clicks while it plays so two
+    // transitions never fight over the snapshots
+    if (flipping.current) return
+
+    const root = document.documentElement
     const updateTheme = () => setDarkMode((enabled) => !enabled)
     const transitionDocument = document as Document & {
       startViewTransition?: (
@@ -75,10 +77,12 @@ export default function App() {
       return
     }
 
-    // the circle-wipe CSS hangs off this class, so route changes (which also
+    // the mask-reveal CSS hangs off this class, so route changes (which also
     // use the View Transitions API) stay a plain cross-fade
     root.classList.add("theme-transition")
+    flipping.current = true
     const done = () => {
+      flipping.current = false
       root.classList.remove("theme-transition")
       restore()
     }

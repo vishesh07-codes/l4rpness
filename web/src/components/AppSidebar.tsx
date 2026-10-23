@@ -1,7 +1,8 @@
 import { useEffect, useState, type MouseEvent } from "react"
 import { useLocation } from "react-router-dom"
 
-import { BookOpenText, Compose, LayoutGrid, Moon, Settings, Shield, SidebarToggle, Sun, Wrench } from "@/components/icons"
+import { BookOpenText, Compose, LayoutGrid, Settings, Shield, SidebarToggle, Wrench } from "@/components/icons"
+import { ThemeToggle } from "@/components/ThemeToggle"
 import { api, type Campaign } from "@/lib/api"
 import { TransitionLink } from "@/components/TransitionLink"
 import { Wordmark } from "@/components/Wordmark"
@@ -197,38 +198,7 @@ export function AppSidebar({
       <div className={cn("mt-auto shrink-0 px-2 pb-3", rail && "px-2")}>
         {/* theme lives here rather than floating over the page, where it
             collided with page headers at narrow widths */}
-        <button
-          type="button"
-          onClick={onToggleTheme}
-          aria-label={`Switch to ${darkMode ? "light" : "dark"} mode`}
-          title={`Switch to ${darkMode ? "light" : "dark"} mode`}
-          className={cn(
-            "mb-1 flex items-center gap-2.5 rounded-[10px] text-[13px] font-medium text-ink-2 outline-none transition-colors duration-100 hover:text-ink focus-visible:ring-2 focus-visible:ring-ring/60",
-            rail ? "material-key mx-auto size-9 justify-center" : "w-full px-2.5 py-2 hover:bg-hover"
-          )}
-        >
-          <span className={cn("relative shrink-0", rail ? "size-4" : "size-[18px]")}>
-            <Sun
-              aria-hidden
-              className={cn(
-                "absolute inset-0 transition-[opacity,scale,filter] duration-300 ease-[cubic-bezier(0.2,0,0,1)]",
-                rail ? "size-4" : "size-[18px]",
-                darkMode ? "scale-100 opacity-100 blur-0" : "scale-[0.25] opacity-0 blur-[4px]"
-              )}
-              strokeWidth={1.5}
-            />
-            <Moon
-              aria-hidden
-              className={cn(
-                "transition-[opacity,scale,filter] duration-300 ease-[cubic-bezier(0.2,0,0,1)]",
-                rail ? "size-4" : "size-[18px]",
-                darkMode ? "scale-[0.25] opacity-0 blur-[4px]" : "scale-100 opacity-100 blur-0"
-              )}
-              strokeWidth={1.5}
-            />
-          </span>
-          {!rail && (darkMode ? "Light mode" : "Dark mode")}
-        </button>
+        <ThemeToggle darkMode={darkMode} rail={rail} onToggleTheme={onToggleTheme} />
 
         <div
           className={cn(

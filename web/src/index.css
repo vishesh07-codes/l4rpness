@@ -155,20 +155,65 @@ html.vt-active .page-enter {
   }
 }
 
-/* theme flip: an origin-aware circle wipe from the toggle instead of the
-   cross-fade. scoped to `theme-transition` so route changes stay a fade. */
-html.theme-transition::view-transition-old(root) {
-  animation: none;
+/* theme flip: the new palette is revealed through a transparent animated
+   webp of the dancing silhouette — she settles in on the hook's first beat,
+   breathes with the groove, then the drop throws her open across the whole
+   screen (a la ni5arga.com / elysiajs.com).
+   two mask layers: the dancer, plus a soft radial bloom that stays at zero
+   through the dance and overtakes her on the drop, so the burst finishes as
+   a clean spreading light instead of magnified silhouette gaps. */
+html.theme-transition::view-transition-old(root),
+html.theme-transition::view-transition-new(root) {
+  animation: theme-mask 1.7s cubic-bezier(0.4, 0, 0.2, 1) both;
 }
 
 html.theme-transition::view-transition-new(root) {
-  animation: theme-reveal 400ms ease-out both;
-  clip-path: circle(0 at var(--theme-x) var(--theme-y));
+  -webkit-mask-image: url("./assets/badapple/badapple-mask.webp"),
+    radial-gradient(circle at 50% 50%, #000 52%, transparent 72%);
+  mask-image: url("./assets/badapple/badapple-mask.webp"),
+    radial-gradient(circle at 50% 50%, #000 52%, transparent 72%);
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: 50% 50%;
+  mask-position: 50% 50%;
+  -webkit-mask-size: 0, 0;
+  mask-size: 0, 0;
 }
 
-@keyframes theme-reveal {
-  to {
-    clip-path: circle(150vmax at var(--theme-x) var(--theme-y));
+/* beat map of the trimmed hook: first hit +160ms (9%), the drop +1010ms
+   (59%). she eases in with an expo settle, sways gently, then unwinds with
+   an easeInOutExpo while the bloom swallows the screen behind her */
+@keyframes theme-mask {
+  0% {
+    -webkit-mask-size: 0, 0;
+    mask-size: 0, 0;
+    animation-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  10% {
+    -webkit-mask-size: 24vmax, 0;
+    mask-size: 24vmax, 0;
+    animation-timing-function: cubic-bezier(0.45, 0, 0.55, 1);
+  }
+  34% {
+    -webkit-mask-size: 22.8vmax, 0;
+    mask-size: 22.8vmax, 0;
+  }
+  59% {
+    -webkit-mask-size: 24vmax, 0;
+    mask-size: 24vmax, 0;
+    animation-timing-function: cubic-bezier(0.87, 0, 0.13, 1);
+  }
+  70% {
+    -webkit-mask-size: 42vmax, 30vmax;
+    mask-size: 42vmax, 30vmax;
+  }
+  84% {
+    -webkit-mask-size: 300vmax, 240vmax;
+    mask-size: 300vmax, 240vmax;
+  }
+  100% {
+    -webkit-mask-size: 750vmax, 800vmax;
+    mask-size: 750vmax, 800vmax;
   }
 }
 
