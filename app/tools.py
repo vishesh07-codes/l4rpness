@@ -22,7 +22,10 @@ SCHEMAS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "cmd": {"type": "string", "description": "Shell command to run."},
+                    "cmd": {
+                        "type": "string",
+                        "description": "The shell command as one string. Required.",
+                    },
                     "timeout": {
                         "type": "integer",
                         "description": f"Seconds before the command is killed, max {config.BASH_TIMEOUT}.",
@@ -126,6 +129,30 @@ def _work_dir(campaign_id: int) -> Path:
     return path
 
 
+def _str_arg(args: dict, *keys: str) -> str:
+    for key in keys:
+        value = args.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _cmd_arg(args: dict) -> str:
+    cmd = _str_arg(args, "cmd", "command", "cmdline", "script", "shell", "shell_command")
+    if cmd:
+        return cmd
+    # models occasionally drop a positional-style key ({"__arg1": "..."});
+    # with exactly one candidate string there is nothing to be ambiguous about
+    extras = {
+        key: value.strip()
+        for key, value in args.items()
+        if key != "timeout" and isinstance(value, str) and value.strip()
+    }
+    if len(extras) == 1:
+        return next(iter(extras.values()))
+    return ""
+
+
 def _resolve(roots: list[Path], name: str) -> Path:
     fallback = None
     for root in roots:
@@ -186,9 +213,12 @@ async def _kill_when_stopped(proc, stop):
 
 
 async def bash(args: dict, work: Path, stop=None, on_output=None) -> tuple[str, bool]:
-    cmd = str(args.get("cmd", "")).strip()
+    cmd = _cmd_arg(args)
     if not cmd:
-        raise ValueError("cmd is required")
+        got = ", ".join(sorted(args)) or "none"
+        raise ValueError(
+            f'cmd is required: call bash with {{"cmd": "the shell command"}} (got keys: {got})'
+        )
 
     try:
         timeout = max(1, min(int(args["timeout"]), config.BASH_TIMEOUT))
@@ -262,7 +292,11 @@ async def bash(args: dict, work: Path, stop=None, on_output=None) -> tuple[str, 
 
 
 async def read_file(args: dict, work: Path, stop=None) -> tuple[str, bool]:
-    path = _resolve([work, *skills.roots()], str(args.get("path", "")))
+    name = _str_arg(args, "path", "file_path", "file", "filename")
+    if not name:
+        got = ", ".join(sorted(args)) or "none"
+        raise ValueError(f'path is required: call read_file with {{"path": "relative/path"}} (got keys: {got})')
+    path = _resolve([work, *skills.roots()], name)
     if not path.is_file():
         raise ValueError("file not found")
 
@@ -288,16 +322,23 @@ async def read_file(args: dict, work: Path, stop=None) -> tuple[str, bool]:
 
 
 async def write_file(args: dict, work: Path, stop=None) -> tuple[str, bool]:
-    path = _resolve([work], str(args.get("path", "")))
+    name = _str_arg(args, "path", "file_path", "file", "filename")
+    if not name:
+        got = ", ".join(sorted(args)) or "none"
+        raise ValueError(f'path is required: call write_file with {{"path": "relative/path"}} (got keys: {got})')
+    path = _resolve([work], name)
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    content = str(args.get("content", ""))
+    content = args.get("content")
+    if content is None:
+        content = args.get("text", "")
+    content = str(content)
     path.write_text(content)
     return f"wrote {len(content)} chars to {path.relative_to(work)}", True
 
 
 async def write_todos(args: dict, work: Path, stop=None) -> tuple[str, bool]:
-    todos = args.get("todos")
+    todos = args.get("todos") or args.get("plan")
     if not isinstance(todos, list) or not todos:
         raise ValueError("todos must be a non-empty list")
 
@@ -310,7 +351,7 @@ async def write_todos(args: dict, work: Path, stop=None) -> tuple[str, bool]:
 
 
 async def skill(args: dict, work: Path, stop=None) -> tuple[str, bool]:
-    name = str(args.get("name", "")).strip()
+    name = _str_arg(args, "name", "skill", "skill_name")
     loaded = skills.load(name)
     if loaded is None:
         names = ", ".join(entry["name"] for entry in skills.discover()) or "none"

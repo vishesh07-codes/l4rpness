@@ -24,6 +24,26 @@ def test_bash_failure_sets_not_ok(work):
     assert "[exit code 3]" in out
 
 
+def test_bash_accepts_command_aliases(work):
+    for key in ("command", "cmdline", "script"):
+        out, ok, _ = asyncio.run(tools.execute("bash", {key: "echo alias"}, 1))
+        assert ok, (key, out)
+        assert "alias" in out
+
+
+def test_bash_takes_a_single_unexpected_string_as_command(work):
+    out, ok, _ = asyncio.run(tools.execute("bash", {"__arg1": "echo positional"}, 1))
+    assert ok
+    assert "positional" in out
+
+
+def test_bash_missing_command_error_names_the_keys(work):
+    out, ok, _ = asyncio.run(tools.execute("bash", {"timeout": 5}, 1))
+    assert not ok
+    assert "cmd is required" in out
+    assert "timeout" in out
+
+
 def test_bash_long_output_spills_to_file(work, monkeypatch):
     monkeypatch.setattr(config, "TOOL_OUTPUT_CHARS", 100)
     out, ok, _ = asyncio.run(tools.execute("bash", {"cmd": "python3 -c \"print('x' * 500)\""}, 1))
