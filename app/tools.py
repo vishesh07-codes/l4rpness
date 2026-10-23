@@ -159,8 +159,8 @@ SUPERVISOR_SCHEMAS = [
                 "properties": {
                     "status": {
                         "type": "string",
-                        "enum": ["", "new", "working", "done", "dead"],
-                        "description": "Optional status filter; empty lists everything.",
+                        "enum": ["new", "working", "done", "dead"],
+                        "description": "Optional status filter; omit to list every hypothesis.",
                     },
                 },
             },
