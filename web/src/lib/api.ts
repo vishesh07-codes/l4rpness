@@ -17,6 +17,7 @@ export type Campaign = {
   scope: string
   model: string
   effort: string
+  mode?: "continuous" | "goal"
   status: string
   created_at: string
   updated_at: string
@@ -112,6 +113,20 @@ export type SkillDetail = Skill & {
   files: string[]
 }
 
+export type WorkFile = {
+  path: string
+  name: string
+  type: "file" | "dir"
+  size: number
+}
+
+export type WorkFileContent = {
+  path: string
+  content: string
+  truncated: boolean
+  size: number
+}
+
 export type McpServer = {
   name: string
   command: string[]
@@ -125,6 +140,59 @@ export type McpServer = {
 }
 
 export type McpStatus = { servers: McpServer[] }
+
+export type ProviderKeyStatus = {
+  provider: string
+  env_var: string
+  configured: boolean
+  source: "settings" | "environment" | "missing"
+  length: number
+  suffix: string | null
+}
+
+export type RuntimeSection = { id: string; title: string }
+
+export type RuntimeField = {
+  key: string
+  section: string
+  label: string
+  hint?: string
+  kind: "text" | "select" | "list" | "int" | "number"
+  min?: number
+  max?: number
+  step?: number
+  options?: string[]
+}
+
+export type RuntimeConfig = {
+  sections: RuntimeSection[]
+  fields: RuntimeField[]
+  values: Record<string, unknown>
+  sources: Record<string, "settings" | "file">
+}
+
+export type HostEnvVar = { present: boolean; length: number; suffix: string | null }
+
+export type HostEnvState = {
+  mounted: boolean
+  readable: boolean
+  writable: boolean
+  changed: boolean
+  vars: Record<string, HostEnvVar>
+  last_applied: { vars: string[]; at: number | null }
+}
+
+export type HostPushResult = {
+  written: string[]
+  providers: ProviderKeyStatus[]
+  host: HostEnvState
+}
+
+export type HostReloadResult = {
+  changed: string[]
+  providers: ProviderKeyStatus[]
+  host: HostEnvState
+}
 
 export type AppConfig = {
   models: string[]
@@ -161,7 +229,11 @@ async function errorText(res: Response) {
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, init)
   if (!res.ok) throw new Error(await errorText(res))
-  return res.json() as Promise<T>
+  // some endpoints (e.g. DELETE skill) reply 204 with an empty body; parsing
+  // that as JSON throws "unexpected end of data" even though the call succeeded
+  if (res.status === 204) return undefined as T
+  const text = await res.text()
+  return (text ? JSON.parse(text) : undefined) as T
 }
 
 function parseSse(chunk: string): StreamEvent | null {
@@ -253,6 +325,33 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(skill),
     }),
+  deleteSkill: (name: string) =>
+    req<void>(`/api/skills/${encodeURIComponent(name)}`, { method: "DELETE" }),
+  settingsProviders: () => req<ProviderKeyStatus[]>("/api/settings/providers"),
+  saveProviderKeys: (values: Record<string, string>) =>
+    req<ProviderKeyStatus[]>("/api/settings/providers", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ values }),
+    }),
+  settingsConfig: () => req<RuntimeConfig>("/api/settings/config"),
+  saveRuntimeConfig: (values: Record<string, string>) =>
+    req<RuntimeConfig>("/api/settings/config", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ values }),
+    }),
+  resetRuntimeConfig: () =>
+    req<RuntimeConfig>("/api/settings/config", { method: "DELETE" }),
+  hostEnv: () => req<HostEnvState>("/api/settings/host"),
+  pushHostEnv: (values: Record<string, string>) =>
+    req<HostPushResult>("/api/settings/host/push", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ values }),
+    }),
+  reloadHostEnv: () =>
+    req<HostReloadResult>("/api/settings/host/reload", { method: "POST" }),
   mcp: () => req<McpStatus>("/api/mcp"),
   saveMcp: (servers: McpServer[]) =>
     req<McpStatus>("/api/mcp", {
@@ -297,4 +396,12 @@ export const api = {
   },
   streamMessage,
   attachmentUrl: (id: number) => `/api/attachments/${id}`,
+  listWorkFiles: (campaignId: number) =>
+    req<{ files: WorkFile[] }>(`/api/campaigns/${campaignId}/files`).then((r) => r.files),
+  readWorkFile: (campaignId: number, path: string) =>
+    req<WorkFileContent>(
+      `/api/campaigns/${campaignId}/file?path=${encodeURIComponent(path)}`
+    ),
+  workFileRawUrl: (campaignId: number, path: string) =>
+    `/api/campaigns/${campaignId}/file/raw?path=${encodeURIComponent(path)}`,
 }

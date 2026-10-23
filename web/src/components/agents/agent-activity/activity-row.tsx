@@ -131,7 +131,7 @@ function SearchRow({ item }: { item: AgentActivitySearch }) {
       </div>
       {item.results?.length ? (
         <div className="space-y-0.5 pl-4">
-          <AnimatePresence initial mode="popLayout">
+          <AnimatePresence initial={false} mode="popLayout">
             {item.results.map((result) => (
               <motion.div
                 layout="position"
@@ -147,7 +147,7 @@ function SearchRow({ item }: { item: AgentActivitySearch }) {
           </AnimatePresence>
         </div>
       ) : null}
-      <AnimatePresence initial>
+      <AnimatePresence initial={false}>
         {item.moreCount ? (
           <motion.div
             key="more-results"

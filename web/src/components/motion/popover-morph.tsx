@@ -209,7 +209,8 @@ const clipShown = (radius: number) => `inset(0% 0% 0% 0% round ${radius}px)`;
 
 // Preserve the original spring character on the wrapper, but tween the complex
 // clip-path so it cannot snap when the spring resolves its final distance.
-const MORPH_CLIP_TRANSITION = { duration: 0.32, ease: EASE_OUT } as const;
+const MORPH_CLIP_TRANSITION = { duration: 0.2, ease: EASE_OUT } as const;
+const MORPH_EXIT_TRANSITION = { duration: 0.16, ease: EASE_OUT } as const;
 
 export interface MorphPopoverContentProps {
   children: ReactNode;
@@ -256,7 +257,7 @@ export function MorphPopoverContent({
   const wrap = reduce
     ? undefined
     : {
-        hidden: { opacity: 0, scale: 0.96, transition: SPRING_PANEL },
+        hidden: { opacity: 0, scale: 0.96, transition: MORPH_EXIT_TRANSITION },
         show: { opacity: 1, scale: 1, transition: SPRING_PANEL },
       };
   const clip = reduce
@@ -264,7 +265,7 @@ export function MorphPopoverContent({
     : {
         hidden: {
           clipPath: clipHidden(side, align, radius),
-          transition: MORPH_CLIP_TRANSITION,
+          transition: MORPH_EXIT_TRANSITION,
         },
         show: {
           clipPath: clipShown(radius),

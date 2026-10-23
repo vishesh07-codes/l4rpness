@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react"
-import { Plus } from "@/components/icons"
 
+import { ConfirmDialog } from "@/components/ConfirmDialog"
 import { Markdown } from "@/components/Markdown"
 import { PageHeader } from "@/components/PageHeader"
-import { Search, TriangleAlert } from "@/components/icons"
+import { Plus, Search, Trash2, TriangleAlert } from "@/components/icons"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Badge } from "@/components/ui/badge"
@@ -26,6 +26,7 @@ export function Skills() {
   const [error, setError] = useState("")
   const [busy, setBusy] = useState(false)
   const [query, setQuery] = useState("")
+  const [confirmDelete, setConfirmDelete] = useState(false)
 
   const load = () =>
     api
@@ -82,6 +83,23 @@ export function Skills() {
     }
   }
 
+  async function remove() {
+    if (!selected) return
+
+    setBusy(true)
+    setError("")
+    try {
+      await api.deleteSkill(selected.name)
+      setConfirmDelete(false)
+      setSelected(null)
+      await load()
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const q = query.trim().toLowerCase()
   const shown =
     skills && q
@@ -105,13 +123,13 @@ export function Skills() {
       {error && (
         <Alert variant="destructive" className="mb-4">
           <TriangleAlert />
-          <AlertTitle>Could not load skills</AlertTitle>
+          <AlertTitle>Skill request failed</AlertTitle>
           <AlertDescription>{error}</AlertDescription>
         </Alert>
       )}
 
-      <div className="flex min-h-0 flex-1 overflow-hidden rounded-[12px] border border-line">
-        <div className="flex w-72 shrink-0 flex-col border-r border-line">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl shadow-card lg:flex-row">
+        <div className="flex max-h-[45svh] w-full shrink-0 flex-col border-b border-line lg:max-h-none lg:w-72 lg:border-b-0 lg:border-r">
           {skills && skills.length > 5 && (
             <div className="relative shrink-0 border-b border-line p-2">
               <Search
@@ -129,10 +147,10 @@ export function Skills() {
               />
             </div>
           )}
-          <div className="min-h-0 flex-1 overflow-y-auto">
+          <div className="min-h-0 flex-1 overflow-y-auto p-2">
           {skills === null &&
             [0, 1, 2, 3, 4].map((i) => (
-              <div key={i} className="flex flex-col gap-2 border-b border-line px-4 py-3" aria-hidden>
+              <div key={i} className="flex flex-col gap-2 rounded-lg px-4 py-3" aria-hidden>
                 <Skeleton className="h-3.5 w-[55%]" />
                 <Skeleton className="h-3 w-[80%]" />
               </div>
@@ -148,14 +166,16 @@ export function Skills() {
           {shown?.map((skill) => (
             <button
               key={skill.name}
+              type="button"
               onClick={() => open(skill.name)}
+              aria-current={selected?.name === skill.name && !draft ? "true" : undefined}
               className={cn(
-                "flex w-full flex-col gap-1 border-b px-4 py-3 text-left hover:bg-hover/40",
-                selected?.name === skill.name && !draft && "bg-hover"
+                "flex w-full flex-col gap-1 rounded-lg px-4 py-3 text-left transition-colors duration-100 hover:bg-hover/50",
+                selected?.name === skill.name && !draft && "material-key"
               )}
             >
               <span className="flex items-center gap-2">
-                <span className="truncate font-mono text-[13px]">{skill.name}</span>
+                <span className="min-w-0 truncate font-mono text-[13px]">{skill.name}</span>
                 <Badge variant="secondary" className="shrink-0 text-[10px] capitalize">
                   {skill.source}
                 </Badge>
@@ -184,8 +204,9 @@ export function Skills() {
               }}
             >
               <div className="flex flex-col gap-2">
-                <Label>Name</Label>
+                <Label htmlFor="skill-name">Name</Label>
                 <Input
+                  id="skill-name"
                   value={draft.name}
                   onChange={(e) => setDraft({ ...draft, name: e.target.value })}
                   disabled={editing}
@@ -193,16 +214,18 @@ export function Skills() {
                 />
               </div>
               <div className="flex flex-col gap-2">
-                <Label>Description</Label>
+                <Label htmlFor="skill-description">Description</Label>
                 <Input
+                  id="skill-description"
                   value={draft.description}
                   onChange={(e) => setDraft({ ...draft, description: e.target.value })}
                   placeholder="Use when the task involves ..."
                 />
               </div>
               <div className="flex flex-col gap-2">
-                <Label>Body</Label>
+                <Label htmlFor="skill-body">Body</Label>
                 <Textarea
+                  id="skill-body"
                   value={draft.body}
                   onChange={(e) => setDraft({ ...draft, body: e.target.value })}
                   rows={14}
@@ -226,9 +249,20 @@ export function Skills() {
                   <p className="mt-1 text-sm text-ink-2">{selected.description}</p>
                 </div>
                 {selected.source === "custom" && (
-                  <Button variant="outline" size="sm" className="shrink-0" onClick={startEdit}>
-                    Edit
-                  </Button>
+                  <div className="flex shrink-0 items-center gap-2">
+                    <Button variant="outline" size="sm" onClick={startEdit}>
+                      Edit
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="text-ink-3 hover:text-destructive"
+                      onClick={() => setConfirmDelete(true)}
+                    >
+                      <Trash2 className="size-4" strokeWidth={1.5} />
+                      Delete
+                    </Button>
+                  </div>
                 )}
               </div>
               {selected.files.length > 0 && (
@@ -250,6 +284,20 @@ export function Skills() {
           )}
         </div>
       </div>
+
+      <ConfirmDialog
+        open={confirmDelete}
+        onOpenChange={(open) => !open && setConfirmDelete(false)}
+        title="Delete this skill?"
+        description={
+          selected
+            ? `"${selected.name}" and its files are removed. This cannot be undone.`
+            : undefined
+        }
+        confirmLabel="Delete skill"
+        busy={busy}
+        onConfirm={remove}
+      />
     </div>
   )
 }

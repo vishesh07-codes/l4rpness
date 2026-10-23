@@ -29,20 +29,20 @@
   --destructive: var(--red);
   --border: var(--line);
   --input: var(--line-strong);
-  --ring: var(--accent-ink);
-  --chart-1: var(--accent);
+  --ring: var(--ink-2);
+  --chart-1: var(--ink-2);
   --chart-2: var(--green);
   --chart-3: var(--orange);
   --chart-4: var(--red);
   --chart-5: var(--ink-2);
   --sidebar: var(--canvas);
   --sidebar-foreground: var(--ink);
-  --sidebar-primary: var(--accent-ink);
+  --sidebar-primary: var(--ink);
   --sidebar-primary-foreground: var(--surface);
   --sidebar-accent: var(--hover);
   --sidebar-accent-foreground: var(--ink);
   --sidebar-border: var(--line);
-  --sidebar-ring: var(--accent-ink);
+  --sidebar-ring: var(--ink-2);
 
   /* glass material — translucent surfaces that pick up the app backdrop */
   --glass-bg: color-mix(in srgb, var(--surface) 68%, transparent);
@@ -74,20 +74,20 @@
   --destructive: var(--red);
   --border: var(--line);
   --input: var(--line-strong);
-  --ring: var(--accent-ink);
-  --chart-1: var(--accent);
+  --ring: var(--ink-2);
+  --chart-1: var(--ink-2);
   --chart-2: var(--green);
   --chart-3: var(--orange);
   --chart-4: var(--red);
   --chart-5: var(--ink-2);
   --sidebar: var(--canvas);
   --sidebar-foreground: var(--ink);
-  --sidebar-primary: var(--accent-ink);
+  --sidebar-primary: var(--ink);
   --sidebar-primary-foreground: var(--page);
   --sidebar-accent: var(--hover);
   --sidebar-accent-foreground: var(--ink);
   --sidebar-border: var(--line);
-  --sidebar-ring: var(--accent-ink);
+  --sidebar-ring: var(--ink-2);
 
   /* glass reads from a darker film in dark mode so panels stay grounded */
   --glass-bg: color-mix(in srgb, var(--surface) 45%, transparent);
@@ -106,11 +106,11 @@
    live inside root, so keep this to opacity — any translate would drag the
    whole shell along with it. */
 ::view-transition-old(root) {
-  animation: page-out 150ms var(--ease-out-strong) both;
+  animation: page-out 210ms var(--ease-out-strong) both;
 }
 
 ::view-transition-new(root) {
-  animation: page-in 240ms var(--ease-out-strong) both;
+  animation: page-in 310ms var(--ease-out-strong) both;
 }
 
 @keyframes page-out {
@@ -131,7 +131,7 @@
  * `backwards` fill (not `both`) so the wrapper never keeps a transform, which
  * would otherwise turn it into a containing block for fixed-position children. */
 .page-enter {
-  animation: route-in 260ms var(--ease-out-strong) backwards;
+  animation: route-in 330ms var(--ease-out-strong) backwards;
 }
 
 html.vt-active .page-enter {
@@ -283,6 +283,37 @@ main {
     #000 calc(100% - 12px),
     transparent 100%
   );
+}
+
+/* ── toasts ────────────────────────────────────────────────
+ * Sonner ships stock styling; this block re-skins it into the tactile
+ * system (surface + hairline + overlay shadow + app type). The selectors
+ * out-specify Sonner's own attribute selectors, so no `!important` and no
+ * fighting its enter/exit animations. */
+.toaster [data-sonner-toast] {
+  background-color: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: var(--shadow-overlay);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  padding: 12px 14px;
+}
+
+.toaster [data-sonner-toast] [data-title] {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.toaster [data-sonner-toast] [data-description] {
+  color: var(--ink-2);
+  font-size: 12px;
+}
+
+.toaster [data-sonner-toast] [data-icon] {
+  margin-top: 1px;
 }
 
 /* live status text, e.g. an attachment mid-upload */

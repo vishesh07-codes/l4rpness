@@ -49,10 +49,11 @@ export interface ActionSwapIconProps {
   className?: string;
 }
 
-const BLUR_TRANSITION = { duration: 0.2, ease: "easeInOut" } as const;
+const BLUR_TRANSITION = { duration: 0.2, ease: EASE_OUT } as const;
+const BLUR_EXIT_TRANSITION = { duration: 0.13, ease: EASE_OUT } as const;
 const ROLL_TRANSITION = SPRING_SWAP;
 const ROLL_EXIT_TRANSITION = { duration: 0.14, ease: EASE_OUT } as const;
-const SWAP_BLUR = "blur(8px)";
+const SWAP_BLUR = "blur(4px)";
 const ROLL_BLUR = "blur(3px)";
 
 // Cascade rolls the label one letter at a time, left to right. The leaving
@@ -96,7 +97,7 @@ const TEXT_VARIANTS: Record<CoreAnimation, Variants> = {
       opacity: 0,
       scale: 0.94,
       filter: SWAP_BLUR,
-      transition: BLUR_TRANSITION,
+      transition: BLUR_EXIT_TRANSITION,
     },
   },
   roll: {
@@ -129,7 +130,7 @@ const ICON_VARIANTS: Record<CoreAnimation, Variants> = {
       opacity: 0,
       scale: 0.25,
       filter: SWAP_BLUR,
-      transition: BLUR_TRANSITION,
+      transition: BLUR_EXIT_TRANSITION,
     },
   },
   roll: {

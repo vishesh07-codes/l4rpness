@@ -1,13 +1,16 @@
 import { memo, useState, type ReactNode } from "react"
 
+import { AgentDisclosure } from "@/components/agents/agent-disclosure"
 import { ThinkingShimmer } from "@/components/agents/loading-states/thinking-shimmer"
 import { MessageBubble, MessageBubbleContent } from "@/components/agents/message-bubble"
 import { StreamingResponse } from "@/components/agents/streaming-response"
 import { ToolResult, ToolResultOutput } from "@/components/agents/tool-result"
 import { StreamText } from "@/components/atoms/StreamText"
 import { AttachmentChip } from "@/components/Attachment"
+import { ChevronRight } from "@/components/icons"
 import { Markdown } from "@/components/Markdown"
 import { api, type LocalFile, type MessageAttachment, type Part } from "@/lib/api"
+import { cn } from "@/lib/utils"
 
 // tool outputs can reach tens of thousands of characters and a single turn can
 // hold over a thousand steps; both are capped so the DOM stays small
@@ -91,17 +94,54 @@ export const UserMessage = memo(function UserMessage({
   )
 })
 
-function ReasoningBlock({ text, live, label }: { text: string; live?: boolean; label?: boolean }) {
+function ReasoningBlock({
+  text,
+  live,
+  collapsible,
+  label,
+}: {
+  text: string
+  live?: boolean
+  collapsible: boolean
+  label?: boolean
+}) {
+  const [open, setOpen] = useState(false)
+
+  // the supervisor transcript shows reasoning in full; the worker output folds it
+  if (!collapsible) {
+    return (
+      <div className="border-l-2 border-line pl-3">
+        {label && (
+          <div className="mb-1 text-[11px] font-medium text-ink-3">
+            {live ? <ThinkingShimmer>Reasoning</ThinkingShimmer> : "Reasoning"}
+          </div>
+        )}
+        <div className="text-[13px] leading-relaxed whitespace-pre-wrap text-ink-2">
+          {live ? <StreamText live text={text} reveal={false} /> : text}
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="border-l-2 border-line pl-3">
-      {label && (
-        <div className="mb-1 text-[11px] font-medium text-ink-3">
-          {live ? <ThinkingShimmer>Reasoning</ThinkingShimmer> : "Reasoning"}
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+        className="flex w-full items-center gap-1.5 rounded-sm text-left text-[11px] font-medium text-ink-3 outline-none transition-colors hover:text-ink-2 focus-visible:ring-2 focus-visible:ring-ring/60"
+      >
+        <ChevronRight
+          className={cn("size-3 shrink-0 transition-transform", open && "rotate-90")}
+          strokeWidth={1.5}
+        />
+        {live ? <ThinkingShimmer>Reasoning</ThinkingShimmer> : "Reasoning"}
+      </button>
+      <AgentDisclosure open={open} className="mt-1">
+        <div className="text-[13px] leading-relaxed whitespace-pre-wrap text-ink-2">
+          {live ? <StreamText live text={text} reveal={false} /> : text}
         </div>
-      )}
-      <div className="text-[13px] leading-relaxed whitespace-pre-wrap text-ink-2">
-        {live ? <StreamText live text={text} reveal={false} /> : text}
-      </div>
+      </AgentDisclosure>
     </div>
   )
 }
@@ -157,9 +197,12 @@ function ToolBlock({ part }: { part: ToolPart }) {
 export const AssistantMessage = memo(function AssistantMessage({
   parts,
   live = false,
+  collapseReasoning = true,
 }: {
   parts: Part[]
   live?: boolean
+  /** Fold reasoning into a disclosure. Off for the supervisor transcript. */
+  collapseReasoning?: boolean
 }) {
   // one long autonomous turn keeps appending tool steps to the same message;
   // rendering thousands of them at once freezes the tab, so show a tail window
@@ -180,7 +223,7 @@ export const AssistantMessage = memo(function AssistantMessage({
     .map((part) => part.text)
     .join("")
 
-  // reasoning runs once per tool step, so label the first block only and shimmer the active one
+  // label the first reasoning block only; shimmer the one still streaming
   const firstThinkingIndex = parts.findIndex((part) => part.type === "thinking")
   const lastThinkingIndex = parts.reduce(
     (latest, part, index) => (part.type === "thinking" ? index : latest),
@@ -194,7 +237,7 @@ export const AssistantMessage = memo(function AssistantMessage({
           <button
             type="button"
             onClick={() => setWindowSize((size) => size + PARTS_CHUNK)}
-            className="rounded-full border border-line bg-surface px-3 py-1 text-[11px] text-ink-2 outline-none transition-colors hover:bg-hover hover:text-ink focus-visible:ring-2 focus-visible:ring-ring/60"
+            className="material-key rounded-full px-3 py-1 text-[11px] text-ink-2 outline-none transition-[background-color,box-shadow,color,scale] duration-150 ease-[var(--ease-out-strong)] hover:text-ink focus-visible:ring-2 focus-visible:ring-ring/60 active:scale-[0.96]"
           >
             Show {from.toLocaleString()} earlier steps
           </button>
@@ -209,6 +252,7 @@ export const AssistantMessage = memo(function AssistantMessage({
               key={`thinking-${index}`}
               text={part.text}
               live={streaming}
+              collapsible={collapseReasoning}
               label={index === firstThinkingIndex || streaming}
             />
           )

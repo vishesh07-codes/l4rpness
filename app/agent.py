@@ -50,11 +50,13 @@ async def models() -> list[str]:
         if not provider_key(name):
             continue
         try:
-            page = await _client(name).models.list()
-        except Exception:
-            log.warning("model list failed for provider %s", name)
+            # openai>=2 returns an async paginator from models.list(), not an
+            # awaitable page, so iterate it instead of awaiting it
+            async for model in _client(name).models.list():
+                merged.append(f"{name}/{model.id}")
+        except Exception as exc:
+            log.warning("model list failed for provider %s: %s", name, exc)
             continue
-        merged += [f"{name}/{model.id}" for model in page.data]
 
     _models = sorted(set(merged))
     return _models

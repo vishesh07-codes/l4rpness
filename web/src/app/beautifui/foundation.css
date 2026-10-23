@@ -38,10 +38,38 @@
   --stripe: oklch(0.405 0 0 / 0.075);
   --stripe-bg: oklch(0.97 0 0);
 
-  /* accent — grok warm orange (#FF6B35), tuned for light surfaces */
-  --accent: oklch(0.645 0.192 42);
+  /* accent — grok warm orange (#FF6B35), tuned for light surfaces.
+   * `--accent-solid` survives index.css's shadcn remap of `--accent`
+   * (which repoints it at `--hover` for `bg-accent` utilities), so material
+   * keys keep their true brand fill. */
+  --accent-solid: oklch(0.645 0.192 42);
+  --accent: var(--accent-solid);
   --accent-ink: oklch(0.585 0.178 42);
   --accent-tint: oklch(0.955 0.03 55);
+
+  /* primary key — monochrome metal. The app is dark-first, so dark mode
+   * gets polished silver; light mode inverts to graphite. `*-fg` is the
+   * text on the key; the gloss pairs a bright top with a shaded bottom for
+   * the lit, machined read. */
+  --key-accent-bg: oklch(0.3 0 0);
+  --key-accent-bg-hover: oklch(0.36 0 0);
+  --key-accent-bg-press: oklch(0.24 0 0);
+  --key-accent-fg: oklch(0.98 0 0);
+  --key-accent-gloss: linear-gradient(
+    180deg,
+    oklch(1 0 0 / 0.22) 0%,
+    oklch(1 0 0 / 0) 45%,
+    oklch(0 0 0 / 0.18) 100%
+  );
+  --key-accent-shadow:
+    0 0 0 1px oklch(0 0 0 / 0.4), 0 1px 2px oklch(0 0 0 / 0.3),
+    inset 0 1px 0 oklch(1 0 0 / 0.16), inset 0 0 0 1px oklch(1 0 0 / 0.08);
+  --key-accent-shadow-hover:
+    0 0 0 1px oklch(0 0 0 / 0.45), 0 4px 4px oklch(0 0 0 / 0.28),
+    inset 0 1px 0 oklch(1 0 0 / 0.22), inset 0 0 0 1px oklch(1 0 0 / 0.12);
+  --key-accent-shadow-press:
+    0 0 0 1px oklch(0 0 0 / 0.4), 0 4px 4px oklch(0 0 0 / 0.16),
+    inset 0 4px 6px oklch(1 0 0 / 0.16), inset 0 -8px 14px oklch(0 0 0 / 0.14);
 
   /* semantic */
   --green: oklch(0.603 0.155 150.883);
@@ -62,11 +90,40 @@
    * (--shadow-xs…lg come from shadow-plugin/unprefixed) so every surface reads
    * consistently across the app. */
   --shadow-hairline: 0 0 0 1px var(--line);
-  --shadow-btn: 0 0 0 1px var(--line-strong), var(--shadow-xs);
-  --shadow-card: 0 0 0 1px var(--line), var(--shadow-sm);
-  --shadow-raised: 0 0 0 1px var(--line), var(--shadow-md);
-  --shadow-overlay: 0 0 0 1px var(--line), var(--shadow-lg);
+  /* elevation = ring + drop + inner top highlight (the Kargul bevel) */
+  --shadow-btn:
+    0 0 0 1px oklch(0 0 0 / 0.08), 0 1px 2px oklch(0 0 0 / 0.08),
+    inset 0 1px 0 oklch(1 0 0 / 0.7);
+  --shadow-card:
+    0 0 0 1px oklch(0 0 0 / 0.08), 0 2px 6px oklch(0 0 0 / 0.08),
+    inset 0 1px 0 oklch(1 0 0 / 0.7);
+  --shadow-raised:
+    0 0 0 1px oklch(0 0 0 / 0.1), 0 6px 16px oklch(0 0 0 / 0.1),
+    inset 0 1px 0 oklch(1 0 0 / 0.8);
+  --shadow-overlay:
+    0 0 0 1px oklch(0 0 0 / 0.1), 0 16px 40px oklch(0 0 0 / 0.16),
+    inset 0 1px 0 oklch(1 0 0 / 0.8);
   --shadow-inset-field: inset 0 1px 2px oklch(0 0 0 / 0.12);
+
+  /* materials — physical depth: raised keys, recessed wells, bevels.
+   * The face is an animatable background-color under a static gloss
+   * gradient; shadows animate between equal-length stacks so they tween. */
+  --bevel: inset 0 1px 0 oklch(1 0 0 / 0.9), inset 0 0 0 1px oklch(0 0 0 / 0.04);
+  --well: inset 0 2px 4px oklch(0 0 0 / 0.1), inset 0 0 0 1px oklch(0 0 0 / 0.05);
+  --key-bg: oklch(0.99 0 0);
+  --key-bg-hover: oklch(1 0 0);
+  --key-bg-press: oklch(0.95 0 0);
+  --key-gloss: linear-gradient(180deg, oklch(1 0 0 / 0.9), oklch(1 0 0 / 0) 55%);
+  --key-shadow:
+    0 0 0 1px oklch(0 0 0 / 0.08), 0 1px 2px oklch(0 0 0 / 0.08),
+    inset 0 1px 0 oklch(1 0 0 / 0.9), inset 0 0 0 1px oklch(1 0 0 / 0.6);
+  --key-shadow-hover:
+    0 0 0 1px oklch(0 0 0 / 0.1), 0 4px 4px oklch(0 0 0 / 0.06),
+    inset 0 1px 0 oklch(1 0 0 / 1), inset 0 0 0 1px oklch(1 0 0 / 0.7);
+  --key-shadow-press:
+    0 0 0 1px oklch(0 0 0 / 0.1), 0 1px 2px oklch(0 0 0 / 0.05),
+    inset 0 3px 5px oklch(0 0 0 / 0.12), inset 0 0 0 1px oklch(0 0 0 / 0.04);
+  --key-fg: oklch(0.16 0 0);
 }
 
 .dark {
@@ -94,9 +151,31 @@
   --stripe-bg: oklch(0.155 0 0);
 
   /* grok warm orange (#FF6B35) as the single accent */
-  --accent: oklch(0.702 0.182 43.2);
+  --accent-solid: oklch(0.702 0.182 43.2);
+  --accent: var(--accent-solid);
   --accent-ink: oklch(0.77 0.155 47);
   --accent-tint: oklch(0.702 0.182 43.2 / 0.16);
+
+  /* silver primary key (see the light-mode note for the metal recipe) */
+  --key-accent-bg: oklch(0.87 0 0);
+  --key-accent-bg-hover: oklch(0.93 0 0);
+  --key-accent-bg-press: oklch(0.78 0 0);
+  --key-accent-fg: oklch(0.16 0 0);
+  --key-accent-gloss: linear-gradient(
+    180deg,
+    oklch(1 0 0 / 0.5) 0%,
+    oklch(1 0 0 / 0.06) 45%,
+    oklch(0 0 0 / 0.06) 100%
+  );
+  --key-accent-shadow:
+    0 0 0 1px oklch(0 0 0 / 0.5), 0 2px 6px oklch(0 0 0 / 0.4),
+    inset 0 1px 0 oklch(1 0 0 / 0.9), inset 0 0 0 1px oklch(1 0 0 / 0.4);
+  --key-accent-shadow-hover:
+    0 0 0 1px oklch(0 0 0 / 0.5), 0 4px 10px oklch(0 0 0 / 0.45),
+    inset 0 1px 0 oklch(1 0 0 / 1), inset 0 0 0 1px oklch(1 0 0 / 0.5);
+  --key-accent-shadow-press:
+    0 0 0 1px oklch(0 0 0 / 0.5), 0 1px 2px oklch(0 0 0 / 0.3),
+    inset 0 4px 6px oklch(0 0 0 / 0.28), inset 0 0 0 1px oklch(0 0 0 / 0.1);
 
   --green: oklch(0.705 0.154 153.814);
   --green-tint: oklch(0.705 0.154 153.814 / 0.14);
@@ -114,19 +193,39 @@
   --tooltip-border: oklch(0.27 0 0);
 
   --shadow-hairline: 0 0 0 1px var(--line);
-  /* Elevation rings go to a subtle *light* hairline in dark mode: the ring
-   * paints over the surface behind the element, so a low-alpha white edge
-   * dissolves into the shadow as one continuous stroke (per smooth-shadow-ring),
-   * graduated by how far the surface floats. */
-  --shadow-btn: 0 0 0 1px oklch(1 0 0 / 0.1), 0 1px 2px oklch(0 0 0 / 0.3);
+  /* dark elevation: a dark ring seats the surface, a soft top highlight
+   * catches light, and a deepening drop shadow floats it. */
+  --shadow-btn:
+    0 0 0 1px oklch(0 0 0 / 0.4), 0 1px 2px oklch(0 0 0 / 0.4),
+    inset 0 1px 0 oklch(1 0 0 / 0.08);
   --shadow-card:
-    0 0 0 1px oklch(1 0 0 / 0.11), 0 1px 2px oklch(0 0 0 / 0.2),
-    0 2px 6px oklch(0 0 0 / 0.2);
+    0 0 0 1px oklch(0 0 0 / 0.4), 0 2px 6px oklch(0 0 0 / 0.5),
+    inset 0 1px 0 oklch(1 0 0 / 0.05);
   --shadow-raised:
-    0 0 0 1px oklch(1 0 0 / 0.13), 0 2px 10px oklch(0 0 0 / 0.22);
+    0 0 0 1px oklch(0 0 0 / 0.45), 0 6px 16px oklch(0 0 0 / 0.5),
+    inset 0 1px 0 oklch(1 0 0 / 0.07);
   --shadow-overlay:
-    0 0 0 1px oklch(1 0 0 / 0.15), 0 8px 28px oklch(0 0 0 / 0.34);
+    0 0 0 1px oklch(0 0 0 / 0.5), 0 16px 40px oklch(0 0 0 / 0.55),
+    inset 0 1px 0 oklch(1 0 0 / 0.06);
   --shadow-inset-field: inset 0 1px 2px oklch(0 0 0 / 0.4);
+
+  /* materials — dark: light catches the top edge, shadows sink bottoms */
+  --bevel: inset 0 1px 0 oklch(1 0 0 / 0.08), inset 0 0 0 1px oklch(1 0 0 / 0.06);
+  --well: inset 0 2px 4px oklch(0 0 0 / 0.4), inset 0 0 0 1px oklch(1 0 0 / 0.04);
+  --key-bg: oklch(0.235 0 0);
+  --key-bg-hover: oklch(0.275 0 0);
+  --key-bg-press: oklch(0.19 0 0);
+  --key-gloss: linear-gradient(180deg, oklch(1 0 0 / 0.05), oklch(1 0 0 / 0) 55%);
+  --key-shadow:
+    0 0 0 1px oklch(0 0 0 / 0.4), 0 1px 2px oklch(0 0 0 / 0.4),
+    inset 0 1px 0 oklch(1 0 0 / 0.1), inset 0 0 0 1px oklch(1 0 0 / 0.06);
+  --key-shadow-hover:
+    0 0 0 1px oklch(0 0 0 / 0.45), 0 4px 4px oklch(0 0 0 / 0.28),
+    inset 0 1px 0 oklch(1 0 0 / 0.14), inset 0 0 0 1px oklch(1 0 0 / 0.08);
+  --key-shadow-press:
+    0 0 0 1px oklch(0 0 0 / 0.4), 0 4px 4px oklch(0 0 0 / 0.2),
+    inset 0 4px 6px oklch(1 0 0 / 0.14), inset 0 -8px 14px oklch(0 0 0 / 0.16);
+  --key-fg: oklch(0.16 0 0);
 }
 
 @theme inline {
@@ -160,6 +259,16 @@
   --shadow-card: var(--shadow-card);
   --shadow-raised: var(--shadow-raised);
   --shadow-overlay: var(--shadow-overlay);
+  /* materials */
+  --shadow-key: var(--key-shadow);
+  --shadow-key-hover: var(--key-shadow-hover);
+  --shadow-key-press: var(--key-shadow-press);
+  --shadow-well: var(--well);
+  /* composable inset shadow: unlike shadow-*, it stacks with focus rings */
+  --inset-shadow-well: var(--well);
+  --shadow-bevel: var(--bevel);
+  --color-key-fg: var(--key-fg);
+  --color-key-accent-fg: var(--key-accent-fg);
 
   /* type */
   /* the real families are set in index.css (Geist / Geist Mono) */
@@ -176,6 +285,79 @@
   --ease-out-strong: cubic-bezier(0.23, 1, 0.32, 1);
   --ease-in-out-strong: cubic-bezier(0.77, 0, 0.175, 1);
   --ease-link: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* ── materials ──────────────────────────────────────────
+ * Physical depth. `.material-key` is the raised control face;
+ * `.material-accent` / `.material-danger` only swap the local
+ * `--_key-*` hooks so the base class paints a colored key.
+ * `.material-well` is the recessed track/field. Pair key +
+ * accent/danger at the call site. */
+@layer components {
+  .material-key {
+    background-color: var(--_key-bg, var(--key-bg));
+    background-image: var(--_key-gloss, var(--key-gloss));
+    box-shadow: var(--_key-shadow, var(--key-shadow));
+    transition-property: background-color, box-shadow, color;
+    transition-duration: 150ms;
+    transition-timing-function: var(--ease-out-strong);
+  }
+
+  /* gate hover to fine pointers so a tap doesn't leave the key lit */
+  @media (hover: hover) and (pointer: fine) {
+    .material-key:hover {
+      background-color: var(--_key-bg-hover, var(--key-bg-hover));
+      box-shadow: var(--_key-shadow-hover, var(--key-shadow-hover));
+    }
+  }
+
+  .material-key:active {
+    background-color: var(--_key-bg-press, var(--key-bg-press));
+    box-shadow: var(--_key-shadow-press, var(--key-shadow-press));
+  }
+
+  .material-accent {
+    --_key-bg: var(--key-accent-bg);
+    --_key-bg-hover: var(--key-accent-bg-hover);
+    --_key-bg-press: var(--key-accent-bg-press);
+    --_key-gloss: var(--key-accent-gloss);
+    --_key-shadow: var(--key-accent-shadow);
+    --_key-shadow-hover: var(--key-accent-shadow-hover);
+    --_key-shadow-press: var(--key-accent-shadow-press);
+  }
+
+  .material-danger {
+    --_key-bg: var(--red);
+    --_key-bg-hover: color-mix(in oklab, var(--red) 85%, white);
+    --_key-bg-press: color-mix(in oklab, var(--red) 85%, black);
+    --_key-gloss: linear-gradient(180deg, oklch(1 0 0 / 0.3), oklch(1 0 0 / 0) 55%);
+    --_key-shadow:
+      0 0 0 1px color-mix(in oklab, var(--red) 60%, black),
+      inset 0 1px 0 oklch(1 0 0 / 0.4), 0 1px 1px oklch(0 0 0 / 0.35),
+      0 2px 8px color-mix(in oklab, var(--red) 40%, transparent);
+    --_key-shadow-hover:
+      0 0 0 1px color-mix(in oklab, var(--red) 65%, black),
+      inset 0 1px 0 oklch(1 0 0 / 0.5), 0 2px 3px oklch(0 0 0 / 0.35),
+      0 4px 12px color-mix(in oklab, var(--red) 45%, transparent);
+    --_key-shadow-press:
+      0 0 0 1px color-mix(in oklab, var(--red) 60%, black),
+      inset 0 1px 3px oklch(0 0 0 / 0.45), 0 0 0 transparent, 0 0 0 transparent;
+  }
+
+  .material-well {
+    background-color: var(--inset);
+    box-shadow: var(--well);
+  }
+
+  .material-bevel {
+    box-shadow: var(--bevel);
+  }
+
+  /* indicator LED — a status dot that casts its own light. Set `text-*` to
+   * the same hue as the fill so `currentColor` drives the glow. */
+  .led {
+    box-shadow: 0 0 0 1px oklch(0 0 0 / 0.35), 0 0 6px 0 currentColor;
+  }
 }
 
 /* ── base ─────────────────────────────────────────────── */
@@ -205,7 +387,7 @@ body {
 }
 
 ::selection {
-  background: var(--accent-tint);
+  background: var(--hover-2);
   color: var(--ink);
 }
 
@@ -315,9 +497,8 @@ a {
 
 
 :focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--ink-2);
   outline-offset: 2px;
-  border-radius: 4px;
 }
 
 input:focus-visible,
@@ -414,10 +595,6 @@ a:focus-visible .animated-underline::after {
     opacity: 1;
     transform: translateY(0);
   }
-}
-
-.home-reveal {
-  will-change: opacity, transform, filter;
 }
 
 /* ── filter table electric status colors ─────────────────── */

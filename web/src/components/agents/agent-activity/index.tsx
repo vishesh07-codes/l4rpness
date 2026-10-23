@@ -218,7 +218,7 @@ export function AgentActivity({
           onClick={toggle}
           className="group relative flex h-7 min-w-0 items-center gap-1.5 rounded-md text-left font-medium text-muted-foreground outline-none transition-colors after:absolute after:-inset-y-1.5 after:inset-x-0 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
         >
-          <span className="truncate">
+          <span className="min-w-0 truncate">
             {renderCompletedStatus
               ? renderCompletedStatus({ summary: completedSummary, duration })
               : completedSummary}
@@ -257,7 +257,7 @@ export function AgentActivity({
             transition={reduce ? { duration: 0 } : SPRING_LAYOUT}
             className={cn("space-y-0.5 py-2", contentClassName)}
           >
-            <AnimatePresence mode="popLayout">
+            <AnimatePresence mode="popLayout" initial={false}>
               {items.map((item) => (
                 <motion.div
                   layout="position"

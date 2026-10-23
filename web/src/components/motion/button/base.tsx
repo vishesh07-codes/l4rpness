@@ -46,11 +46,10 @@ export interface ButtonLinkProps extends Omit<
 type Ripple = { id: number; x: number; y: number; size: number };
 
 const VARIANT_CLASS: Record<ButtonVariant, string> = {
-  primary: "bg-primary text-primary-foreground hover:bg-primary/90",
-  secondary: "border border-border bg-card text-foreground hover:border-border",
+  primary: "material-key material-accent text-key-accent-fg",
+  secondary: "material-key text-foreground",
   ghost: "text-muted-foreground hover:text-foreground hover:bg-primary/5",
-  outline:
-    "border border-border bg-transparent text-foreground hover:bg-primary/5",
+  outline: "material-key text-foreground",
 };
 
 const SIZE_CLASS: Record<ButtonSize, string> = {
@@ -65,7 +64,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
     {
       variant = "primary",
       size = "md",
-      pressScale = 0.93,
+      pressScale = 0.96,
       ripple = false,
       className,
       children,
@@ -110,7 +109,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
         onPointerDown={handlePointerDown}
         className={cn(
           "inline-flex items-center justify-center font-medium select-none",
-          "transition-colors",
+          "transition-[color,background-color,box-shadow] duration-150 ease-[var(--ease-out-strong)]",
           "disabled:pointer-events-none disabled:opacity-50",
           ripple && "relative overflow-hidden",
           VARIANT_CLASS[variant],
@@ -137,7 +136,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
                   initial={{ scale: 0.05, opacity: 0.3 }}
                   animate={{ scale: 1, opacity: 0 }}
                   exit={{ opacity: 0 }}
-                  transition={{ duration: 1.6, ease: EASE_OUT }}
+                  transition={{ duration: 0.6, ease: EASE_OUT }}
                   onAnimationComplete={() =>
                     setRipples((prev) => prev.filter((x) => x.id !== r.id))
                   }
@@ -157,7 +156,7 @@ export const ButtonLink = forwardRef<HTMLAnchorElement, ButtonLinkProps>(
     {
       variant = "primary",
       size = "md",
-      pressScale = 0.93,
+      pressScale = 0.96,
       className,
       children,
       ...rest
@@ -175,7 +174,7 @@ export const ButtonLink = forwardRef<HTMLAnchorElement, ButtonLinkProps>(
         transition={SPRING_PRESS}
         className={cn(
           "inline-flex items-center justify-center font-medium select-none",
-          "transition-colors",
+          "transition-[color,background-color,box-shadow] duration-150 ease-[var(--ease-out-strong)]",
           VARIANT_CLASS[variant],
           SIZE_CLASS[size],
           className,

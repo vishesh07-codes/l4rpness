@@ -62,6 +62,17 @@ export function Mcp() {
     load()
   }, [])
 
+  // warn before a refresh/close throws away edited servers
+  useEffect(() => {
+    if (!dirty) return
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault()
+      e.returnValue = ""
+    }
+    window.addEventListener("beforeunload", onBeforeUnload)
+    return () => window.removeEventListener("beforeunload", onBeforeUnload)
+  }, [dirty])
+
   function edit(index: number, patch: Partial<McpServer>) {
     setServers((prev) => prev.map((server, i) => (i === index ? { ...server, ...patch } : server)))
     setDirty(true)
@@ -98,7 +109,7 @@ export function Mcp() {
   const toolNames = server ? [...new Set([...server.available, ...server.enabled])].sort() : []
 
   return (
-    <div className="mx-auto flex h-svh max-w-6xl flex-col px-8 py-10">
+    <div className="mx-auto flex h-svh max-w-6xl flex-col px-8 py-10 max-md:pt-16">
       <PageHeader
         title="MCP"
         description="External MCP servers the agent can call. Tools are namespaced as server_tool."
@@ -117,10 +128,16 @@ export function Mcp() {
         </AlertDescription>
       </Alert>
 
-      {error && <p className="mb-4 text-sm text-destructive">{error}</p>}
+      {error && (
+        <Alert variant="destructive" className="mb-4">
+          <TriangleAlert />
+          <AlertTitle>Could not save MCP servers</AlertTitle>
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
 
-      <div className="flex min-h-0 flex-1 overflow-hidden rounded-lg border">
-        <div className="w-72 shrink-0 overflow-y-auto border-r">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl shadow-card lg:flex-row">
+        <div className="max-h-[45svh] w-full shrink-0 overflow-y-auto border-b border-line p-2 lg:max-h-none lg:w-72 lg:border-b-0 lg:border-r">
           {servers.length === 0 && (
             <p className="p-4 text-sm text-ink-2">No servers configured.</p>
           )}
@@ -129,19 +146,21 @@ export function Mcp() {
             return (
               <button
                 key={`${entry.name}-${index}`}
+                type="button"
                 onClick={() => setSelected(index)}
+                aria-current={selected === index ? "true" : undefined}
                 className={cn(
-                  "flex w-full flex-col gap-1 border-b px-4 py-3 text-left hover:bg-muted/40",
-                  selected === index && "bg-muted/60"
+                  "flex w-full flex-col gap-1 rounded-lg px-4 py-3 text-left transition-colors duration-100 hover:bg-hover/50",
+                  selected === index && "material-key"
                 )}
               >
                 <span className="flex items-center gap-2">
-                  <span className="truncate font-mono text-[13px]">{entry.name || "unnamed"}</span>
+                  <span className="min-w-0 truncate font-mono text-[13px]">{entry.name || "unnamed"}</span>
                   <Badge variant={live?.connected ? "secondary" : "outline"} className="shrink-0 text-[10px]">
                     {live?.connected ? "connected" : live?.error ? "failed" : "not connected"}
                   </Badge>
                 </span>
-                <span className="truncate text-xs text-ink-2">
+                <span className="min-w-0 truncate text-xs text-ink-2">
                   {entry.command.length ? entry.command.join(" ") : entry.url || "no command"}
                 </span>
               </button>
@@ -165,8 +184,9 @@ export function Mcp() {
               )}
 
               <div className="flex flex-col gap-2">
-                <Label>Name</Label>
+                <Label htmlFor="mcp-name">Name</Label>
                 <Input
+                  id="mcp-name"
                   value={server.name}
                   onChange={(e) => edit(selected, { name: e.target.value })}
                   placeholder="frank"
@@ -174,8 +194,9 @@ export function Mcp() {
               </div>
 
               <div className="flex flex-col gap-2">
-                <Label>Command</Label>
+                <Label htmlFor="mcp-command">Command</Label>
                 <Input
+                  id="mcp-command"
                   value={server.command.join(" ")}
                   onChange={(e) =>
                     edit(selected, { command: e.target.value.split(" ").filter(Boolean) })
@@ -185,8 +206,9 @@ export function Mcp() {
               </div>
 
               <div className="flex flex-col gap-2">
-                <Label>URL</Label>
+                <Label htmlFor="mcp-url">URL</Label>
                 <Input
+                  id="mcp-url"
                   value={server.url}
                   onChange={(e) => edit(selected, { url: e.target.value })}
                   placeholder="http://host:port/mcp"
@@ -194,8 +216,9 @@ export function Mcp() {
               </div>
 
               <div className="flex flex-col gap-2">
-                <Label>Env</Label>
+                <Label htmlFor="mcp-env">Env</Label>
                 <Textarea
+                  id="mcp-env"
                   value={envText(server.env)}
                   onChange={(e) => edit(selected, { env: parseEnv(e.target.value) })}
                   rows={3}

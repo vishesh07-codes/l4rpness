@@ -100,7 +100,7 @@ export function CitationFavicon({
           width={16}
           height={16}
           referrerPolicy="no-referrer"
-          className="size-4 rounded-sm object-contain"
+          className="size-4 rounded-sm object-contain outline outline-1 -outline-offset-1 outline-black/10 dark:outline-white/10"
         />
       ) : (
         <Globe2 className="size-3.5" />
@@ -143,7 +143,7 @@ function CitationRow({
     <>
       <CitationFavicon url={citation.url} />
       <span className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-2 gap-y-0.5">
-        <span className="truncate text-sm font-medium text-foreground/80 transition-colors group-hover/citation:text-foreground">
+        <span className="min-w-0 truncate text-sm font-medium text-foreground/80 transition-colors group-hover/citation:text-foreground">
           {citation.title}
         </span>
         {citation.domain ? (
@@ -195,7 +195,7 @@ export function CitationList({
 
   return (
     <div className={cn("grid gap-0.5", className)}>
-      <AnimatePresence mode="popLayout">
+      <AnimatePresence mode="popLayout" initial={false}>
         {citations.map((citation, index) => (
           <motion.div
             layout="position"

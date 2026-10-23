@@ -13,6 +13,11 @@ services:
     volumes:
       - l4rpness-data:/app/data
       - ./config.toml:/app/config.toml:ro
+      # the Settings UI reads this for change detection and rewrites keys
+      # through it when the file is writable (touch .env first so compose
+      # never mistakes it for a directory). env_file above still injects the
+      # values at creation; the mount only adds visibility.
+      - ./.env:/app/.env
       - ./skills:/app/skills:ro
       - ./AGENTS.md:/app/AGENTS.md:ro
     restart: unless-stopped

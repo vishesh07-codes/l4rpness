@@ -46,6 +46,7 @@ import {
   PlayIcon,
   RefreshIcon,
   Search01Icon,
+  Settings01Icon,
   Shield01Icon,
   SidebarLeft01Icon,
   SparklesIcon,
@@ -115,6 +116,7 @@ export const Plus = icon(Add01Icon)
 export const RefreshCw = icon(RefreshIcon)
 export const RotateCcw = icon(ArrowReloadHorizontalIcon)
 export const Search = icon(Search01Icon)
+export const Settings = icon(Settings01Icon)
 export const Shield = icon(Shield01Icon)
 export const SidebarToggle = icon(SidebarLeft01Icon)
 export const Compose = icon(PencilEdit02Icon)

@@ -1,4 +1,12 @@
-import { memo, useEffect, useMemo, useRef, useState, type ClipboardEvent } from "react"
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ClipboardEvent,
+} from "react"
 import { toast } from "sonner"
 import { useNavigate, useParams } from "react-router-dom"
 import {
@@ -16,7 +24,10 @@ import {
 } from "@/components/icons"
 
 import { AttachmentCard, AttachmentChip } from "@/components/Attachment"
+import { FilesPane } from "@/components/campaign/FilesPane"
+import { FilesContext } from "@/components/campaign/files-context"
 import { fmtSize } from "@/lib/filetype"
+import { useWorkFiles } from "@/lib/use-work-files"
 import { AgentProgress } from "@/components/agents/loading-states/agent-progress"
 import { ReasoningText } from "@/components/agents/loading-states/reasoning-text"
 import { MessageScroller } from "@/components/agents/message-scroller"
@@ -28,6 +39,13 @@ import LoadingState from "@/components/primitives/LoadingState"
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import { SegmentedControl } from "@/components/ui/segmented"
 import {
   api,
   type Attachment,
@@ -69,6 +87,13 @@ const GENERATOR_PAGE = 40
 const HYPOTHESIS_PAGE = 60
 const PREVIEW_TITLE = 56
 const PREVIEW_DESCRIPTION = 88
+
+// right-pane resize bounds (lg+); the transcript keeps at least PANE_LEFT_MIN
+const PANE_MIN = 320
+const PANE_DEFAULT = 460
+const PANE_LEFT_MIN = 360
+const paneMax = (rowWidth: number) =>
+  Math.max(PANE_MIN, Math.min(2400, Math.round(rowWidth - PANE_LEFT_MIN)))
 
 function sameGenerators(a: GeneratorInfo[], b: GeneratorInfo[]) {
   return (
@@ -180,7 +205,88 @@ export function Campaign() {
   const [hasEarlier, setHasEarlier] = useState(false)
   const [windowSize, setWindowSize] = useState(PAGE_SIZE)
   const [loadingEarlier, setLoadingEarlier] = useState(false)
-  const [tab, setTab] = useState<"supervisor" | "generators" | "hypotheses">("supervisor")
+  const [tab, setTab] = useState<"generators" | "hypotheses" | "workspace">("generators")
+  // right pane width (lg+), persisted; dragged via the divider. The max grows
+  // with the window so the pane can get very wide but never eats the transcript.
+  const rowRef = useRef<HTMLDivElement>(null)
+  const [paneWidth, setPaneWidth] = useState(() => {
+    if (typeof window === "undefined") return PANE_DEFAULT
+    const saved = Number(window.localStorage.getItem("campaignPane"))
+    return Number.isFinite(saved) && saved >= PANE_MIN ? saved : PANE_DEFAULT
+  })
+  useEffect(() => {
+    window.localStorage.setItem("campaignPane", String(paneWidth))
+  }, [paneWidth])
+  const [paneMaxWidth, setPaneMaxWidth] = useState(2400)
+
+  // keep the pane within bounds when the window shrinks
+  useEffect(() => {
+    const clamp = () => {
+      const row = rowRef.current
+      if (!row) return
+      const max = paneMax(row.getBoundingClientRect().width)
+      setPaneMaxWidth(max)
+      setPaneWidth((w) => Math.min(w, max))
+    }
+    clamp()
+    window.addEventListener("resize", clamp)
+    return () => window.removeEventListener("resize", clamp)
+  }, [])
+
+  // work-dir files, shared by the Files pane and the file-reference chips
+  const { files: workFiles, refresh: refreshWork } = useWorkFiles(campaignId)
+  const [workspacePath, setWorkspacePath] = useState<string | null>(null)
+  const openInWorkspace = useCallback((path: string) => {
+    setWorkspacePath(path)
+    setTab("workspace")
+  }, [])
+  const filesValue = useMemo(
+    () => ({
+      paths: new Set((workFiles ?? []).filter((f) => f.type === "file").map((f) => f.path)),
+      open: openInWorkspace,
+    }),
+    [workFiles, openInWorkspace]
+  )
+
+  // hand a work-dir file to the agent: appends an `@path` mention to the prompt
+  function insertRef(path: string) {
+    setInput((prev) => `${prev}${prev && !prev.endsWith(" ") ? " " : ""}@${path} `)
+  }
+
+  function resizeStart(event: React.PointerEvent<HTMLDivElement>) {
+    const row = rowRef.current
+    if (!row) return
+    const handle = event.currentTarget
+    event.preventDefault()
+    // capture the pointer so the drag keeps updating even if it leaves the handle
+    handle.setPointerCapture(event.pointerId)
+    const rect = row.getBoundingClientRect()
+    const max = paneMax(rect.width)
+    const onMove = (e: PointerEvent) =>
+      setPaneWidth(Math.min(max, Math.max(PANE_MIN, Math.round(rect.right - e.clientX - 6))))
+    const onUp = () => {
+      handle.removeEventListener("pointermove", onMove)
+      handle.removeEventListener("pointerup", onUp)
+      handle.removeEventListener("pointercancel", onUp)
+      if (handle.hasPointerCapture(event.pointerId))
+        handle.releasePointerCapture(event.pointerId)
+    }
+    handle.addEventListener("pointermove", onMove)
+    handle.addEventListener("pointerup", onUp)
+    handle.addEventListener("pointercancel", onUp)
+  }
+
+  function resizeKey(event: React.KeyboardEvent) {
+    const row = rowRef.current
+    const max = row ? paneMax(row.getBoundingClientRect().width) : 2400
+    if (event.key === "ArrowLeft") {
+      event.preventDefault()
+      setPaneWidth((w) => Math.min(max, w + 24))
+    } else if (event.key === "ArrowRight") {
+      event.preventDefault()
+      setPaneWidth((w) => Math.max(PANE_MIN, w - 24))
+    }
+  }
   const [generators, setGenerators] = useState<GeneratorInfo[]>([])
   const [selectedGenerator, setSelectedGenerator] = useState<number | null>(null)
   const [generatorMessages, setGeneratorMessages] = useState<GeneratorMessage[]>([])
@@ -194,7 +300,7 @@ export function Campaign() {
   const generatorLoadRef = useRef(0)
   const lastGeneratorsLoad = useRef(0)
   const lastHypothesesLoad = useRef(0)
-  const tabRef = useRef<"supervisor" | "generators" | "hypotheses">("supervisor")
+  const tabRef = useRef<"generators" | "hypotheses" | "workspace">("generators")
   const viewportRef = useRef<HTMLElement | null>(null)
   const fileInput = useRef<HTMLInputElement>(null)
 
@@ -555,12 +661,14 @@ export function Campaign() {
     on("chain_end", () => {
       setStream({ parts: [], pendingTool: null })
       void refresh()
+      refreshWork()
     })
     on("closed", async () => {
       source.close()
       setStream(null)
       setCampaign((c) => (c ? { ...c, running: false } : c))
       await refresh()
+      refreshWork()
     })
     on("idle", async () => {
       source.close()
@@ -568,6 +676,7 @@ export function Campaign() {
       const fresh = await api.getCampaign(campaignId)
       setCampaign(fresh)
       await refresh()
+      refreshWork()
     })
 
     return () => {
@@ -722,7 +831,7 @@ export function Campaign() {
 
   if (!campaign) {
     return (
-      <div className="mx-auto flex h-svh max-w-3xl items-center px-6 py-6 text-sm text-ink-2 max-md:pt-16">
+      <div className="mx-auto flex h-svh max-w-4xl items-center px-6 py-6 text-sm text-ink-2 max-md:pt-16">
         {error || <LoadingState label="Loading campaign" />}
       </div>
     )
@@ -731,7 +840,6 @@ export function Campaign() {
   const attachments = campaign.attachments ?? []
   const targetFiles = attachments.filter((a) => a.field === "target")
   const tabs = [
-    { key: "supervisor" as const, label: "Supervisor", count: 0 },
     {
       key: "generators" as const,
       label: "Generators",
@@ -742,13 +850,17 @@ export function Campaign() {
       label: "Hypotheses",
       count: hypotheses.filter((h) => h.status === "new" || h.status === "working").length,
     },
+    { key: "workspace" as const, label: "Workspace", count: 0 },
   ]
+  const selectedGeneratorInfo =
+    generators.find((g) => g.id === selectedGenerator) ?? null
   const usageIn = liveUsage?.in ?? campaign.usage_in ?? 0
   const usageOut = liveUsage?.out ?? campaign.usage_out ?? 0
   const usageCtx = liveUsage?.ctx ?? campaign.last_prompt_tokens ?? 0
 
   return (
-    <div className="mx-auto flex h-svh max-w-3xl flex-col gap-4 px-6 py-6 max-md:pt-16">
+    <FilesContext.Provider value={filesValue}>
+    <div className="flex h-svh flex-col gap-4 px-6 py-6 max-md:pt-16">
       <div className="flex flex-col gap-3">
         <TransitionLink
           to="/"
@@ -760,12 +872,19 @@ export function Campaign() {
 
         <header className="flex items-start justify-between gap-4">
           <div className="min-w-0">
-            <h1 className="truncate font-mono text-sm font-medium" title={campaign.target}>
+            <h1
+              className="truncate font-mono text-sm font-medium"
+              title={`${campaign.target}\ncreated ${fmtDate(campaign.created_at)}`}
+            >
               {campaign.target.split("\n")[0]}
             </h1>
             <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs text-ink-2">
-              <Badge variant="secondary">{campaign.model}</Badge>
-              <Badge variant="secondary">effort · {campaign.effort}</Badge>
+              <Badge variant="secondary" className="font-mono">
+                {campaign.model}
+              </Badge>
+              <Badge variant="secondary">
+                {campaign.effort} · {campaign.mode === "goal" ? "until goal" : "24×7"}
+              </Badge>
               {(usageIn > 0 || usageOut > 0) && (
                 <Badge
                   variant="secondary"
@@ -777,7 +896,6 @@ export function Campaign() {
                   ↑{fmtTokens(usageIn)} ↓{fmtTokens(usageOut)}
                 </Badge>
               )}
-              <span className="px-0.5">created {fmtDate(campaign.created_at)}</span>
             </div>
             {targetFiles.length > 0 && (
               <div className="mt-2 flex flex-wrap gap-2">
@@ -823,7 +941,7 @@ export function Campaign() {
                 disabled={resuming || !configured}
                 className="text-ink-3 hover:text-ink"
               >
-                <Play className="size-3.5 fill-current" strokeWidth={1.5} />
+                <Play className="size-3.5 translate-x-[1px] fill-current" strokeWidth={1.5} />
               </IconAction>
             )}
             <IconAction
@@ -839,40 +957,21 @@ export function Campaign() {
           </div>
         </header>
 
-        <div className="flex items-center gap-1">
-          {tabs.map((entry) => (
-            <button
-              key={entry.key}
-              type="button"
-              onClick={() => setTab(entry.key)}
-              className={cn(
-                "flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[12px] font-medium transition-colors",
-                tab === entry.key
-                  ? "bg-inset text-ink"
-                  : "text-ink-3 hover:bg-hover hover:text-ink"
-              )}
-            >
-              {entry.label}
-              {entry.count > 0 && (
-                <span className="rounded-full bg-accent-tint px-1.5 font-mono text-[10px] text-accent-ink">
-                  {entry.count}
-                </span>
-              )}
-            </button>
-          ))}
-        </div>
+      </div>
 
-        {tab === "supervisor" && (
+      <div
+        ref={rowRef}
+        className="flex min-h-0 flex-1 gap-3 max-lg:flex-col max-lg:overflow-y-auto"
+      >
+        {/* left — the supervisor transcript */}
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 max-lg:h-[70svh] max-lg:flex-none">
           <ContextPanel
             campaign={campaign}
             attachments={attachments}
             defaultOpen={messages.length === 0 && !stream}
           />
-        )}
-      </div>
-
-      {tab === "supervisor" && (
-      <section className="relative flex min-h-0 flex-1 flex-col">
+          <section className="flex min-h-0 flex-1 flex-col">
+            <div className="relative flex min-h-0 flex-1 flex-col">
         <MessageScroller
           className="min-h-0 flex-1"
           viewportClassName="pb-4"
@@ -897,7 +996,7 @@ export function Campaign() {
                 type="button"
                 onClick={loadEarlier}
                 disabled={loadingEarlier}
-                className="rounded-full border border-line bg-surface px-3 py-1 text-[12px] text-ink-2 outline-none transition-colors hover:bg-hover hover:text-ink focus-visible:ring-2 focus-visible:ring-ring/60 disabled:opacity-60"
+                className="material-key rounded-full px-3 py-1 text-[12px] text-ink-2 outline-none transition-[background-color,box-shadow,color,scale] duration-150 ease-[var(--ease-out-strong)] hover:text-ink focus-visible:ring-2 focus-visible:ring-ring/60 active:scale-[0.96] disabled:opacity-60"
               >
                 {loadingEarlier ? "Loading earlier messages…" : "Load earlier messages"}
               </button>
@@ -919,7 +1018,7 @@ export function Campaign() {
               </MessageRow>
             ) : (
               <MessageRow key={m.id} role="assistant">
-                <AssistantMessage parts={partsOf(m)} />
+                <AssistantMessage parts={partsOf(m)} collapseReasoning={false} />
               </MessageRow>
             )
           })}
@@ -938,22 +1037,25 @@ export function Campaign() {
                 ) : stream.parts.length === 0 ? (
                   <ReasoningText />
                 ) : null}
-                {stream.parts.length > 0 && <AssistantMessage parts={stream.parts} live />}
+                {stream.parts.length > 0 && (
+                  <AssistantMessage parts={stream.parts} live collapseReasoning={false} />
+                )}
               </div>
             </MessageRow>
           )}
         </MessageScroller>
 
-        {!following && messages.length > 0 && (
-          <button
-            type="button"
-            onClick={jumpToLatest}
-            className="absolute bottom-24 left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-line bg-surface px-3 py-1.5 text-[12px] font-medium text-ink-2 shadow-raised transition-colors hover:text-ink"
-          >
-            <ArrowDown className="size-3.5" strokeWidth={1.5} />
-            Jump to latest
-          </button>
-        )}
+            {!following && messages.length > 0 && (
+              <button
+                type="button"
+                onClick={jumpToLatest}
+                className="absolute bottom-4 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 rounded-full bg-surface px-3 py-1.5 text-[12px] font-medium text-ink-2 shadow-raised transition-colors hover:text-ink focus-visible:ring-2 focus-visible:ring-ring/60"
+              >
+                <ArrowDown className="size-3.5" strokeWidth={1.5} />
+                Jump to latest
+              </button>
+            )}
+            </div>
 
         {error && (
           <Alert variant="destructive" className="mb-3">
@@ -992,13 +1094,14 @@ export function Campaign() {
             value={input}
             onValueChange={setInput}
             onSubmit={send}
-            loading={pending}
+            loading={pending || campaign.running}
             onStop={stop}
+            mentions={(workFiles ?? []).filter((f) => f.type === "file").map((f) => f.path)}
             disabled={!configured}
             placeholder={
               configured
                 ? campaign.running
-                  ? "Steer the agent — queued for the next turn…"
+                  ? "Agent running — press stop to interrupt"
                   : "Message the agent…"
                 : "Chat disabled"
             }
@@ -1028,124 +1131,231 @@ export function Campaign() {
                 >
                   <Paperclip className="size-4" strokeWidth={1.5} />
                 </IconAction>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      aria-label="Reference a file"
+                      title="Reference a file from the workspace"
+                      disabled={!configured || !workFiles?.some((f) => f.type === "file")}
+                      className="rounded-full text-ink-3 hover:text-ink"
+                    >
+                      <FileText className="size-4" strokeWidth={1.5} />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start" className="max-h-72 w-72 overflow-y-auto">
+                    {(workFiles ?? [])
+                      .filter((f) => f.type === "file")
+                      .map((f) => (
+                        <DropdownMenuItem key={f.path} onSelect={() => insertRef(f.path)}>
+                          <FileText className="size-3.5 text-ink-3" strokeWidth={1.5} />
+                          <span className="min-w-0 truncate font-mono text-[12px]">{f.path}</span>
+                        </DropdownMenuItem>
+                      ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
                 <span
                   title={`Model · ${campaign.model} · effort ${campaign.effort}`}
-                  className="inline-flex items-center gap-1.5 rounded-full border border-line bg-inset px-2.5 py-1 font-mono text-[11px] font-medium text-ink-2"
+                  className="inline-flex items-center gap-1.5 rounded-full bg-surface px-2.5 py-1 font-mono text-[11px] font-medium text-ink-2 shadow-btn"
                 >
-                  <Sparkles className="size-3 text-accent-ink" strokeWidth={1.5} />
+                  <Sparkles className="size-3 text-ink-2" strokeWidth={1.5} />
                   {campaign.model}
                 </span>
               </>
             }
           />
         </div>
-      </section>
-      )}
+          </section>
+        </div>
 
-      {tab === "generators" && (
-        <div className="flex min-h-0 flex-1 gap-3 max-md:flex-col">
-          <div className="w-72 shrink-0 overflow-y-auto rounded-[12px] bg-surface p-1 shadow-hairline max-md:max-h-44">
-            {generators.length === 0 ? (
+        {/* divider — drag to resize (lg+) */}
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize workspace panel"
+          aria-valuenow={paneWidth}
+          aria-valuemin={PANE_MIN}
+          aria-valuemax={paneMaxWidth}
+          tabIndex={0}
+          onPointerDown={resizeStart}
+          onKeyDown={resizeKey}
+          className="group hidden w-3 shrink-0 cursor-col-resize touch-none items-center justify-center outline-none lg:flex"
+        >
+          <span className="h-full w-px rounded-full bg-line transition-colors group-hover:bg-line-strong group-focus-visible:w-0.5 group-focus-visible:bg-line-strong" />
+        </div>
+
+        {/* right — instruments */}
+        <aside
+          style={{ "--pane-w": `${paneWidth}px` } as React.CSSProperties}
+          className="flex min-h-0 shrink-0 flex-col gap-3 max-lg:h-auto max-lg:w-full lg:w-[var(--pane-w)]"
+        >
+          <SegmentedControl
+            value={tab}
+            onValueChange={setTab}
+            options={tabs.map((entry) => ({
+              value: entry.key,
+              label: entry.label,
+              count: entry.count,
+            }))}
+          />
+
+          {tab === "generators" && (
+            <div className="flex min-h-0 flex-1 flex-col gap-3">
+              {/* navigation */}
+              <div className="flex max-h-52 shrink-0 flex-col overflow-hidden rounded-xl bg-surface shadow-card">
+                <div className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-2">
+                  <span className="text-[12px] font-medium text-ink-2">Workers</span>
+                  <span className="font-mono text-[11px] tabular-nums text-ink-3">
+                    {generators.length}
+                  </span>
+                </div>
+                <div className="min-h-0 flex-1 overflow-y-auto p-1">
+                  {generators.length === 0 ? (
+                    <p className="p-3 text-[12px] text-ink-3">
+                      No hypothesis workers yet. The supervisor spawns them when the backlog runs dry.
+                    </p>
+                  ) : (
+                    generators.map((generator) => (
+                      <button
+                        key={generator.id}
+                        type="button"
+                        aria-current={selectedGenerator === generator.id ? "true" : undefined}
+                        onClick={() => openGenerator(generator.id)}
+                        className={cn(
+                          "flex w-full flex-col gap-1 rounded-md px-2.5 py-2 text-left transition-colors",
+                          selectedGenerator === generator.id ? "material-key" : "hover:bg-hover"
+                        )}
+                      >
+                        <span className="flex items-center gap-2">
+                          <span className="font-mono text-[11px] text-ink-3">#{generator.id}</span>
+                          <span className="min-w-0 flex-1 truncate text-[12px] font-medium">
+                            {generator.focus || "general"}
+                          </span>
+                          <StatusBadge status={generator.status} />
+                        </span>
+                        <span className="flex items-center gap-2 text-[11px] text-ink-3">
+                          <span className="shrink-0">{generator.hypothesis_count} hypotheses</span>
+                          {generator.last_snippet && (
+                            <span className="min-w-0 flex-1 truncate">{generator.last_snippet}</span>
+                          )}
+                        </span>
+                      </button>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              {/* detail */}
+              <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl bg-surface shadow-card">
+                <div className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-2">
+                  {selectedGeneratorInfo ? (
+                    <>
+                      <span className="font-mono text-[11px] text-ink-3">
+                        #{selectedGeneratorInfo.id}
+                      </span>
+                      <span className="min-w-0 flex-1 truncate text-[12px] font-medium">
+                        {selectedGeneratorInfo.focus || "general"}
+                      </span>
+                      <StatusBadge status={selectedGeneratorInfo.status} />
+                    </>
+                  ) : (
+                    <span className="text-[12px] font-medium text-ink-2">Activity</span>
+                  )}
+                </div>
+                <div className="min-h-0 flex-1 overflow-y-auto p-3">
+                  {selectedGenerator === null ? (
+                    <p className="text-[12px] text-ink-3">Pick a worker above to see its activity.</p>
+                  ) : generatorMessages.length === 0 ? (
+                    <LoadingState label="Loading worker" />
+                  ) : (
+                    <div className="flex flex-col gap-3">
+                      {(generatorHasEarlier || generatorMessages.length > generatorWindowSize) && (
+                        <div className="flex justify-center">
+                          <button
+                            type="button"
+                            onClick={loadEarlierGenerator}
+                            className="material-key rounded-full px-3 py-1 text-[12px] text-ink-2 outline-none transition-[background-color,box-shadow,color,scale] duration-150 ease-[var(--ease-out-strong)] hover:text-ink focus-visible:ring-2 focus-visible:ring-ring/60 active:scale-[0.96]"
+                          >
+                            Load earlier output
+                          </button>
+                        </div>
+                      )}
+                      {visibleGeneratorMessages.map((message) => (
+                        <AssistantMessage key={message.id} parts={message.parts} />
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+      {tab === "hypotheses" && (
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl bg-surface shadow-card">
+          <div className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-2">
+            <span className="text-[12px] font-medium text-ink-2">Hypotheses</span>
+            <span className="font-mono text-[11px] tabular-nums text-ink-3">
+              {hypotheses.length}
+            </span>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto p-1.5">
+            {hypotheses.length === 0 ? (
               <p className="p-3 text-[12px] text-ink-3">
-                No hypothesis workers yet. The supervisor spawns them when the backlog runs dry.
+                No hypotheses yet. They appear here as the generators file them.
               </p>
             ) : (
-              generators.map((generator) => (
-                <button
-                  key={generator.id}
-                  type="button"
-                  onClick={() => openGenerator(generator.id)}
-                  className={cn(
-                    "flex w-full flex-col gap-1 rounded-md px-2.5 py-2 text-left transition-colors",
-                    selectedGenerator === generator.id ? "bg-inset" : "hover:bg-hover"
-                  )}
-                >
-                  <span className="flex items-center gap-2">
-                    <span className="font-mono text-[11px] text-ink-3">#{generator.id}</span>
-                    <span className="min-w-0 flex-1 truncate text-[12px] font-medium">
-                      {generator.focus || "general"}
-                    </span>
-                    <StatusBadge status={generator.status} />
-                  </span>
-                  <span className="flex items-center gap-2 text-[11px] text-ink-3">
-                    <span className="shrink-0">{generator.hypothesis_count} hypotheses</span>
-                    {generator.last_snippet && (
-                      <span className="min-w-0 flex-1 truncate">{generator.last_snippet}</span>
-                    )}
-                  </span>
-                </button>
-              ))
-            )}
-          </div>
-
-          <div className="min-w-0 flex-1 overflow-y-auto rounded-[12px] bg-surface p-3 shadow-hairline">
-            {selectedGenerator === null ? (
-              <p className="text-[12px] text-ink-3">Pick a worker on the left.</p>
-            ) : generatorMessages.length === 0 ? (
-              <LoadingState label="Loading worker" />
-            ) : (
-              <div className="flex flex-col gap-3">
-                {(generatorHasEarlier || generatorMessages.length > generatorWindowSize) && (
-                  <div className="flex justify-center">
+              <>
+                <ul className="flex flex-col gap-0.5">
+                  {shownHypotheses.map((hypothesis) => (
+                    <HypothesisCard key={hypothesis.id} hypothesis={hypothesis} />
+                  ))}
+                </ul>
+                {hypotheses.length > shownHypotheses.length && (
+                  <div className="mt-2 flex justify-center pb-1">
                     <button
                       type="button"
-                      onClick={loadEarlierGenerator}
-                      className="rounded-full border border-line bg-surface px-3 py-1 text-[12px] text-ink-2 outline-none transition-colors hover:bg-hover hover:text-ink focus-visible:ring-2 focus-visible:ring-ring/60"
+                      onClick={() => setHypothesesShown((count) => count + HYPOTHESIS_PAGE)}
+                      className="material-key rounded-full px-3 py-1 text-[12px] text-ink-2 outline-none transition-[background-color,box-shadow,color,scale] duration-150 ease-[var(--ease-out-strong)] hover:text-ink focus-visible:ring-2 focus-visible:ring-ring/60 active:scale-[0.96]"
                     >
-                      Load earlier output
+                      Show {hypotheses.length - shownHypotheses.length} more
                     </button>
                   </div>
                 )}
-                {visibleGeneratorMessages.map((message) => (
-                  <div key={message.id} className="border-l-2 border-line pl-3">
-                    <AssistantMessage parts={message.parts} />
-                  </div>
-                ))}
-              </div>
+              </>
             )}
           </div>
         </div>
       )}
 
-      {tab === "hypotheses" && (
-        <div className="min-h-0 flex-1 overflow-y-auto">
-          {hypotheses.length === 0 ? (
-            <p className="text-[12px] text-ink-3">
-              No hypotheses yet. They appear here as the generators file them.
-            </p>
-          ) : (
-            <>
-              <ul className="flex flex-col gap-2">
-                {shownHypotheses.map((hypothesis) => (
-                  <HypothesisCard key={hypothesis.id} hypothesis={hypothesis} />
-                ))}
-              </ul>
-              {hypotheses.length > shownHypotheses.length && (
-                <div className="mt-2 flex justify-center">
-                  <button
-                    type="button"
-                    onClick={() => setHypothesesShown((count) => count + HYPOTHESIS_PAGE)}
-                    className="rounded-full border border-line bg-surface px-3 py-1 text-[12px] text-ink-2 outline-none transition-colors hover:bg-hover hover:text-ink focus-visible:ring-2 focus-visible:ring-ring/60"
-                  >
-                    Show {hypotheses.length - shownHypotheses.length} more
-                  </button>
-                </div>
-              )}
-            </>
+          {tab === "workspace" && (
+            <FilesPane
+              campaignId={campaignId}
+              files={workFiles}
+              onRefresh={refreshWork}
+              selected={workspacePath}
+              onSelect={openInWorkspace}
+            />
           )}
-        </div>
-      )}
+        </aside>
+      </div>
 
       <ConfirmDialog
         open={confirmDelete}
         onOpenChange={setConfirmDelete}
         title="Delete this campaign?"
-        description={`"${campaign.target.split("\n")[0]}" and all of its messages and files are removed. This cannot be undone.`}
+        description={
+          <>
+            <span className="font-mono break-all">{campaign.target.split("\n")[0]}</span> and
+            all of its messages and files are removed. This cannot be undone.
+          </>
+        }
         confirmLabel="Delete campaign"
         busy={deleting}
         onConfirm={remove}
       />
     </div>
+    </FilesContext.Provider>
   )
 }
 
@@ -1197,29 +1407,54 @@ function callsOf(message: Message): ToolCall[] {
 
 const HypothesisCard = memo(
   function HypothesisCard({ hypothesis }: { hypothesis: Hypothesis }) {
+    const [open, setOpen] = useState(false)
     return (
-      <li className="rounded-[12px] bg-surface px-3.5 py-3 shadow-hairline">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="font-mono text-[11px] text-ink-3">#{hypothesis.id}</span>
+      <li className="overflow-hidden rounded-md">
+        <button
+          type="button"
+          aria-expanded={open}
+          onClick={() => setOpen((value) => !value)}
+          className={cn(
+            "flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left outline-none transition-colors hover:bg-hover/60 focus-visible:ring-2 focus-visible:ring-ring/60",
+            open && "bg-hover/40"
+          )}
+        >
+          <span className="font-mono text-[11px] tabular-nums text-ink-3">
+            #{hypothesis.id}
+          </span>
           <StatusBadge status={hypothesis.status} />
+          <span className="min-w-0 flex-1 truncate text-[12px] text-ink">{hypothesis.title}</span>
           {hypothesis.vuln_class && (
-            <span className="rounded-full border border-line px-1.5 font-mono text-[10px] text-ink-3">
+            <span className="shrink-0 rounded-full bg-inset px-1.5 font-mono text-[10px] text-ink-3">
               {hypothesis.vuln_class}
             </span>
           )}
-          {hypothesis.generator_id != null && (
-            <span className="text-[11px] text-ink-3">worker #{hypothesis.generator_id}</span>
-          )}
-        </div>
-        <p className="mt-1.5 text-[13px] font-medium">{hypothesis.title}</p>
-        {hypothesis.angle && (
-          <p className="mt-0.5 text-[12px] text-ink-2">{hypothesis.angle}</p>
-        )}
-        {hypothesis.rationale && (
-          <p className="mt-1 text-[12px] leading-relaxed text-ink-3">{hypothesis.rationale}</p>
-        )}
-        {hypothesis.result && (
-          <p className="mt-1.5 text-[12px] text-ink-2">result: {hypothesis.result}</p>
+          <ChevronDown
+            className={cn(
+              "size-3.5 shrink-0 text-ink-3 transition-transform",
+              open && "rotate-180"
+            )}
+            strokeWidth={1.5}
+          />
+        </button>
+        {open && (
+          <div className="border-t border-line px-2.5 py-2">
+            <p className="text-[12px] font-medium text-pretty text-ink">{hypothesis.title}</p>
+            {hypothesis.angle && (
+              <p className="mt-1 text-[12px] text-ink-2">{hypothesis.angle}</p>
+            )}
+            {hypothesis.rationale && (
+              <p className="mt-1 text-[12px] leading-relaxed text-ink-3">
+                {hypothesis.rationale}
+              </p>
+            )}
+            {hypothesis.result && (
+              <p className="mt-1.5 text-[12px] text-ink-2">result: {hypothesis.result}</p>
+            )}
+            {hypothesis.generator_id != null && (
+              <p className="mt-1 text-[11px] text-ink-3">worker #{hypothesis.generator_id}</p>
+            )}
+          </div>
         )}
       </li>
     )
@@ -1240,7 +1475,7 @@ function EmptyState({
 }) {
   return (
     <div className="flex flex-col items-center justify-center gap-4 px-6 text-center">
-      <div className="flex size-11 items-center justify-center rounded-full bg-accent-tint text-accent-ink">
+      <div className="flex size-11 items-center justify-center rounded-full bg-hover text-ink-2">
         <Sparkles className="size-5" />
       </div>
       <div>
@@ -1258,7 +1493,7 @@ function EmptyState({
               key={suggestion}
               type="button"
               onClick={() => onPick(suggestion)}
-              className="rounded-full border border-line bg-surface px-3 py-1 text-[12px] text-ink-2 outline-none transition-[color,background-color,scale] duration-150 ease-out hover:bg-hover hover:text-ink focus-visible:ring-2 focus-visible:ring-ring/60 active:scale-[0.96]"
+              className="material-key rounded-full px-3 py-1 text-[12px] text-ink-2 outline-none transition-[background-color,box-shadow,color,scale] duration-150 ease-[var(--ease-out-strong)] hover:text-ink focus-visible:ring-2 focus-visible:ring-ring/60 active:scale-[0.96]"
             >
               {suggestion}
             </button>
@@ -1289,7 +1524,7 @@ function ContextPanel({
   if (sections.length === 0) return null
 
   return (
-    <div className="rounded-[12px] bg-surface shadow-hairline">
+    <div className="rounded-[12px] bg-surface shadow-card">
       <button
         type="button"
         aria-expanded={open}

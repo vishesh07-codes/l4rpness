@@ -1,11 +1,11 @@
-import { Menu } from "@/components/icons"
 import { lazy, Suspense, useEffect, useRef, useState, type MouseEvent } from "react"
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-router-dom"
 
 import { AppSidebar } from "@/components/AppSidebar"
+import { Menu } from "@/components/icons"
+import { Button } from "@/components/ui/button"
 import { Toaster } from "@/components/ui/sonner"
 import { TooltipProvider } from "@/components/ui/tooltip"
-import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 // pages load on demand so the shell (and the dashboard) stay small
 const Dashboard = lazy(() => import("@/pages/Dashboard").then((m) => ({ default: m.Dashboard })))
@@ -15,6 +15,9 @@ const NewCampaign = lazy(() =>
 const Campaign = lazy(() => import("@/pages/Campaign").then((m) => ({ default: m.Campaign })))
 const Skills = lazy(() => import("@/pages/Skills").then((m) => ({ default: m.Skills })))
 const Mcp = lazy(() => import("@/pages/Mcp").then((m) => ({ default: m.Mcp })))
+const Settings = lazy(() =>
+  import("@/pages/Settings").then((m) => ({ default: m.Settings }))
+)
 
 export default function App() {
   const [darkMode, setDarkMode] = useState(() => {
@@ -24,9 +27,12 @@ export default function App() {
     return savedTheme ? savedTheme === "dark" : true
   })
 
-  const [collapsed, setCollapsed] = useState(
-    () => typeof window !== "undefined" && window.localStorage.getItem("sidebar") === "collapsed"
-  )
+  // full sidebar by default (Linear-style); the icon rail is the collapsed state
+  const [collapsed, setCollapsed] = useState(() => {
+    if (typeof window === "undefined") return false
+    const saved = window.localStorage.getItem("sidebar")
+    return saved ? saved === "collapsed" : false
+  })
   // separate from `collapsed`: below md the rail overlays instead of docking
   const [mobileOpen, setMobileOpen] = useState(false)
 
@@ -104,8 +110,7 @@ export default function App() {
         onToggleTheme={toggleTheme}
       />
 
-      {/* below md the rail is off-canvas, so give it a way back. Hidden while
-          it's open, otherwise it floats on top of the rail itself. */}
+      {/* below md the rail is off-canvas, so give it a way back */}
       {!mobileOpen && (
         <Button
           variant="ghost"
@@ -122,9 +127,10 @@ export default function App() {
       <main
         id="content"
         className={cn(
-          "transition-[padding] duration-200 ease-[var(--ease-out-strong)]",
-          // the rail only reserves space from md up; below that it overlays
-          collapsed ? "pl-0 md:pl-[60px]" : "pl-0 md:pl-60"
+          // the rail only reserves space from md up; below that it overlays.
+          // no transition here: animating `padding` reflows the whole page on
+          // every frame of the sidebar toggle
+          collapsed ? "pl-0 md:pl-16" : "pl-0 md:pl-60"
         )}
       >
         <RoutedContent />
@@ -151,8 +157,18 @@ function RoutedContent() {
     firstPaint.current = false
   }, [])
 
+  // Where the View Transitions API exists it drives the route change, so the
+  // `page-enter` fallback must stand down entirely. Applying both made the page
+  // blink: `vt-active` suppressed the animation during the cross-fade, then
+  // removing it re-enabled `page-enter`, which restarted opacity 0 -> 1 on top
+  // of the finished transition.
+  const vtSupported = typeof document !== "undefined" && "startViewTransition" in document
+
   return (
-    <div key={pathname} className={firstPaint.current ? undefined : "page-enter"}>
+    <div
+      key={pathname}
+      className={firstPaint.current || vtSupported ? undefined : "page-enter"}
+    >
       <Suspense fallback={<div className="px-8 py-10 text-sm text-ink-2">Loading…</div>}>
         <Routes>
           <Route path="/" element={<Dashboard />} />
@@ -160,6 +176,7 @@ function RoutedContent() {
           <Route path="/campaigns/:id" element={<Campaign />} />
           <Route path="/skills" element={<Skills />} />
           <Route path="/mcp" element={<Mcp />} />
+          <Route path="/settings" element={<Settings />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </Suspense>

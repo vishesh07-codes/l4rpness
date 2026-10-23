@@ -1,16 +1,19 @@
 "use client";
 // www.agentui.pro/components/agents/prompt-input
 
-import { ArrowUp, Plus, Square } from "@/components/icons";
+import { ArrowUp, FileText, Plus, Square } from "@/components/icons";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
+  type ChangeEvent,
   type FormEvent,
   type KeyboardEvent,
   type ReactNode,
   type TextareaHTMLAttributes,
   useCallback,
   useEffect,
+  useId,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -63,6 +66,8 @@ export interface PromptInputProps extends Omit<
   minRows?: number;
   maxRows?: number;
   leadingAction?: ReactNode;
+  /** Paths offered by an `@`-mention autocomplete in the textarea. */
+  mentions?: string[];
   className?: string;
 }
 
@@ -82,6 +87,7 @@ export function PromptInput({
   minRows = 2,
   maxRows = 8,
   leadingAction,
+  mentions = [],
   className,
   disabled,
   placeholder = "Ask the agent to do something…",
@@ -90,6 +96,7 @@ export function PromptInput({
   ...textareaProps
 }: PromptInputProps) {
   const reduce = useReducedMotion() ?? false;
+  const mentionListId = useId();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const measurementRef = useRef<HTMLDivElement>(null);
   const [internalValue, setInternalValue] = useState(defaultValue);
@@ -97,6 +104,10 @@ export function PromptInput({
     defaultModel ?? models[0]?.value,
   );
   const [actionsOpen, setActionsOpen] = useState(false);
+  const mentionStart = useRef(-1);
+  const [mentionQuery, setMentionQuery] = useState("");
+  const [mentionIndex, setMentionIndex] = useState(0);
+  const [mentionsOpen, setMentionsOpen] = useState(false);
   const currentValue = value ?? internalValue;
   const currentModelValue = model ?? internalModel;
   const currentModel = models.find(
@@ -140,6 +151,51 @@ export function PromptInput({
     onModelChange?.(next);
   };
 
+  // `@`-mention autocomplete over the provided paths
+  const mentionMatches = useMemo(() => {
+    if (!mentionsOpen) return [];
+    const q = mentionQuery.toLowerCase();
+    const pool = q ? mentions.filter((m) => m.toLowerCase().includes(q)) : mentions;
+    return pool.slice(0, 50);
+  }, [mentionsOpen, mentionQuery, mentions]);
+
+  const handleChange = (event: ChangeEvent<HTMLTextAreaElement>) => {
+    const next = event.target.value;
+    setValue(next);
+    if (!mentions.length) return;
+    const caret = event.target.selectionStart ?? next.length;
+    const before = next.slice(0, caret);
+    const at = before.lastIndexOf("@");
+    const valid =
+      at !== -1 &&
+      (at === 0 || /\s/.test(before[at - 1])) &&
+      !/\s/.test(before.slice(at + 1));
+    if (valid) {
+      mentionStart.current = at;
+      setMentionQuery(before.slice(at + 1));
+      setMentionIndex(0);
+      setMentionsOpen(true);
+    } else {
+      setMentionsOpen(false);
+    }
+  };
+
+  const applyMention = (path: string) => {
+    const textarea = textareaRef.current;
+    const start = mentionStart.current;
+    if (!textarea || start < 0) return;
+    const current = textarea.value;
+    const caret = textarea.selectionStart ?? current.length;
+    const next = `${current.slice(0, start)}@${path} ${current.slice(caret)}`;
+    setValue(next);
+    setMentionsOpen(false);
+    const pos = start + path.length + 2;
+    requestAnimationFrame(() => {
+      textarea.focus();
+      textarea.setSelectionRange(pos, pos);
+    });
+  };
+
   const submit = (event?: FormEvent) => {
     event?.preventDefault();
     const prompt = currentValue.trim();
@@ -152,6 +208,28 @@ export function PromptInput({
 
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     onKeyDown?.(event);
+    if (mentionsOpen && mentionMatches.length) {
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        setMentionIndex((i) => Math.min(i + 1, mentionMatches.length - 1));
+        return;
+      }
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        setMentionIndex((i) => Math.max(i - 1, 0));
+        return;
+      }
+      if (event.key === "Enter" || event.key === "Tab") {
+        event.preventDefault();
+        applyMention(mentionMatches[mentionIndex]);
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setMentionsOpen(false);
+        return;
+      }
+    }
     if (
       event.defaultPrevented ||
       event.key !== "Enter" ||
@@ -168,7 +246,7 @@ export function PromptInput({
     <form
       onSubmit={submit}
       className={cn(
-        "relative w-full rounded-2xl border border-border/80 bg-background p-2 transition-colors focus-within:border-foreground/25",
+        "relative w-full rounded-2xl bg-surface p-2 shadow-card transition-shadow duration-150 ease-[var(--ease-out-strong)] focus-within:ring-1 focus-within:ring-ring/40",
         disabled && "opacity-60",
         className,
       )}
@@ -186,12 +264,51 @@ export function PromptInput({
         disabled={disabled}
         placeholder={placeholder}
         aria-label={ariaLabel}
+        aria-autocomplete={mentions.length ? "list" : undefined}
+        aria-controls={mentionsOpen ? mentionListId : undefined}
+        aria-activedescendant={
+          mentionsOpen && mentionMatches.length
+            ? `${mentionListId}-${mentionIndex}`
+            : undefined
+        }
         rows={minRows}
         {...textareaProps}
-        onChange={(event) => setValue(event.target.value)}
+        onChange={handleChange}
         onKeyDown={handleKeyDown}
         className="scrollbar-hide block w-full resize-none overflow-y-auto bg-transparent px-2 pt-1.5 text-sm leading-6 text-foreground outline-none placeholder:text-muted-foreground/55"
       />
+
+      {mentionsOpen && mentionMatches.length > 0 && (
+        <div
+          id={mentionListId}
+          role="listbox"
+          aria-label="File references"
+          className="absolute bottom-full left-2 z-30 mb-2 max-h-56 w-72 overflow-y-auto rounded-xl bg-surface p-1 shadow-overlay"
+        >
+          {mentionMatches.map((path, i) => (
+            <button
+              key={path}
+              id={`${mentionListId}-${i}`}
+              type="button"
+              role="option"
+              aria-selected={i === mentionIndex}
+              onMouseDown={(event) => {
+                event.preventDefault();
+                applyMention(path);
+              }}
+              className={cn(
+                "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left font-mono text-[12px] outline-none",
+                i === mentionIndex
+                  ? "material-key text-ink"
+                  : "text-ink-2 hover:bg-hover/60",
+              )}
+            >
+              <FileText className="size-3.5 shrink-0 text-ink-3" strokeWidth={1.5} />
+              <span className="min-w-0 flex-1 truncate">{path}</span>
+            </button>
+          ))}
+        </div>
+      )}
 
       <div className="mt-1 flex min-h-8 items-center gap-1">
         {actions.length ? (
@@ -268,7 +385,7 @@ export function PromptInput({
                     {currentModel.icon}
                   </span>
                 ) : null}
-                <span className="truncate text-muted-foreground">
+                <span className="min-w-0 truncate text-muted-foreground">
                   {currentModel?.label ?? "Choose model"}
                 </span>
               </span>

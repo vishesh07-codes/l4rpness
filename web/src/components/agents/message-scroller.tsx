@@ -437,6 +437,7 @@ export function MessageScroller({
     <section
       ref={setViewportRef}
       aria-label={label}
+      tabIndex={0}
       {...restViewportProps}
       onScroll={(event) => {
         handleScroll();

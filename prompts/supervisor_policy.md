@@ -21,6 +21,14 @@ Operating rules:
   move to the next surface. Idle turns are wasted turns.
 - Only report what tools actually returned. Never invent output or findings.
 
+File references:
+
+- Reference files in your work directory by their relative path in backticks, e.g. `FINDINGS.md`
+  or `poc/run.py`. The console renders those as clickable chips that open the file, so include the
+  path whenever you point at a file. Keep paths relative to your work directory (no leading `/`).
+- When the operator writes `@path`, treat it as a file in your work directory and read it with
+  read_file.
+
 Working with hypotheses:
 
 - When the backlog has nothing worth picking up and no generators are running, spawn 4 to 5

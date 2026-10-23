@@ -34,6 +34,20 @@ CONTINUE_PROMPT = (
     "and keep testing with real tools now."
 )
 
+GOAL_BEGIN_PROMPT = (
+    "Begin the engagement against {target}. Pursue the operator's stated goal "
+    "to a concrete, evidence-backed result. Keep working with real tools until "
+    "the goal is genuinely met, then call complete_engagement with a one-line "
+    "summary. If one angle fails, try another."
+)
+
+GOAL_CONTINUE_PROMPT = (
+    "Your turn ended but the goal is not achieved yet. Review your notes and "
+    "results, pick the next angle, and keep working with real tools. When the "
+    "goal is genuinely met and the evidence is recorded in your work "
+    "directory, call complete_engagement with a one-line summary."
+)
+
 
 def is_running(campaign_id: int) -> bool:
     task = SUPERVISORS.get(campaign_id)
@@ -405,7 +419,15 @@ async def _loop(campaign_id: int) -> None:
     cancelled = False
 
     try:
-        while not stop.is_set():
+        while True:
+            # a stop with `restart` set is an interrupt: end the current chain,
+            # then keep looping so the queued operator message lands next chain
+            if stop.is_set():
+                if run.pop("restart", False):
+                    stop.clear()
+                else:
+                    break
+
             # let stop requests, pollers and other campaigns get a turn; a
             # chain that returns without awaiting would otherwise starve them
             await asyncio.sleep(0)
@@ -419,6 +441,8 @@ async def _loop(campaign_id: int) -> None:
                 ).fetchall()
             if campaign is None:
                 break
+
+            mode = campaign["mode"] or "continuous"
 
             if (
                 config.COMPACT_AT_TOKENS > 0
@@ -441,9 +465,10 @@ async def _loop(campaign_id: int) -> None:
             history = _history(campaign_id)
             touched = any(message.get("role") == "assistant" for message in history)
             if touched:
-                prompt = CONTINUE_PROMPT
+                prompt = GOAL_CONTINUE_PROMPT if mode == "goal" else CONTINUE_PROMPT
             else:
-                prompt = BEGIN_PROMPT.format(target=campaign["target"].strip())
+                begin = GOAL_BEGIN_PROMPT if mode == "goal" else BEGIN_PROMPT
+                prompt = begin.format(target=campaign["target"].strip())
 
             backlog = _backlog_line(campaign_id)
             if backlog:
@@ -472,7 +497,33 @@ async def _loop(campaign_id: int) -> None:
                 log.exception("supervisor chain crashed for campaign %d", campaign_id)
                 outcome = {"error": "chain crashed"}
 
+            # goal mode ends when the agent declares the objective met
+            if mode == "goal" and any(
+                part.get("type") == "tool"
+                and part.get("name") == "complete_engagement"
+                and part.get("ok")
+                for part in run.get("parts") or []
+            ):
+                routes.push_event(
+                    campaign_id,
+                    "notice",
+                    {"text": "goal achieved — engagement complete"},
+                )
+                with db.db() as conn:
+                    conn.execute(
+                        """
+                        UPDATE campaigns SET auto_running = 0, status = 'done',
+                            updated_at = datetime('now')
+                        WHERE id = ?
+                        """,
+                        (campaign_id,),
+                    )
+                break
+
             if stop.is_set() or outcome.get("stopped"):
+                if run.pop("restart", False):
+                    stop.clear()
+                    continue
                 break
 
             if outcome.get("ok"):

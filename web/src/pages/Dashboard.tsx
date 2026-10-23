@@ -12,8 +12,16 @@ import { TransitionLink } from "@/components/TransitionLink"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
-import { Marker, MarkerContent } from "@/components/ui/marker"
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty"
+import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group"
+import { Kbd } from "@/components/ui/kbd"
 import { Skeleton } from "@/components/ui/skeleton"
 import { api, FIELDS, type Campaign } from "@/lib/api"
 import { cn, fmtDate, fmtTokens } from "@/lib/utils"
@@ -156,17 +164,17 @@ export function Dashboard() {
   }
 
   return (
-    <div className="mx-auto max-w-4xl px-6 py-10 sm:px-8 max-md:pt-16">
+    <div className="mx-auto max-w-5xl px-6 py-10 sm:px-8 max-md:pt-16">
       {/* hero — the front door: name a target, start probing */}
       <section className="flex flex-col items-center pt-6 pb-10 text-center sm:pt-14">
         <h1 className="text-2xl font-semibold tracking-[-0.02em] text-balance text-ink sm:text-[28px]">
           What are we testing?
         </h1>
-        <p className="mt-2 max-w-md text-sm text-pretty text-ink-2">
+        <p className="mt-3 max-w-md text-sm text-pretty text-ink-2">
           Name a target and the agent starts probing it in an isolated work dir — and keeps going until you stop it.
         </p>
 
-        <div ref={composerRef} className="mt-6 w-full max-w-2xl text-left">
+        <div ref={composerRef} className="mt-8 w-full max-w-3xl text-left">
           <PromptInput
             value={target}
             onValueChange={setTarget}
@@ -178,25 +186,29 @@ export function Dashboard() {
             aria-label="New campaign target"
           />
 
-          <div className="mt-3 flex flex-wrap justify-center gap-2">
+          <div className="mt-4 flex flex-wrap justify-center gap-2">
             {SUGGESTIONS.map((s) => (
               <button
                 key={s}
                 type="button"
                 onClick={() => setTarget(s)}
-                className="max-w-full truncate rounded-full border border-line bg-surface px-3 py-1.5 text-[12px] text-ink-2 outline-none transition-[color,background-color,scale] duration-150 ease-out hover:bg-hover hover:text-ink focus-visible:ring-2 focus-visible:ring-ring/60 active:scale-[0.96]"
+                className="material-key max-w-full truncate rounded-full px-3 py-1.5 text-[12px] text-ink-2 outline-none transition-[background-color,box-shadow,color,scale] duration-150 ease-[var(--ease-out-strong)] hover:text-ink focus-visible:ring-2 focus-visible:ring-ring/60 active:scale-[0.96]"
               >
                 {s}
               </button>
             ))}
             <TransitionLink
               to="/campaigns/new"
-              className="inline-flex items-center gap-1.5 rounded-full border border-dashed border-line px-3 py-1.5 text-[12px] text-ink-3 outline-none transition-colors duration-150 hover:border-line-strong hover:text-ink focus-visible:ring-2 focus-visible:ring-ring/60"
+              className="material-key inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[12px] text-ink-3 outline-none transition-[background-color,box-shadow,color,scale] duration-150 ease-[var(--ease-out-strong)] hover:text-ink focus-visible:ring-2 focus-visible:ring-ring/60 active:scale-[0.96]"
             >
               <Plus className="size-3.5" strokeWidth={2} />
               Full brief
             </TransitionLink>
           </div>
+
+          <p className="mt-3 flex items-center justify-center gap-1.5 text-[11px] text-ink-3">
+            Press <Kbd>/</Kbd> to focus
+          </p>
         </div>
       </section>
 
@@ -208,57 +220,60 @@ export function Dashboard() {
         </Alert>
       )}
 
-      <div className="mb-4 flex items-center gap-3">
-        <Marker variant="separator" className="min-w-0 flex-1">
-          <MarkerContent className="text-[11px] font-medium tracking-wide uppercase">
-            {campaigns?.length ? `${campaigns.length} campaigns` : "Campaigns"}
-          </MarkerContent>
-        </Marker>
+      <div className="mt-10 mb-3 flex items-center gap-2">
+        <h2 className="text-[13px] font-medium text-ink">Campaigns</h2>
+        {campaigns && campaigns.length > 0 && (
+          <span className="font-mono text-[11px] tabular-nums text-ink-3">
+            {campaigns.length}
+          </span>
+        )}
         {campaigns && campaigns.length > 3 && (
-          <div className="relative w-48 shrink-0">
-            <Search
-              className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-ink-3"
-              strokeWidth={1.5}
-              aria-hidden
-            />
-            <Input
+          <InputGroup className="ml-auto h-8 w-56 shrink-0 px-2.5">
+            <InputGroupInput
               type="search"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Filter campaigns"
               aria-label="Filter campaigns"
-              className="h-8 pl-8 text-[13px]"
+              className="h-8 text-[13px]"
             />
-          </div>
+            <InputGroupAddon>
+              <Search strokeWidth={1.5} aria-hidden />
+            </InputGroupAddon>
+          </InputGroup>
         )}
       </div>
 
       {!error && campaigns === null && <CardsSkeleton />}
 
       {campaigns?.length === 0 && (
-        <div className="flex flex-col items-center justify-center rounded-[12px] border border-dashed border-line py-14">
-          <div className="flex size-10 items-center justify-center rounded-full bg-inset text-ink-2">
-            <Crosshair className="size-5" strokeWidth={1.5} />
-          </div>
-          <p className="mt-4 text-sm font-medium text-balance text-ink">No campaigns yet</p>
-          <p className="mt-1 max-w-xs text-center text-sm text-pretty text-ink-2">
-            Start one from the box above, or set up a full brief with scope and instructions.
-          </p>
-          <Button asChild variant="outline" size="sm" className="mt-4">
-            <TransitionLink to="/campaigns/new">
-              <Plus className="size-4" strokeWidth={2} /> New campaign
-            </TransitionLink>
-          </Button>
-        </div>
+        <Empty>
+          <EmptyHeader>
+            <EmptyMedia variant="icon">
+              <Crosshair strokeWidth={1.5} />
+            </EmptyMedia>
+            <EmptyTitle>No campaigns yet</EmptyTitle>
+            <EmptyDescription>
+              Start one from the box above, or set up a full brief with scope and instructions.
+            </EmptyDescription>
+          </EmptyHeader>
+          <EmptyContent>
+            <Button asChild variant="outline" size="sm">
+              <TransitionLink to="/campaigns/new">
+                <Plus className="size-4" strokeWidth={2} /> New campaign
+              </TransitionLink>
+            </Button>
+          </EmptyContent>
+        </Empty>
       )}
 
       {shown && shown.length > 0 && (
-        <ul className="grid gap-3 sm:grid-cols-2">
+        <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {shown.map((c, i) => (
             <li
               key={c.id}
               // stagger 50ms per card (Emil: 30–80ms), first paint only
-              className={cn(!revealed.current && "home-reveal opacity-0")}
+              className={cn(!revealed.current && "opacity-0")}
               style={
                 revealed.current
                   ? undefined
@@ -269,7 +284,7 @@ export function Dashboard() {
             >
               <Card
                 size="sm"
-                className="group/card relative h-full gap-0 px-3.5 transition-[box-shadow,transform] duration-150 ease-out hover:ring-foreground/20"
+                className="group/card relative h-full gap-0 px-3.5 transition-[box-shadow,transform] duration-150 ease-out hover:shadow-raised"
               >
                 <div className="flex items-center gap-2">
                   {c.running ? (
@@ -305,7 +320,7 @@ export function Dashboard() {
                         onClick={() => resume(c)}
                         className="text-ink-3 hover:text-ink focus-visible:opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover/card:opacity-100"
                       >
-                        <Play className="size-3.5 fill-current" strokeWidth={1.5} />
+                        <Play className="size-3.5 translate-x-[1px] fill-current" strokeWidth={1.5} />
                       </IconAction>
                     )}
                     <IconAction
@@ -355,12 +370,14 @@ export function Dashboard() {
       )}
 
       {campaigns && campaigns.length > 0 && shown?.length === 0 && (
-        <div className="flex flex-col items-center justify-center rounded-[12px] border border-dashed border-line py-12">
-          <p className="text-sm font-medium text-ink">No campaigns match “{query.trim()}”</p>
-          <Button variant="outline" size="sm" className="mt-3" onClick={() => setQuery("")}>
-            Clear filter
-          </Button>
-        </div>
+        <Empty>
+          <EmptyTitle>No campaigns match “{query.trim()}”</EmptyTitle>
+          <EmptyContent>
+            <Button variant="outline" size="sm" onClick={() => setQuery("")}>
+              Clear filter
+            </Button>
+          </EmptyContent>
+        </Empty>
       )}
 
       <ConfirmDialog
@@ -368,9 +385,14 @@ export function Dashboard() {
         onOpenChange={(open) => !open && setPendingDelete(null)}
         title="Delete this campaign?"
         description={
-          pendingDelete
-            ? `"${pendingDelete.target.split("\n")[0]}" and all of its messages and files are removed. This cannot be undone.`
-            : undefined
+          pendingDelete ? (
+            <>
+              <span className="font-mono break-all">
+                {pendingDelete.target.split("\n")[0]}
+              </span>{" "}
+              and all of its messages and files are removed. This cannot be undone.
+            </>
+          ) : undefined
         }
         confirmLabel="Delete campaign"
         busy={busy === pendingDelete?.id}
@@ -382,7 +404,7 @@ export function Dashboard() {
 
 function CardsSkeleton() {
   return (
-    <div className="grid gap-3 sm:grid-cols-2" aria-hidden>
+    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3" aria-hidden>
       {[0, 1, 2, 3].map((i) => (
         <Card key={i} size="sm" className="gap-3 px-3.5">
           <Skeleton className="h-4 w-20 rounded-full" />

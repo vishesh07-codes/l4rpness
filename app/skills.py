@@ -1,5 +1,6 @@
 import logging
 import re
+import shutil
 from pathlib import Path
 
 import yaml
@@ -115,3 +116,17 @@ def save(name: str, description: str, body: str, overwrite: bool = False) -> dic
     front = yaml.safe_dump({"name": slug, "description": description.strip()}, sort_keys=False).strip()
     file.write_text(f"---\n{front}\n---\n\n{body.strip()}\n")
     return {"name": slug}
+
+
+def delete(name: str) -> None:
+    """Remove a custom skill and its directory.
+
+    Built-ins live in the repo and cannot be removed here — `PermissionError`
+    is raised so the caller can answer 403 rather than a misleading 404.
+    """
+    entry = load(name)
+    if entry is None:
+        raise FileNotFoundError(name)
+    if not entry["editable"]:
+        raise PermissionError(name)
+    shutil.rmtree(entry["dir"])

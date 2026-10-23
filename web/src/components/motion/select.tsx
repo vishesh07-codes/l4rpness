@@ -26,7 +26,7 @@ const INSTANT_TRANSITION: Transition = { duration: 0 };
 
 // Spring with bounce powers the unfold/separation; per-property timings in the
 // content choreograph it (see SelectContent). Mirrors bouncy-accordion's feel.
-const CHEVRON_TRANSITION: Transition = { type: "spring", duration: 0.4, bounce: 0.3 };
+const CHEVRON_TRANSITION: Transition = { type: "spring", duration: 0.2, bounce: 0 };
 
 const LIST_VARIANTS: Variants = {
   hidden: {},
@@ -209,8 +209,8 @@ export function SelectTrigger({ className, children }: SelectTriggerProps) {
   const kfT: Transition = ctx.reduce
     ? { duration: 0 }
     : ctx.open
-      ? { duration: 0.6, times: [0, 0.4, 1], ease: EASE_OUT }
-      : { duration: 0.42, times: [0, 0.5, 1], ease: EASE_OUT };
+      ? { duration: 0.3, times: [0, 0.4, 1], ease: EASE_OUT }
+      : { duration: 0.24, times: [0, 0.5, 1], ease: EASE_OUT };
   return (
     <motion.button
       type="button"
@@ -316,10 +316,10 @@ export function SelectContent({ className, children }: SelectContentProps) {
   const nearRadius = open ? 12 : 0;
 
   const gapT: Transition = open
-    ? { type: "spring", duration: 0.6, bounce: 0.5, delay: 0.12 }
-    : { type: "spring", duration: 0.3, bounce: 0.1 };
+    ? { type: "spring", duration: 0.3, bounce: 0.15, delay: 0.08 }
+    : { type: "spring", duration: 0.24, bounce: 0.1 };
   const radiusT: Transition = open
-    ? { duration: 0.3, ease: EASE_OUT, delay: 0.14 }
+    ? { duration: 0.2, ease: EASE_OUT, delay: 0.1 }
     : { duration: 0.16, ease: EASE_OUT };
 
   // Items stay mounted (open just animates the panel) so each item's label
@@ -357,8 +357,8 @@ export function SelectContent({ className, children }: SelectContentProps) {
                 ? { duration: 0.18 }
                 : { duration: 0.16, delay: 0.12 },
               height: open
-                ? { type: "spring", duration: 0.42, bounce: 0.14 }
-                : { duration: 0.26, ease: EASE_OUT, delay: 0.14 },
+                ? { type: "spring", duration: 0.28, bounce: 0.08 }
+                : { duration: 0.22, ease: EASE_OUT, delay: 0.12 },
               marginTop: isTop ? INSTANT_TRANSITION : gapT,
               marginBottom: isTop ? gapT : INSTANT_TRANSITION,
               borderTopLeftRadius: isTop ? INSTANT_TRANSITION : radiusT,
@@ -375,7 +375,7 @@ export function SelectContent({ className, children }: SelectContentProps) {
       // flush against the trigger, then separates into its own rounded pill;
       // sits above or below depending on available space
       className={cn(
-        "absolute left-0 right-0 z-20 rounded-xl border border-border bg-background shadow-lg",
+        "absolute left-0 right-0 z-20 rounded-xl bg-background shadow-overlay",
         isTop ? "bottom-full" : "top-full",
         className,
       )}

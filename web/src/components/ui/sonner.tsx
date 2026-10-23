@@ -12,6 +12,7 @@ const Toaster = ({ theme = "dark", ...props }: ToasterProps) => {
     <Sonner
       theme={theme}
       className="toaster group"
+      gap={8}
       icons={{
         success: <CircleCheck className="size-4 text-green" />,
         info: <Info className="size-4" />,
@@ -27,7 +28,6 @@ const Toaster = ({ theme = "dark", ...props }: ToasterProps) => {
           "--border-radius": "var(--radius)",
         } as React.CSSProperties
       }
-      toastOptions={{ classNames: { toast: "cn-toast" } }}
       {...props}
     />
   )

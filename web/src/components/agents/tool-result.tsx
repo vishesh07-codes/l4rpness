@@ -270,7 +270,7 @@ export function ToolResult({
             </ActionSwapRollText>
           </span>
           {meta ? (
-            <span className="shrink-0 text-xs text-muted-foreground/60">
+            <span className="shrink-0 text-xs tabular-nums text-muted-foreground/60">
               <ActionSwapRollText value={metaKey}>
                 {meta}
               </ActionSwapRollText>

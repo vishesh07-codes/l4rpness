@@ -1,9 +1,8 @@
 import { useEffect, useState, type MouseEvent } from "react"
 import { useLocation } from "react-router-dom"
 
-import { BookOpenText, Compose, LayoutGrid, Moon, Shield, SidebarToggle, Sun, Wrench } from "@/components/icons"
+import { BookOpenText, Compose, LayoutGrid, Moon, Settings, Shield, SidebarToggle, Sun, Wrench } from "@/components/icons"
 import { api, type Campaign } from "@/lib/api"
-import { IconAction } from "@/components/IconAction"
 import { TransitionLink } from "@/components/TransitionLink"
 import { Wordmark } from "@/components/Wordmark"
 import { cn } from "@/lib/utils"
@@ -14,6 +13,7 @@ const nav = [
   // "methodology the agent loads on demand" better than a sparkle did
   { to: "/skills", label: "Skills", icon: BookOpenText },
   { to: "/mcp", label: "MCP", icon: Wrench },
+  { to: "/settings", label: "Settings", icon: Settings },
 ]
 
 export function AppSidebar({
@@ -81,10 +81,10 @@ export function AppSidebar({
           // below md the rail overlays at full width and slides away when closed
           "w-60 max-md:shadow-overlay",
           mobileOpen ? "max-md:translate-x-0" : "max-md:-translate-x-full",
-          collapsed ? "md:w-[60px]" : "md:w-60"
+          collapsed ? "md:w-16" : "md:w-60"
         )}
       >
-      {/* wordmark + collapse toggle */}
+      {/* brand + collapse */}
       <div
         className={cn(
           "flex h-14 shrink-0 items-center",
@@ -104,14 +104,17 @@ export function AppSidebar({
           onClick={onToggle}
           aria-label={rail ? "Expand sidebar" : "Collapse sidebar"}
           title={rail ? "Expand sidebar" : "Collapse sidebar"}
-          className="flex size-8 items-center justify-center rounded-[10px] text-ink-3 outline-none transition-colors duration-150 hover:bg-hover hover:text-ink focus-visible:ring-2 focus-visible:ring-ring/60"
+          className={cn(
+            "flex items-center justify-center rounded-[10px] outline-none transition-colors duration-150 hover:text-ink focus-visible:ring-2 focus-visible:ring-ring/60",
+            rail ? "material-key size-9 justify-center text-ink-3" : "size-8 text-ink-3 hover:bg-hover"
+          )}
         >
-          <SidebarToggle className="size-[18px]" strokeWidth={1.5} />
+          <SidebarToggle className={rail ? "size-4 opacity-60" : "size-[18px]"} strokeWidth={1.5} />
         </button>
       </div>
 
       {/* compose + nav — grok keeps these as quiet rows, not filled buttons */}
-      <nav className="flex flex-col gap-0.5 px-2">
+      <nav className={cn("flex flex-col px-2", rail ? "gap-1" : "gap-0.5")}>
         <Row
           to="/campaigns/new"
           label="New campaign"
@@ -131,11 +134,23 @@ export function AppSidebar({
         ))}
       </nav>
 
+      {/* collapsed rail: the wordmark turns on its side and centres in the
+          otherwise-empty middle, reading bottom-to-top */}
+      {rail && (
+        <div className="flex min-h-0 flex-1 items-center justify-center py-4">
+          <div className="flex h-28 w-8 items-center justify-center">
+            <Wordmark className="h-7 w-auto shrink-0 -rotate-90" />
+          </div>
+        </div>
+      )}
+
       {/* history — the block keeps its height while loading so the rail
           doesn't reflow when campaigns arrive */}
       {!rail && (recent === null || recent.length > 0) && (
         <div className="mt-5 flex min-h-0 flex-1 flex-col">
-          <p className="px-4 pb-1 text-[11px] font-medium text-ink-3">Recent</p>
+          <p className="px-4 pb-1.5 font-mono text-[10px] font-medium tracking-[0.14em] text-ink-3 uppercase">
+            Recent
+          </p>
           <div className="scrollbar-hide min-h-0 flex-1 overflow-y-auto px-2 pb-2">
             {recent === null &&
               [0, 1, 2, 3].map((i) => (
@@ -156,13 +171,13 @@ export function AppSidebar({
                   title={c.target}
                   className={cn(
                     "flex items-center gap-2 rounded-[10px] px-2 py-1.5 text-[13px] outline-none transition-colors duration-100 focus-visible:ring-2 focus-visible:ring-ring/60",
-                    active ? "bg-hover text-ink" : "text-ink-2 hover:bg-hover/60 hover:text-ink"
+                    active ? "material-key text-ink" : "text-ink-2 hover:bg-hover/60 hover:text-ink"
                   )}
                 >
                   {c.running && (
                     <>
                       <span
-                        className="size-1.5 shrink-0 animate-pulse rounded-full bg-orange"
+                        className="size-1.5 shrink-0 animate-pulse rounded-full bg-orange text-orange led"
                         aria-hidden
                       />
                       {/* the dot is color + motion; keep a text cue for both
@@ -170,7 +185,7 @@ export function AppSidebar({
                       <span className="sr-only">Running: </span>
                     </>
                   )}
-                  <span className="min-w-0 truncate">{c.target.split("\n")[0]}                  </span>
+                  <span className="min-w-0 truncate">{c.target.split("\n")[0]}</span>
                 </TransitionLink>
               )
             })}
@@ -188,15 +203,16 @@ export function AppSidebar({
           aria-label={`Switch to ${darkMode ? "light" : "dark"} mode`}
           title={`Switch to ${darkMode ? "light" : "dark"} mode`}
           className={cn(
-            "mb-1 flex w-full items-center gap-2.5 rounded-[10px] py-2 text-[13px] font-medium text-ink-2 outline-none transition-colors duration-100 hover:bg-hover hover:text-ink focus-visible:ring-2 focus-visible:ring-ring/60",
-            rail ? "justify-center px-0" : "px-2.5"
+            "mb-1 flex items-center gap-2.5 rounded-[10px] text-[13px] font-medium text-ink-2 outline-none transition-colors duration-100 hover:text-ink focus-visible:ring-2 focus-visible:ring-ring/60",
+            rail ? "material-key mx-auto size-9 justify-center" : "w-full px-2.5 py-2 hover:bg-hover"
           )}
         >
-          <span className="relative size-[18px] shrink-0">
+          <span className={cn("relative shrink-0", rail ? "size-4" : "size-[18px]")}>
             <Sun
               aria-hidden
               className={cn(
-                "absolute inset-0 size-[18px] transition-[opacity,scale,filter] duration-300 ease-[cubic-bezier(0.2,0,0,1)]",
+                "absolute inset-0 transition-[opacity,scale,filter] duration-300 ease-[cubic-bezier(0.2,0,0,1)]",
+                rail ? "size-4" : "size-[18px]",
                 darkMode ? "scale-100 opacity-100 blur-0" : "scale-[0.25] opacity-0 blur-[4px]"
               )}
               strokeWidth={1.5}
@@ -204,7 +220,8 @@ export function AppSidebar({
             <Moon
               aria-hidden
               className={cn(
-                "size-[18px] transition-[opacity,scale,filter] duration-300 ease-[cubic-bezier(0.2,0,0,1)]",
+                "transition-[opacity,scale,filter] duration-300 ease-[cubic-bezier(0.2,0,0,1)]",
+                rail ? "size-4" : "size-[18px]",
                 darkMode ? "scale-[0.25] opacity-0 blur-[4px]" : "scale-100 opacity-100 blur-0"
               )}
               strokeWidth={1.5}
@@ -220,7 +237,7 @@ export function AppSidebar({
           )}
           title="Authorized targets only"
         >
-          <Shield className="size-[18px] shrink-0 text-green" strokeWidth={1.5} />
+          <Shield className={cn("shrink-0 text-green", rail ? "size-4 opacity-70" : "size-[18px]")} strokeWidth={1.5} />
           {!rail && (
             <span className="min-w-0 text-[11px] leading-tight text-ink-3">
               Authorized targets only
@@ -252,15 +269,28 @@ function Row({
       aria-current={active ? "page" : undefined}
       title={collapsed ? label : undefined}
       className={cn(
-        "group flex items-center gap-2.5 rounded-[10px] py-2 text-[13px] font-medium outline-none transition-colors duration-100 focus-visible:ring-2 focus-visible:ring-ring/60",
-        collapsed ? "justify-center px-0" : "px-2.5",
-        active ? "bg-hover text-ink" : "text-ink-2 hover:bg-hover/60 hover:text-ink"
+        "group relative flex items-center gap-2.5 rounded-[10px] text-[13px] font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+        collapsed ? "material-key mx-auto size-9 shrink-0 justify-center" : "px-2.5 py-2",
+        active ? "text-ink" : "text-ink-2",
+        !collapsed && active && "material-key",
+        !collapsed && !active && "transition-colors duration-100 hover:bg-hover/60 hover:text-ink"
       )}
     >
+      {collapsed && active && (
+        <span
+          aria-hidden
+          className="absolute top-1/2 -left-2 h-5 w-[3px] -translate-y-1/2 rounded-full bg-ink"
+        />
+      )}
       <Icon
         className={cn(
-          "size-[18px] shrink-0",
-          active ? "text-ink" : "text-ink-3 group-hover:text-ink"
+          "shrink-0 transition-[color,opacity] duration-100",
+          collapsed ? "size-4" : "size-[18px]",
+          active
+            ? "text-ink"
+            : collapsed
+              ? "text-ink-3 opacity-60 group-hover:opacity-90"
+              : "text-ink-3 group-hover:text-ink"
         )}
         strokeWidth={1.5}
       />

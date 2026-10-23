@@ -199,6 +199,31 @@ SUPERVISOR_SCHEMAS = [
     },
 ]
 
+SUPERVISOR_SCHEMAS.append(
+    {
+        "type": "function",
+        "function": {
+            "name": "complete_engagement",
+            "description": (
+                "Declare the campaign's objective achieved and end the engagement. "
+                "Only use this in a goal-mode campaign, once the stated goal is "
+                "genuinely met and the evidence is recorded in your work directory. "
+                "A continuous campaign never completes."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "summary": {
+                        "type": "string",
+                        "description": "One line: what was achieved and where the evidence lives.",
+                    },
+                },
+                "required": ["summary"],
+            },
+        },
+    }
+)
+
 GENERATOR_SCHEMAS = [
     {
         "type": "function",
@@ -235,7 +260,13 @@ GENERATOR_SCHEMAS = [
 ]
 
 CORE_TOOLS = {"bash", "skill", "read_file", "write_file", "write_todos"}
-SUPERVISOR_TOOLS = {"spawn_hypothesis_generator", "hypothesis_list", "hypothesis_update", "generator_status"}
+SUPERVISOR_TOOLS = {
+    "spawn_hypothesis_generator",
+    "hypothesis_list",
+    "hypothesis_update",
+    "generator_status",
+    "complete_engagement",
+}
 GENERATOR_TOOLS = {"hypothesis_generate", "generator_done"}
 
 
@@ -736,7 +767,13 @@ async def generator_status(args: dict, campaign_id: int, stop=None) -> tuple[str
         return "generators:\n" + "\n".join(lines), True
 
 
+async def complete_engagement(args: dict, campaign_id: int, stop=None) -> tuple[str, bool]:
+    summary = _str_arg(args, "summary") or "objective achieved"
+    return f"engagement marked complete: {summary}", True
+
+
 CAMPAIGN_HANDLERS = {
+    "complete_engagement": complete_engagement,
     "spawn_hypothesis_generator": spawn_hypothesis_generator,
     "hypothesis_generate": hypothesis_generate,
     "hypothesis_list": hypothesis_list,

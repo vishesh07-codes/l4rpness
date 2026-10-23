@@ -2,10 +2,14 @@ import { useEffect, useRef, useState, type ChangeEvent, type FormEvent, type Rea
 import { useNavigate } from "react-router-dom"
 
 import { FieldAttachments } from "@/components/FieldAttachments"
+import { TriangleAlert } from "@/components/icons"
 import { PageHeader } from "@/components/PageHeader"
 import { TransitionLink } from "@/components/TransitionLink"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
+import { Field as FieldRoot, FieldDescription, FieldLabel } from "@/components/ui/field"
 import { Label } from "@/components/ui/label"
+import { SegmentedControl } from "@/components/ui/segmented"
 import {
   Select,
   SelectContent,
@@ -29,6 +33,7 @@ export function NewCampaign() {
   const [model, setModel] = useState("")
   const [efforts, setEfforts] = useState<string[]>([])
   const [effort, setEffort] = useState("")
+  const [mode, setMode] = useState<"continuous" | "goal">("continuous")
   const [text, setText] = useState(EMPTY_TEXT)
   const [files, setFiles] = useState<FileMap>(NO_FILES)
   const [error, setError] = useState("")
@@ -70,6 +75,7 @@ export function NewCampaign() {
     const form = new FormData()
     form.set("model", model)
     form.set("effort", effort)
+    form.set("mode", mode)
     for (const field of FIELDS) {
       form.set(field, text[field])
       for (const file of files[field]) form.append(`${field}_files`, file)
@@ -97,6 +103,7 @@ export function NewCampaign() {
       <form onSubmit={submit} className="flex flex-col gap-6">
         <Field
           label="Target"
+          htmlFor="target"
           hint="URL, IP, host — or paragraphs, anything you want. The agent starts immediately and keeps testing until you stop it."
         >
           <Textarea
@@ -155,13 +162,32 @@ export function NewCampaign() {
           </div>
         </div>
 
-        <Field label="Info" hint="What the application is, anything the agent should know.">
-          <Textarea value={text.info} onChange={edit("info")} rows={4} />
+        <Field
+          label="Run mode"
+          hint={
+            mode === "goal"
+              ? "Works until the goal in the brief is met, then stops and marks the campaign done."
+              : "Runs continuously until you stop it."
+          }
+        >
+          <SegmentedControl
+            value={mode}
+            onValueChange={setMode}
+            layoutId="campaign-mode"
+            options={[
+              { value: "continuous", label: "24×7" },
+              { value: "goal", label: "Until goal" },
+            ]}
+          />
+        </Field>
+
+        <Field label="Info" htmlFor="info" hint="What the application is, anything the agent should know.">
+          <Textarea id="info" value={text.info} onChange={edit("info")} rows={4} />
           <FieldAttachments files={files.info} onChange={attach("info")} disabled={busy} />
         </Field>
 
-        <Field label="Instructions" hint="What you want done.">
-          <Textarea value={text.instructions} onChange={edit("instructions")} rows={4} />
+        <Field label="Instructions" htmlFor="instructions" hint="What you want done.">
+          <Textarea id="instructions" value={text.instructions} onChange={edit("instructions")} rows={4} />
           <FieldAttachments
             files={files.instructions}
             onChange={attach("instructions")}
@@ -169,8 +195,8 @@ export function NewCampaign() {
           />
         </Field>
 
-        <Field label="Description" hint="Free notes about the target.">
-          <Textarea value={text.description} onChange={edit("description")} rows={3} />
+        <Field label="Description" htmlFor="description" hint="Free notes about the target.">
+          <Textarea id="description" value={text.description} onChange={edit("description")} rows={3} />
           <FieldAttachments
             files={files.description}
             onChange={attach("description")}
@@ -178,12 +204,18 @@ export function NewCampaign() {
           />
         </Field>
 
-        <Field label="Scope" hint="What is in and out of bounds.">
-          <Textarea value={text.scope} onChange={edit("scope")} rows={3} />
+        <Field label="Scope" htmlFor="scope" hint="What is in and out of bounds.">
+          <Textarea id="scope" value={text.scope} onChange={edit("scope")} rows={3} />
           <FieldAttachments files={files.scope} onChange={attach("scope")} disabled={busy} />
         </Field>
 
-        {error && <p className="text-sm text-destructive">{error}</p>}
+        {error && (
+          <Alert variant="destructive">
+            <TriangleAlert />
+            <AlertTitle>Could not create the campaign</AlertTitle>
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        )}
 
         <div className="flex justify-end gap-2">
           <Button type="button" variant="ghost" asChild>
@@ -201,19 +233,21 @@ export function NewCampaign() {
 function Field({
   label,
   hint,
+  htmlFor,
   children,
 }: {
   label: string
   hint?: string
+  htmlFor?: string
   children: ReactNode
 }) {
   return (
-    <div className="flex flex-col gap-2">
+    <FieldRoot>
       <div>
-        <Label>{label}</Label>
-        {hint && <p className="mt-0.5 text-xs text-ink-2">{hint}</p>}
+        <FieldLabel htmlFor={htmlFor}>{label}</FieldLabel>
+        {hint && <FieldDescription className="mt-0.5">{hint}</FieldDescription>}
       </div>
       {children}
-    </div>
+    </FieldRoot>
   )
 }

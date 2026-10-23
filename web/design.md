@@ -1,10 +1,10 @@
 # l4rpness — Design System
 
 The visual language for the l4rpness web console. Every component in
-`src/` follows this document. It is dark-first, quiet, and monochrome —
-modeled on [grok.com](https://grok.com): large near-black fields, one
-task in focus, near-white text, hairline rules, and a single warm-orange
-accent used as a condiment, never as decoration.
+`src/` follows this document. It is dark-first, quiet, and strictly
+monochrome: large near-black fields, one task in focus, an ink ramp for
+text, and polished **silver metal** reserved for the primary action. Color
+is semantic only (status); it is never decoration.
 
 The system is token-driven. Components almost never hard-code a color —
 they read the semantic CSS variables defined in
@@ -18,13 +18,16 @@ component, reach for an existing token before inventing a value.
 
 1. **Dark-first.** Dark mode is the default and the design target. Light
    mode is supported but secondary — verify dark first.
-2. **Monochrome with one accent.** Hierarchy comes from surface elevation
-   and the ink ramp, not from color. Orange (`--accent`) marks the single
-   most important action or live signal on a view. If two things are
-   orange, one of them is wrong.
-3. **Hairlines over shadows.** Separation is a 1px line first. Shadows are
-   reserved for things that genuinely float (popovers, the composer,
-   toasts) and stay soft.
+2. **Monochrome + silver.** Hierarchy comes from surface elevation, the
+   ink ramp, and depth — not from hue. The single filled primary action is
+   a **polished silver key** in dark mode (graphite, its inverse, in light);
+   everything else is neutral. Saturated color appears only on status
+   (green / amber / red). If a surface is tinted, it is wrong.
+3. **Physical depth over flat hairlines.** The console should read as
+   machined hardware: raised keys, recessed wells, beveled panels. Depth
+   comes from layered `box-shadow` + a light-catching bevel, not from a
+   solid border. Keep a hairline only where it marks structure (dividers)
+   or state (focus, selected). See §4 *Materials*.
 4. **Quiet motion.** Transitions are short (120–300ms) and eased with the
    shared curves. Motion confirms an action or reveals structure; it never
    performs.
@@ -80,13 +83,24 @@ was the bug this value fixes. Re-measure if you change any surface token.
 | `--line-soft`    | Barely-there internal divider     |
 | `--field`        | Input / control fill              |
 
-### Accent — grok warm orange
+### Primary key — silver metal
 
-| Token           | Role                                      | ~Hex      |
-| --------------- | ----------------------------------------- | --------- |
-| `--accent`      | Primary action fill, focus ring, live dot | `#ff6b35` |
-| `--accent-ink`  | Accent text/links on dark (brighter)      | `#ff875a` |
-| `--accent-tint` | Low-alpha accent wash (empty-state icons) | 16% accent |
+The one filled action is a metal key, not a color. Its face and gloss are
+monochrome; only lightness changes between themes.
+
+| Token                    | Role                                      |
+| ------------------------ | ----------------------------------------- |
+| `--key-accent-bg`        | Key face — silver (dark) / graphite (light) |
+| `--key-accent-bg-hover`  | Hover face                                |
+| `--key-accent-bg-press`  | Pressed face                              |
+| `--key-accent-fg`        | Text on the key (dark on silver, light on graphite) |
+| `--key-accent-gloss`     | Bright top + shaded bottom metallic overlay |
+| `--key-accent-shadow*`   | Ring + top highlight + contact + ambient  |
+
+`index.css` repoints `--accent` at `--hover` (so shadcn's `bg-accent`
+utilities stay neutral). The legacy `--accent-*` tokens remain defined but
+are **not** used for UI chrome — status and the silver key have replaced the
+old orange accent.
 
 ### Semantic (status only, used sparingly)
 
@@ -94,16 +108,16 @@ was the bug this value fixes. Re-measure if you change any surface token.
 error/destructive. Each has a `-tint` companion for soft fills. Status
 pills derive fill and border from these via `color-mix`.
 
-`--orange` is an **amber at hue 80°, not the accent's 43.2°**. Two hues
-within 15° read as the same color, so a status hue near the accent would
-say "interactive" on something static. Keep any new status hue at least
-15° clear of 43.2°.
+Status hues carry the only saturation in the interface and never touch
+chrome. Keep running amber clear of error red (≥ 15° apart) so a live signal
+can't read as a failure.
 
 ### Tailwind usage
 
 Tokens surface as utilities: `bg-page`, `bg-surface`, `bg-inset`,
 `text-ink`, `text-ink-2`, `text-ink-3`, `border-line`, `border-line-strong`,
-`bg-accent`, `text-accent-ink`, `bg-accent-tint`, `bg-green/-orange/-red`.
+`bg-hover`, `text-key-accent-fg`, `bg-green/-orange/-red`. Chrome is
+monochrome; reach for the material classes (§4) before any color utility.
 
 **Pages use the ink ramp.** Prefer `text-ink` / `text-ink-2` / `text-ink-3`
 over the shadcn aliases (`text-muted-foreground`, `text-foreground`) so
@@ -172,7 +186,7 @@ inline items: `gap-2` / `gap-1.5`.
 
 Use the semantic shadow tokens, never ad-hoc `shadow-*`:
 
-- `shadow-hairline` — a 1px ring, no blur. The default separator.
+- `shadow-hairline` — a 1px ring, no blur. Structure/dividers only.
 - `shadow-btn` — resting control.
 - `shadow-card` — cards and panels.
 - `shadow-raised` — floating buttons, "jump to latest".
@@ -180,6 +194,31 @@ Use the semantic shadow tokens, never ad-hoc `shadow-*`:
 
 In dark mode the ring goes to a low-alpha **light** hairline so the edge
 dissolves into the shadow as one stroke.
+
+### Materials
+
+Depth is a small system of composable classes, all token-driven:
+
+- `.material-key` — a **raised control face**. Animatable `background-color`
+  under a static gloss gradient, plus `--key-shadow` (ring + top highlight +
+  contact + ambient). Hover lightens and lifts; `:active` darkens and
+  switches to an inset shadow so the key visibly **sinks**.
+- `.material-accent` — the **silver metal primary key**. Sets the local
+  `--_key-*` hooks from the `--key-accent-*` tokens (silver face + metallic
+  gloss in dark, graphite in light). Pair with `.material-key`.
+- `.material-danger` — the same hooks recolored to semantic red for
+  destructive keys. Pair with `.material-key`.
+- `.material-well` — a **recessed** track or field (`--inset` fill + inset
+  shadow). Composers, segmented tracks, readouts.
+- `.material-bevel` — the bare top-light/bottom-shade edge for panels that
+  already carry `shadow-card` / `shadow-overlay`.
+
+Neutral key gradients stay within ±4% lightness of their base. The silver
+primary key is the exception: its `--key-accent-gloss` runs a bright top to
+a shaded bottom on purpose, to read as lit metal. Nothing is ever tinted —
+the metal is pure greyscale, and the `--ink` scale is unchanged so contrast
+holds. Retune via the `--key-*` / `--well` / `--bevel` tokens in
+`foundation.css`; never re-derive per component.
 
 ---
 
@@ -203,7 +242,9 @@ animation. Sidebar rows, nav hovers and card hovers are all in this bucket.
 - Tooltips delay before the first one, then open instantly. The
   `TooltipProvider` in `App.tsx` sets `delayDuration={500}`
   `skipDelayDuration={300}` — do not set per-tooltip delays.
-- Press feedback is `active:scale-[0.96]`, that exact value.
+- Press feedback is `active:scale-[0.96]`, that exact value. On a
+  `.material-key` it also swaps to the pressed face + inset shadow so the
+  control sinks as it scales.
 - Name the properties you transition (`transition-[box-shadow,transform]`),
   never `transition: all`.
 - Stagger an infrequent staged entrance 30–80ms per item. The Dashboard grid
@@ -362,29 +403,31 @@ negotiable per-page.
 
 ### Buttons
 
-`default` is a **`--primary` (near-white in dark) fill** — that is the
-filled primary action, one per view. `secondary` / `outline` for
-supporting actions, `ghost` for icon buttons and toolbars, `destructive`
-only for delete/stop. Sizes `sm` (h-8) default in this app.
+Buttons are physical keys. `default` is the **polished silver key**
+(`.material-key .material-accent`, `--key-accent-fg` text) — the single
+filled primary action per view, and the only bright metal on the screen.
+`secondary` / `outline` are **neutral raised keys** (`.material-key`),
+`ghost` stays flat for icon buttons and toolbars, `destructive` is the red
+key (`.material-key .material-danger`, `--key-fg` for AA). Sizes `sm` (h-8)
+default in this app.
 
-The accent is reserved for focus rings, live/status marks and selected
-state — it is not the primary button fill. Filling a second control on the
-same view breaks "exactly one filled action per view".
+A second silver key on the same view breaks "exactly one filled action per
+view". Focus rings are neutral (`--ink-2`), not the key color.
 
 Every pressable control presses with `active:scale-[0.96]` — that exact
-value, not `0.95`.
+value, not `0.95` — and key surfaces additionally sink via `.material-key`.
 
 ### Status & live signals
 
-Running state = a pulsing accent/orange dot + label. Completed states use
+Running state = a pulsing amber dot + label. Completed states use
 `StatusBadge` with a semantic dot. Never more than one live signal per row.
 
 ---
 
 ## 8. Accessibility
 
-- Focus-visible ring is `2px --accent` at `2px` offset; inputs suppress the
-  ring in favor of a border shift.
+- Focus-visible ring is neutral (`2px --ink-2`) at `2px` offset; inputs
+  suppress the ring in favor of a border shift.
 - Meet WCAG AA on text: `--ink`/`--ink-2` on `--page`/`--surface` pass;
   `--ink-3` is for non-essential labels only.
 - Every icon button has an `aria-label` and `title`. Icons inside labeled

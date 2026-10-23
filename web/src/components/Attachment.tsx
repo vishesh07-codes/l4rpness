@@ -49,7 +49,15 @@ export function AttachmentChip({
   return (
     <Attachment size="sm" state={state} className={cn("min-w-0", className)}>
       <AttachmentMedia variant={showThumb ? "image" : "icon"}>
-        {showThumb ? <img src={previewUrl} alt="" /> : <Icon className={TONE_TEXT[kind.tone]} />}
+        {showThumb ? (
+          <img
+            src={previewUrl}
+            alt=""
+            className="outline outline-1 -outline-offset-1 outline-black/10 dark:outline-white/10"
+          />
+        ) : (
+          <Icon className={TONE_TEXT[kind.tone]} />
+        )}
       </AttachmentMedia>
       <AttachmentContent>
         <AttachmentTitle className="font-mono text-[11px]">{name}</AttachmentTitle>

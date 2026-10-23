@@ -74,6 +74,6 @@ export const TONE_TEXT: Record<FileTone, string> = {
   red: "text-red",
   green: "text-green",
   orange: "text-orange",
-  accent: "text-accent-ink",
+  accent: "text-ink-2",
   neutral: "text-ink-3",
 }

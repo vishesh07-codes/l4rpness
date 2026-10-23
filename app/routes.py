@@ -8,7 +8,7 @@ from fastapi import APIRouter, File, Form, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
-from . import agent, config, db, mcp, skills, supervisor, tools, uploads
+from . import agent, config, db, mcp, settings, skills, supervisor, tools, uploads, workspace
 
 log = logging.getLogger("l4rpness")
 router = APIRouter(prefix="/api")
@@ -48,6 +48,92 @@ async def app_config():
         "efforts": config.EFFORTS,
         "default_effort": config.DEFAULT_EFFORT,
         "agent_configured": config.CONFIGURED,
+    }
+
+
+class ProviderKeysUpdate(BaseModel):
+    values: dict[str, str]
+
+
+class RuntimeConfigUpdate(BaseModel):
+    values: dict[str, str]
+
+
+@router.get("/settings/providers")
+def settings_providers():
+    """Provider key status for the Settings UI (values stay masked)."""
+    return settings.status()
+
+
+@router.put("/settings/providers")
+def save_settings_providers(update: ProviderKeysUpdate):
+    """Save UI-managed provider keys; they apply immediately and persist in
+    the data volume. Empty values clear that var's override."""
+    try:
+        saved = settings.save(update.values or {})
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    agent._models.clear()
+    return saved
+
+
+@router.get("/settings/config")
+def settings_config():
+    """Runtime config schema + values for the Settings UI."""
+    return settings.runtime_status()
+
+
+@router.put("/settings/config")
+def save_settings_config(update: RuntimeConfigUpdate):
+    """Save UI-managed runtime overrides; they apply immediately and persist
+    in the data volume."""
+    try:
+        return settings.save_runtime(update.values or {})
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@router.delete("/settings/config")
+def reset_settings_config():
+    """Drop every UI-managed runtime override (config.toml wins again)."""
+    return settings.reset_runtime()
+
+
+@router.get("/settings/host")
+def settings_host():
+    """What the container can see of the host `.env` (values stay masked)."""
+    return settings.host_state()
+
+
+class HostPushUpdate(BaseModel):
+    values: dict[str, str]
+
+
+@router.post("/settings/host/push")
+def push_settings_host(update: HostPushUpdate):
+    """Write staged keys through to the mounted host `.env`."""
+    try:
+        written = settings.push_host_env(update.values or {})
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    agent._models.clear()
+    return {
+        "written": written,
+        "providers": settings.status(),
+        "host": settings.host_state(),
+    }
+
+
+@router.post("/settings/host/reload")
+def reload_settings_host():
+    """Pull the mounted host `.env` into the live environment (host wins over
+    conflicting Settings overrides)."""
+    changed = settings.reload_host_env()
+    agent._models.clear()
+    return {
+        "changed": changed,
+        "providers": settings.status(),
+        "host": settings.host_state(),
     }
 
 
@@ -113,6 +199,17 @@ def update_skill(name: str, body: SkillIn):
         raise HTTPException(400, str(exc))
 
 
+@router.delete("/skills/{name}", status_code=204)
+def delete_skill(name: str):
+    try:
+        skills.delete(name)
+    except FileNotFoundError:
+        raise HTTPException(404, "skill not found")
+    except PermissionError:
+        raise HTTPException(403, "built-in skills cannot be deleted")
+    return Response(status_code=204)
+
+
 class McpServerIn(BaseModel):
     name: str
     command: list[str] = []
@@ -164,6 +261,7 @@ async def create_campaign(
     target: str = Form(""),
     model: str = Form(""),
     effort: str = Form(""),
+    mode: str = Form(""),
     info: str = Form(""),
     instructions: str = Form(""),
     description: str = Form(""),
@@ -180,6 +278,8 @@ async def create_campaign(
         model = config.DEFAULT_MODEL
     if effort not in config.EFFORTS:
         effort = config.DEFAULT_EFFORT
+    if mode not in ("continuous", "goal"):
+        mode = "continuous"
 
     uploads_by_field = {
         "target": target_files,
@@ -195,10 +295,10 @@ async def create_campaign(
         with db.db() as conn:
             cur = conn.execute(
                 """
-                INSERT INTO campaigns (target, info, instructions, description, scope, model, effort)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO campaigns (target, info, instructions, description, scope, model, effort, mode)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (target.strip(), info.strip(), instructions.strip(), description.strip(), scope.strip(), model, effort),
+                (target.strip(), info.strip(), instructions.strip(), description.strip(), scope.strip(), model, effort, mode),
             )
             campaign_id = cur.lastrowid
             if campaign_id is None:
@@ -234,6 +334,32 @@ def get_campaign(campaign_id: int):
             (campaign_id,),
         ).fetchall()
     return {**row_dict(campaign), "running": campaign_id in RUNNING, "attachments": [row_dict(a) for a in attachments]}
+
+
+@router.get("/campaigns/{campaign_id}/files")
+def list_work_files(campaign_id: int):
+    return {"files": workspace.tree(campaign_id)}
+
+
+@router.get("/campaigns/{campaign_id}/file/raw")
+def download_work_file(campaign_id: int, path: str):
+    try:
+        file = workspace.raw_path(campaign_id, path)
+    except ValueError:
+        raise HTTPException(400, "invalid path")
+    except FileNotFoundError:
+        raise HTTPException(404, "file not found")
+    return FileResponse(file, filename=file.name)
+
+
+@router.get("/campaigns/{campaign_id}/file")
+def read_work_file(campaign_id: int, path: str):
+    try:
+        return workspace.read_text(campaign_id, path)
+    except ValueError:
+        raise HTTPException(400, "invalid path")
+    except FileNotFoundError:
+        raise HTTPException(404, "file not found")
 
 
 @router.delete("/campaigns/{campaign_id}")
@@ -944,6 +1070,14 @@ async def steer_campaign(
 
     if not supervisor.start(campaign_id):
         log.warning("steer stored for campaign %d but the supervisor did not start", campaign_id)
+    else:
+        run = RUNNING.get(campaign_id)
+        if run is not None and run.get("supervised"):
+            # interrupt the in-flight turn so the queued message is picked up
+            # now instead of after the current chain runs to completion
+            run["restart"] = True
+            run["stop"].set()
+            push_event(campaign_id, "notice", {"text": "interrupted — picking up your message"})
 
     return {**row_dict(row), "attachments": attachments}
 

@@ -89,3 +89,27 @@ def test_save_conflict_and_overwrite(skill_roots):
     entry = skills.load("dup")
     assert entry is not None
     assert entry["body"] == "two"
+
+
+def test_delete_removes_custom_skill(skill_roots):
+    _, custom = skill_roots
+    skills.save("temp", "Use when temp", "body")
+    assert (custom / "skills" / "temp").is_dir()
+
+    skills.delete("temp")
+    assert skills.load("temp") is None
+    assert not (custom / "skills" / "temp").exists()
+
+
+def test_delete_missing_raises(skill_roots):
+    with pytest.raises(FileNotFoundError):
+        skills.delete("nope")
+
+
+def test_delete_builtin_refused(skill_roots):
+    builtin, _ = skill_roots
+    make_skill(builtin, "core", "Use when core")
+
+    with pytest.raises(PermissionError):
+        skills.delete("core")
+    assert skills.load("core") is not None

@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS campaigns (
     scope TEXT NOT NULL DEFAULT '',
     model TEXT NOT NULL,
     effort TEXT NOT NULL DEFAULT 'high',
+    mode TEXT NOT NULL DEFAULT 'continuous',
     status TEXT NOT NULL DEFAULT 'created',
     auto_running INTEGER NOT NULL DEFAULT 0,
     usage_in INTEGER NOT NULL DEFAULT 0,
@@ -124,6 +125,8 @@ def _columns(conn, table):
 def migrate(conn):
     if "effort" not in _columns(conn, "campaigns"):
         conn.execute("ALTER TABLE campaigns ADD COLUMN effort TEXT NOT NULL DEFAULT 'high'")
+    if "mode" not in _columns(conn, "campaigns"):
+        conn.execute("ALTER TABLE campaigns ADD COLUMN mode TEXT NOT NULL DEFAULT 'continuous'")
     if "auto_running" not in _columns(conn, "campaigns"):
         conn.execute("ALTER TABLE campaigns ADD COLUMN auto_running INTEGER NOT NULL DEFAULT 0")
     if "usage_in" not in _columns(conn, "campaigns"):
