@@ -12,7 +12,7 @@ from . import agent, config, db, uploads
 log = logging.getLogger("l4rpness")
 router = APIRouter(prefix="/api")
 
-RUNNING: dict[int, asyncio.Event] = {}
+RUNNING: dict[int, dict] = {}
 
 
 def row_dict(row):
@@ -131,14 +131,14 @@ def get_campaign(campaign_id: int):
             "SELECT * FROM attachments WHERE campaign_id = ? ORDER BY field, id",
             (campaign_id,),
         ).fetchall()
-    return {**row_dict(campaign), "attachments": [row_dict(a) for a in attachments]}
+    return {**row_dict(campaign), "running": campaign_id in RUNNING, "attachments": [row_dict(a) for a in attachments]}
 
 
 @router.delete("/campaigns/{campaign_id}")
 def delete_campaign(campaign_id: int):
-    stop = RUNNING.get(campaign_id)
-    if stop is not None:
-        stop.set()
+    run = RUNNING.get(campaign_id)
+    if run is not None:
+        run["stop"].set()
 
     with db.db() as conn:
         load_campaign(conn, campaign_id)
@@ -154,12 +154,23 @@ def stop_campaign(campaign_id: int):
     with db.db() as conn:
         load_campaign(conn, campaign_id)
 
-    stop = RUNNING.get(campaign_id)
-    if stop is None:
+    run = RUNNING.get(campaign_id)
+    if run is None:
         return {"stopped": False}
 
-    stop.set()
+    run["stop"].set()
     return {"stopped": True}
+
+
+@router.get("/campaigns/{campaign_id}/live")
+def live_campaign(campaign_id: int):
+    with db.db() as conn:
+        load_campaign(conn, campaign_id)
+
+    run = RUNNING.get(campaign_id)
+    if run is None:
+        return {"running": False, "parts": [], "pending": None}
+    return {"running": True, "parts": run["parts"], "pending": run["pending"]}
 
 
 class MessageIn(BaseModel):
@@ -206,13 +217,13 @@ async def send_message(campaign_id: int, body: MessageIn):
     history.append({"role": "user", "content": content})
 
     stop = asyncio.Event()
-    RUNNING[campaign_id] = stop
+    parts: list = []
+    RUNNING[campaign_id] = {"stop": stop, "parts": parts, "pending": None}
 
     async def stream():
         thinking = []
         answer = []
         calls = []
-        parts = []
         failure = ""
         stopped = False
 
@@ -233,10 +244,12 @@ async def send_message(campaign_id: int, body: MessageIn):
                     add_text("content", data)
                     yield sse("content", {"text": data})
                 elif kind == "tool_start":
+                    RUNNING[campaign_id]["pending"] = data["name"]
                     yield sse("tool_start", data)
                 elif kind == "tool_call":
                     calls.append({**data, "output": None, "ok": None, "ms": None})
                     parts.append({"type": "tool", **data})
+                    RUNNING[campaign_id]["pending"] = None
                     yield sse("tool_call", data)
                 elif kind == "stopped":
                     stopped = True

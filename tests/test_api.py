@@ -263,13 +263,32 @@ def test_stop_idle_campaign(client):
 
 def test_running_flag_and_409(client):
     campaign = create(client)
-    routes.RUNNING[campaign["id"]] = asyncio.Event()
+    routes.RUNNING[campaign["id"]] = {"stop": asyncio.Event(), "parts": [], "pending": None}
     try:
         listed = client.get("/api/campaigns").json()
         assert listed[0]["running"] is True
 
         res = client.post(f"/api/campaigns/{campaign['id']}/messages", json={"content": "hi"})
         assert res.status_code == 409
+    finally:
+        routes.RUNNING.pop(campaign["id"], None)
+
+
+def test_live_snapshot(client):
+    campaign = create(client)
+    idle = client.get(f"/api/campaigns/{campaign['id']}/live").json()
+    assert idle == {"running": False, "parts": [], "pending": None}
+
+    routes.RUNNING[campaign["id"]] = {
+        "stop": asyncio.Event(),
+        "parts": [{"type": "content", "text": "hi"}],
+        "pending": "bash",
+    }
+    try:
+        body = client.get(f"/api/campaigns/{campaign['id']}/live").json()
+        assert body["running"] is True
+        assert body["parts"] == [{"type": "content", "text": "hi"}]
+        assert body["pending"] == "bash"
     finally:
         routes.RUNNING.pop(campaign["id"], None)
 

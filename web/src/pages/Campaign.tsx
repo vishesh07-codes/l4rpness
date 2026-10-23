@@ -79,6 +79,34 @@ export function Campaign() {
     viewport?.scrollTo({ top: viewport.scrollHeight, behavior: "smooth" })
   }
 
+  useEffect(() => {
+    if (!campaign?.running || pending) return
+
+    let active = true
+    const tick = async () => {
+      try {
+        const live = await api.liveCampaign(campaignId)
+        if (!active) return
+        if (live.running) {
+          setStream({ parts: live.parts, pendingTool: live.pending })
+        } else {
+          setStream(null)
+          setMessages(await api.listMessages(campaignId))
+          setCampaign((c) => (c ? { ...c, running: false } : c))
+        }
+      } catch {
+        // the next tick retries
+      }
+    }
+
+    tick()
+    const timer = setInterval(tick, 1500)
+    return () => {
+      active = false
+      clearInterval(timer)
+    }
+  }, [campaign?.running, pending, campaignId])
+
   async function send() {
     const content = input.trim()
     if (!content || pending) return

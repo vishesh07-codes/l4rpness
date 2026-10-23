@@ -143,6 +143,10 @@ export const api = {
     req<{ deleted: number }>(`/api/campaigns/${id}`, { method: "DELETE" }),
   stopCampaign: (id: number) =>
     req<{ stopped: boolean }>(`/api/campaigns/${id}/stop`, { method: "POST" }),
+  liveCampaign: (id: number) =>
+    req<{ running: boolean; parts: Part[]; pending: string | null }>(
+      `/api/campaigns/${id}/live`
+    ),
   listMessages: (id: number) => req<Message[]>(`/api/campaigns/${id}/messages`),
   streamMessage,
   attachmentUrl: (id: number) => `/api/attachments/${id}`,
