@@ -9,6 +9,7 @@ services:
         required: false
     volumes:
       - l4rpness-data:/app/data
+      - ./config.toml:/app/config.toml:ro
     restart: unless-stopped
 
 volumes:

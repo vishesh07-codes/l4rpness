@@ -1,0 +1,28 @@
+[server]
+host = "0.0.0.0"
+port = 4517
+
+[deepseek]
+base_url = "https://api.deepseek.com"
+model = "deepseek-flash"
+effort = "high"
+efforts = ["low", "high", "max"]
+request_timeout = 180
+temperature = 0.3 # ignored while thinking mode is on
+
+[storage]
+data_dir = "data"
+
+[uploads]
+max_bytes = 10485760
+max_files_per_field = 5
+file_char_cap = 50000
+total_char_cap = 120000
+
+[tools]
+max_steps = -1 # -1 means no cap
+bash_timeout = 120
+bash_output_bytes = 10485760
+output_chars = 20000
+read_max_lines = 2000
+http_timeout = 30
