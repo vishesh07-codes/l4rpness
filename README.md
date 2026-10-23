@@ -90,7 +90,7 @@ The Vite dev server proxies /api to port 4517.
 
     .venv/bin/pytest
 
-Ten tests cover the API, the prompt assembly and the streaming reply. The DeepSeek call is stubbed, so tests run offline.
+Eleven tests cover the API, the prompt assembly and the streaming reply. The DeepSeek call is stubbed, so tests run offline.
 
 ## Roadmap
 
