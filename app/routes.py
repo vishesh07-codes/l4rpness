@@ -7,7 +7,7 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
-from . import agent, config, db, seed, skills, uploads
+from . import agent, config, db, mcp, seed, skills, uploads
 
 log = logging.getLogger("l4rpness")
 router = APIRouter(prefix="/api")
@@ -28,13 +28,13 @@ def load_campaign(conn, campaign_id):
 
 @router.get("/health")
 def health():
-    return {"status": "ok", "agent_configured": bool(config.API_KEY)}
+    return {"status": "ok", "agent_configured": config.CONFIGURED}
 
 
 @router.get("/config")
 async def app_config():
     models = await agent.models()
-    default = config.DEFAULT_MODEL
+    default = f"{config.PROVIDER}/{config.DEFAULT_MODEL}"
     if models and default not in models:
         default = models[0]
     if default not in models:
@@ -46,7 +46,7 @@ async def app_config():
         "provider": config.PROVIDER,
         "efforts": config.EFFORTS,
         "default_effort": config.DEFAULT_EFFORT,
-        "agent_configured": bool(config.API_KEY),
+        "agent_configured": config.CONFIGURED,
     }
 
 
@@ -110,6 +110,37 @@ def update_skill(name: str, body: SkillIn):
         return skills.save(name, body.description, body.body, overwrite=True)
     except ValueError as exc:
         raise HTTPException(400, str(exc))
+
+
+class McpServerIn(BaseModel):
+    name: str
+    command: list[str] = []
+    url: str = ""
+    env: dict[str, str] = {}
+    headers: dict[str, str] = {}
+    enabled: list[str] = []
+    tools: list[str] = []
+
+
+@router.get("/mcp")
+def get_mcp():
+    return mcp.status()
+
+
+@router.put("/mcp")
+def put_mcp(servers: list[McpServerIn]):
+    specs = []
+    for server in servers:
+        spec = server.model_dump()
+        if not spec["name"].strip():
+            raise HTTPException(400, "server name is required")
+        if not spec["command"] and not spec["url"]:
+            raise HTTPException(400, f"{spec['name']}: needs a command or a url")
+        spec["tools"] = spec["enabled"] or spec["tools"]
+        specs.append({key: spec[key] for key in ("name", "command", "url", "env", "headers", "tools")})
+
+    mcp.save(specs)
+    return mcp.status()
 
 
 @router.get("/campaigns")
@@ -440,13 +471,14 @@ async def send_message(
     items = await uploads.collect(files) if files else []
     if not text and not items:
         raise HTTPException(400, "message is empty")
-    if not config.API_KEY:
-        raise HTTPException(400, "DEEPSEEK_API_KEY is not set")
     if campaign_id in RUNNING:
         raise HTTPException(409, "campaign is already running")
 
     with db.db() as conn:
         campaign = load_campaign(conn, campaign_id)
+        provider, _ = agent.split_model(campaign["model"])
+        if not agent.provider_key(provider):
+            raise HTTPException(400, f"API key is not set for provider {provider}")
         attachments = conn.execute(
             "SELECT * FROM attachments WHERE campaign_id = ?",
             (campaign_id,),

@@ -66,12 +66,16 @@ SETTINGS = load()
 SERVER_HOST = SETTINGS["server"]["host"]
 SERVER_PORT = SETTINGS["server"]["port"]
 
+PROVIDERS = SETTINGS["llm"]["providers"]
 PROVIDER = SETTINGS["llm"]["provider"]
-PROVIDER_CONF = SETTINGS["llm"]["providers"].get(PROVIDER, {})
+PROVIDER_CONF = PROVIDERS.get(PROVIDER, {})
 
 API_KEY = os.getenv(PROVIDER_CONF.get("api_key_env", "DEEPSEEK_API_KEY"), "").strip()
 BASE_URL = PROVIDER_CONF.get("base_url", "https://api.deepseek.com")
 THINKING = bool(PROVIDER_CONF.get("thinking", False))
+CONFIGURED = any(
+    os.getenv(conf.get("api_key_env", ""), "").strip() for conf in PROVIDERS.values()
+)
 DEFAULT_MODEL = SETTINGS["llm"]["model"]
 DEFAULT_EFFORT = SETTINGS["llm"]["effort"]
 EFFORTS = list(SETTINGS["llm"]["efforts"])

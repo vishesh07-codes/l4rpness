@@ -371,8 +371,18 @@ def test_seed_history_creates_messages(client, monkeypatch, tmp_path):
     assert "Initialized seed.example." in messages[1]["parts"]
 
 
+def test_split_model():
+    assert agent.split_model("deepseek/deepseek-flash") == ("deepseek", "deepseek-flash")
+    assert agent.split_model("9router/ag/gemini-3.8-flash-high") == (
+        "9router",
+        "ag/gemini-3.8-flash-high",
+    )
+    assert agent.split_model("deepseek-chat") == ("deepseek", "deepseek-chat")
+    assert agent.split_model("some-random") == (config.PROVIDER, "some-random")
+
+
 def test_chat_without_key(client, monkeypatch):
-    monkeypatch.setattr(config, "API_KEY", "")
+    monkeypatch.setattr(agent, "provider_key", lambda provider: "")
     campaign = create(client)
 
     res = client.post(f"/api/campaigns/{campaign['id']}/messages", data={"content": "hi"})

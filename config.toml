@@ -3,8 +3,8 @@ host = "0.0.0.0"
 port = 4517
 
 [llm]
-provider = "deepseek"
-model = "deepseek-flash"
+provider = "9router"
+model = "ag/gemini-3.8-flash-high"
 effort = "high"
 efforts = ["low", "high", "max"]
 request_timeout = 180
@@ -14,6 +14,11 @@ temperature = 0.3 # ignored while thinking mode is on
 base_url = "https://api.deepseek.com"
 api_key_env = "DEEPSEEK_API_KEY"
 thinking = true
+
+[llm.providers."9router"]
+base_url = "http://70.153.137.203/v1"
+api_key_env = "ROUTER9_API_KEY"
+thinking = false
 
 [storage]
 data_dir = "data"

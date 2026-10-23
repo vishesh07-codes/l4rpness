@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 from collections.abc import AsyncIterator
 from string import Template
 from typing import Any, cast
@@ -7,7 +8,7 @@ from typing import Any, cast
 from openai import AsyncOpenAI
 from openai.types.chat import ChatCompletionMessageParam
 
-from . import config, skills, tools, uploads
+from . import config, mcp, skills, tools, uploads
 
 log = logging.getLogger("l4rpness")
 
@@ -15,8 +16,28 @@ SYSTEM = Template((config.ROOT / "prompts" / "campaign_agent.md").read_text())
 _models: list[str] = []
 
 
-def _client() -> AsyncOpenAI:
-    return AsyncOpenAI(api_key=config.API_KEY, base_url=config.BASE_URL, timeout=config.REQUEST_TIMEOUT)
+def provider_key(provider: str) -> str:
+    conf = config.PROVIDERS.get(provider, {})
+    return os.getenv(conf.get("api_key_env", ""), "").strip()
+
+
+def _client(provider: str | None = None) -> AsyncOpenAI:
+    name = provider or config.PROVIDER
+    conf = config.PROVIDERS.get(name, {})
+    return AsyncOpenAI(
+        api_key=provider_key(name) or config.API_KEY,
+        base_url=conf.get("base_url", config.BASE_URL),
+        timeout=config.REQUEST_TIMEOUT,
+    )
+
+
+def split_model(model: str) -> tuple[str, str]:
+    name, sep, bare = model.partition("/")
+    if sep and name in config.PROVIDERS:
+        return name, bare
+    if model.startswith("deepseek-"):
+        return "deepseek", model
+    return config.PROVIDER, model
 
 
 async def models() -> list[str]:
@@ -24,13 +45,18 @@ async def models() -> list[str]:
     if _models:
         return _models
 
-    try:
-        page = await _client().models.list()
-    except Exception:
-        log.exception("model list failed")
-        return []
+    merged = []
+    for name in config.PROVIDERS:
+        if not provider_key(name):
+            continue
+        try:
+            page = await _client(name).models.list()
+        except Exception:
+            log.warning("model list failed for provider %s", name)
+            continue
+        merged += [f"{name}/{model.id}" for model in page.data]
 
-    _models = sorted(model.id for model in page.data)
+    _models = sorted(set(merged))
     return _models
 
 
@@ -80,15 +106,18 @@ def _parse_args(raw: str) -> tuple[dict, str]:
 
 
 async def _step(client, campaign, messages, calls: list) -> AsyncIterator[tuple[str, Any]]:
+    provider, model = split_model(campaign["model"])
+    conf = config.PROVIDERS.get(provider, {})
+
     extra: dict = {}
-    if config.THINKING:
+    if conf.get("thinking"):
         extra["reasoning_effort"] = cast(Any, campaign["effort"] or config.DEFAULT_EFFORT)
         extra["extra_body"] = {"thinking": {"type": "enabled"}}
 
     response = await client.chat.completions.create(
-        model=campaign["model"],
+        model=model,
         messages=cast(Any, messages),
-        tools=cast(Any, tools.SCHEMAS),
+        tools=cast(Any, tools.SCHEMAS + mcp.schemas()),
         stream=True,
         temperature=config.TEMPERATURE,
         **extra,
@@ -126,7 +155,8 @@ async def _step(client, campaign, messages, calls: list) -> AsyncIterator[tuple[
 
 
 async def run(campaign, attachment_rows, history, campaign_id, stop=None) -> AsyncIterator[tuple[str, Any]]:
-    client = _client()
+    provider, _ = split_model(campaign["model"])
+    client = _client(provider)
     messages: list[dict] = [{"role": "system", "content": build_prompt(campaign, attachment_rows)}]
     messages += [{"role": m["role"], "content": m["content"]} for m in history]
 
