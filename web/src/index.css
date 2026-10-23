@@ -136,3 +136,17 @@
     @apply bg-background text-foreground antialiased;
   }
 }
+
+@keyframes pulse-bar {
+  0%,
+  80%,
+  100% {
+    transform: scaleY(0.35);
+    opacity: 0.5;
+  }
+  40% {
+    transform: scaleY(1);
+    opacity: 1;
+  }
+}
+

@@ -131,6 +131,17 @@ def get_campaign(campaign_id: int):
     return {**row_dict(campaign), "attachments": [row_dict(a) for a in attachments]}
 
 
+@router.delete("/campaigns/{campaign_id}")
+def delete_campaign(campaign_id: int):
+    with db.db() as conn:
+        load_campaign(conn, campaign_id)
+        conn.execute("DELETE FROM campaigns WHERE id = ?", (campaign_id,))
+
+    shutil.rmtree(config.UPLOAD_DIR / str(campaign_id), ignore_errors=True)
+    shutil.rmtree(config.WORK_DIR / str(campaign_id), ignore_errors=True)
+    return {"deleted": campaign_id}
+
+
 class MessageIn(BaseModel):
     content: str
 
@@ -175,36 +186,81 @@ async def send_message(campaign_id: int, body: MessageIn):
     async def events():
         thinking = []
         answer = []
+        calls = []
+        parts = []
+
+        def add_text(kind: str, text: str):
+            if parts and parts[-1]["type"] == kind:
+                parts[-1]["text"] += text
+            else:
+                parts.append({"type": kind, "text": text})
+
         try:
-            async for kind, text in agent.stream(campaign, attachments, history):
+            async for kind, data in agent.run(campaign, attachments, history, campaign_id):
                 if kind == "thinking":
-                    thinking.append(text)
-                    yield sse("thinking", {"text": text})
+                    thinking.append(data)
+                    add_text("thinking", data)
+                    yield sse("thinking", {"text": data})
+                elif kind == "content":
+                    answer.append(data)
+                    add_text("content", data)
+                    yield sse("content", {"text": data})
+                elif kind == "tool_start":
+                    yield sse("tool_start", data)
+                elif kind == "tool_call":
+                    calls.append({**data, "output": None, "ok": None, "ms": None})
+                    parts.append({"type": "tool", **data})
+                    yield sse("tool_call", data)
+                elif kind == "tool_result":
+                    for call in calls:
+                        if call["id"] == data["id"]:
+                            call.update(output=data["output"], ok=data["ok"], ms=data["ms"])
+                    for part in parts:
+                        if part["type"] == "tool" and part["id"] == data["id"]:
+                            part.update(output=data["output"], ok=data["ok"], ms=data["ms"])
+                    yield sse("tool_result", data)
                 else:
-                    answer.append(text)
-                    yield sse("content", {"text": text})
+                    answer.append(data)
+                    add_text("content", data)
+                    yield sse("content", {"text": data})
         except Exception:
-            log.exception("agent stream failed")
+            log.exception("agent run failed")
             yield sse("error", {"detail": "agent request failed"})
             return
 
         reply = "".join(answer).strip()
         if not reply:
-            yield sse("error", {"detail": "agent returned an empty reply"})
-            return
+            if not calls:
+                yield sse("error", {"detail": "agent returned an empty reply"})
+                return
+            reply = "(no reply text)"
 
-        with db.db() as conn:
-            user_cur = conn.execute(
-                "INSERT INTO messages (campaign_id, role, content) VALUES (?, 'user', ?)",
-                (campaign_id, content),
-            )
-            assistant_cur = conn.execute(
-                "INSERT INTO messages (campaign_id, role, content, reasoning) VALUES (?, 'assistant', ?, ?)",
-                (campaign_id, reply, "".join(thinking).strip()),
-            )
-            conn.execute("UPDATE campaigns SET updated_at = datetime('now') WHERE id = ?", (campaign_id,))
-            user_row = conn.execute("SELECT * FROM messages WHERE id = ?", (user_cur.lastrowid,)).fetchone()
-            assistant_row = conn.execute("SELECT * FROM messages WHERE id = ?", (assistant_cur.lastrowid,)).fetchone()
+        try:
+            with db.db() as conn:
+                user_cur = conn.execute(
+                    "INSERT INTO messages (campaign_id, role, content) VALUES (?, 'user', ?)",
+                    (campaign_id, content),
+                )
+                assistant_cur = conn.execute(
+                    """
+                    INSERT INTO messages (campaign_id, role, content, reasoning, tool_calls, parts)
+                    VALUES (?, 'assistant', ?, ?, ?, ?)
+                    """,
+                    (
+                        campaign_id,
+                        reply,
+                        "".join(thinking).strip(),
+                        json.dumps(calls),
+                        json.dumps(parts),
+                    ),
+                )
+                conn.execute("UPDATE campaigns SET updated_at = datetime('now') WHERE id = ?", (campaign_id,))
+                user_row = conn.execute("SELECT * FROM messages WHERE id = ?", (user_cur.lastrowid,)).fetchone()
+                assistant_row = conn.execute("SELECT * FROM messages WHERE id = ?", (assistant_cur.lastrowid,)).fetchone()
+        except Exception:
+            log.exception("storing reply failed")
+            yield sse("error", {"detail": "failed to store the reply"})
+            return
 
         yield sse("done", {"user": row_dict(user_row), "assistant": row_dict(assistant_row)})
 

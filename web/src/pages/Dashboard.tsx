@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react"
 import { Link } from "react-router-dom"
-import { Plus } from "lucide-react"
+import { Plus, Trash2 } from "lucide-react"
 
 import { StatusBadge } from "@/components/StatusBadge"
 import { Button } from "@/components/ui/button"
@@ -10,6 +10,7 @@ import { fmtDate } from "@/lib/utils"
 export function Dashboard() {
   const [campaigns, setCampaigns] = useState<Campaign[] | null>(null)
   const [error, setError] = useState("")
+  const [busy, setBusy] = useState(0)
 
   useEffect(() => {
     api
@@ -17,6 +18,23 @@ export function Dashboard() {
       .then(setCampaigns)
       .catch((e: Error) => setError(e.message))
   }, [])
+
+  async function remove(campaign: Campaign) {
+    if (!confirm(`Delete "${campaign.target.split("\n")[0]}"? Messages and files are removed too.`)) {
+      return
+    }
+
+    setBusy(campaign.id)
+    setError("")
+    try {
+      await api.deleteCampaign(campaign.id)
+      setCampaigns((prev) => prev?.filter((c) => c.id !== campaign.id) ?? prev)
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setBusy(0)
+    }
+  }
 
   return (
     <div className="mx-auto max-w-5xl px-8 py-10">
@@ -32,7 +50,7 @@ export function Dashboard() {
         </Button>
       </header>
 
-      {error && <p className="text-sm text-destructive">{error}</p>}
+      {error && <p className="mb-4 text-sm text-destructive">{error}</p>}
 
       {!error && campaigns === null && (
         <p className="text-sm text-muted-foreground">Loading…</p>
@@ -56,6 +74,7 @@ export function Dashboard() {
                 <th className="px-4 py-2 font-medium">Model</th>
                 <th className="px-4 py-2 font-medium">Status</th>
                 <th className="px-4 py-2 font-medium">Created</th>
+                <th className="w-10 px-4 py-2" />
               </tr>
             </thead>
             <tbody>
@@ -77,6 +96,18 @@ export function Dashboard() {
                     <StatusBadge status={c.status} />
                   </td>
                   <td className="px-4 py-2.5 text-muted-foreground">{fmtDate(c.created_at)}</td>
+                  <td className="px-4 py-2.5 text-right">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="size-7 text-muted-foreground hover:text-destructive"
+                      title="Delete campaign"
+                      disabled={busy === c.id}
+                      onClick={() => remove(c)}
+                    >
+                      <Trash2 className="size-3.5" />
+                    </Button>
+                  </td>
                 </tr>
               ))}
             </tbody>

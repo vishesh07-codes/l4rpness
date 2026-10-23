@@ -1,3 +1,4 @@
+import json
 import os
 import tempfile
 from pathlib import Path
@@ -8,7 +9,7 @@ os.environ["DEEPSEEK_API_KEY"] = "test-key"
 import pytest
 from fastapi.testclient import TestClient
 
-from app import agent, config, db
+from app import agent, config, db, tools
 from app.main import app
 
 
@@ -105,15 +106,15 @@ def test_prompt_includes_attachment_text(client):
     prompt = agent.build_prompt(campaign, rows)
     assert "hello world" in prompt
     assert "only /app" in prompt
-    assert "no tools" in prompt
+    assert "bash" in prompt
 
 
 def test_chat_streams_and_stores_messages(client, monkeypatch):
-    async def fake_stream(campaign, attachments, history):
+    async def fake_run(campaign, attachments, history, campaign_id):
         yield "thinking", "weighing it"
         yield "content", "ack: " + history[-1]["content"]
 
-    monkeypatch.setattr(agent, "stream", fake_stream)
+    monkeypatch.setattr(agent, "run", fake_run)
     campaign = create(client)
 
     res = client.post(f"/api/campaigns/{campaign['id']}/messages", json={"content": "hello"})
@@ -126,19 +127,100 @@ def test_chat_streams_and_stores_messages(client, monkeypatch):
     assert [m["role"] for m in messages] == ["user", "assistant"]
     assert messages[1]["content"] == "ack: hello"
     assert messages[1]["reasoning"] == "weighing it"
+    assert messages[1]["tool_calls"] == "[]"
 
 
 def test_chat_stream_failure_stores_nothing(client, monkeypatch):
-    async def broken_stream(campaign, attachments, history):
+    async def broken_run(campaign, attachments, history, campaign_id):
         yield "content", "partial"
         raise RuntimeError("boom")
 
-    monkeypatch.setattr(agent, "stream", broken_stream)
+    monkeypatch.setattr(agent, "run", broken_run)
     campaign = create(client)
 
     res = client.post(f"/api/campaigns/{campaign['id']}/messages", json={"content": "hi"})
     assert "event: error" in res.text
     assert client.get(f"/api/campaigns/{campaign['id']}/messages").json() == []
+
+
+def test_tool_loop_logs_calls(client, monkeypatch):
+    state = {"steps": 0}
+
+    async def fake_step(http, campaign, messages, calls):
+        state["steps"] += 1
+        if state["steps"] > 1:
+            yield "content", "done"
+            return
+        yield "tool_start", {"id": "c1", "name": "bash"}
+        calls.append({"id": "c1", "name": "bash", "arguments": '{"cmd": "echo hi"}', "args": {"cmd": "echo hi"}})
+        yield "content", "running"
+
+    async def fake_execute(name, args, campaign_id):
+        return "hi\n[exit code 0]", True, 7
+
+    monkeypatch.setattr(agent, "_step", fake_step)
+    monkeypatch.setattr(tools, "execute", fake_execute)
+    campaign = create(client)
+
+    res = client.post(f"/api/campaigns/{campaign['id']}/messages", json={"content": "run it"})
+    assert "event: tool_start" in res.text
+    assert "event: tool_call" in res.text
+    assert "event: tool_result" in res.text
+    assert "event: done" in res.text
+
+    messages = client.get(f"/api/campaigns/{campaign['id']}/messages").json()
+    calls = json.loads(messages[1]["tool_calls"])
+    assert calls[0]["name"] == "bash"
+    assert calls[0]["ok"] is True
+    assert "hi" in calls[0]["output"]
+
+    parts = json.loads(messages[1]["parts"])
+    assert [p["type"] for p in parts] == ["content", "tool", "content"]
+
+
+def test_tool_step_cap(client, monkeypatch):
+    async def always_calls(http, campaign, messages, calls):
+        calls.append({"id": "c1", "name": "bash", "arguments": "{}", "args": {}})
+        yield "content", "step"
+
+    async def fake_execute(name, args, campaign_id):
+        return "ok", True, 1
+
+    monkeypatch.setattr(agent, "_step", always_calls)
+    monkeypatch.setattr(tools, "execute", fake_execute)
+    monkeypatch.setattr(config, "MAX_TOOL_STEPS", 2)
+    campaign = create(client)
+
+    res = client.post(f"/api/campaigns/{campaign['id']}/messages", json={"content": "go"})
+    assert "stopped after 2 tool steps" in res.text
+
+    messages = client.get(f"/api/campaigns/{campaign['id']}/messages").json()
+    assert len(json.loads(messages[1]["tool_calls"])) == 2
+
+
+def test_delete_campaign(client, monkeypatch):
+    async def fake_run(campaign, attachments, history, campaign_id):
+        yield "content", "ok"
+
+    monkeypatch.setattr(agent, "run", fake_run)
+    res = client.post(
+        "/api/campaigns",
+        data={"target": "delete.me"},
+        files={"info_files": ("notes.txt", b"data", "text/plain")},
+    )
+    cid = res.json()["id"]
+    client.post(f"/api/campaigns/{cid}/messages", json={"content": "hi"})
+
+    upload_dir = config.UPLOAD_DIR / str(cid)
+    assert upload_dir.is_dir()
+
+    res = client.delete(f"/api/campaigns/{cid}")
+    assert res.status_code == 200
+    assert res.json()["deleted"] == cid
+
+    assert client.get(f"/api/campaigns/{cid}").status_code == 404
+    assert client.get("/api/campaigns").json() == []
+    assert not upload_dir.exists()
 
 
 def test_chat_without_key(client, monkeypatch):

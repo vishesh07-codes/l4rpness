@@ -29,8 +29,24 @@ export type Message = {
   role: "user" | "assistant"
   content: string
   reasoning: string
+  tool_calls?: string
+  parts?: string
   created_at: string
 }
+
+export type ToolCall = {
+  id: string
+  name: string
+  args: Record<string, unknown>
+  output?: string | null
+  ok?: boolean | null
+  ms?: number | null
+}
+
+export type Part =
+  | { type: "thinking"; text: string }
+  | { type: "content"; text: string }
+  | ({ type: "tool" } & ToolCall)
 
 export type AppConfig = {
   models: string[]
@@ -43,6 +59,9 @@ export type AppConfig = {
 export type StreamEvent =
   | { type: "thinking"; text: string }
   | { type: "content"; text: string }
+  | { type: "tool_start"; id: string; name: string }
+  | { type: "tool_call"; id: string; name: string; args: Record<string, unknown> }
+  | { type: "tool_result"; id: string; name: string; output: string; ok: boolean; ms: number }
   | { type: "done"; user: Message; assistant: Message }
   | { type: "error"; detail: string }
 
@@ -113,6 +132,8 @@ export const api = {
   getCampaign: (id: number) => req<Campaign>(`/api/campaigns/${id}`),
   createCampaign: (form: FormData) =>
     req<Campaign>("/api/campaigns", { method: "POST", body: form }),
+  deleteCampaign: (id: number) =>
+    req<{ deleted: number }>(`/api/campaigns/${id}`, { method: "DELETE" }),
   listMessages: (id: number) => req<Message[]>(`/api/campaigns/${id}/messages`),
   streamMessage,
   attachmentUrl: (id: number) => `/api/attachments/${id}`,

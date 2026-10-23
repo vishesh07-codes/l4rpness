@@ -1,13 +1,20 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react"
-import { Link, useParams } from "react-router-dom"
-import { ArrowLeft, Send } from "lucide-react"
+import { Link, useNavigate, useParams } from "react-router-dom"
+import { ArrowLeft, Send, Trash2 } from "lucide-react"
 
 import { StatusBadge } from "@/components/StatusBadge"
 import { Markdown } from "@/components/Markdown"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
-import { api, type Attachment, type Campaign as CampaignData, type Message } from "@/lib/api"
-import { fmtDate } from "@/lib/utils"
+import {
+  api,
+  type Attachment,
+  type Campaign as CampaignData,
+  type Message,
+  type Part,
+  type ToolCall,
+} from "@/lib/api"
+import { cn, fmtDate } from "@/lib/utils"
 
 const SECTIONS = [
   { key: "info", label: "Info" },
@@ -16,10 +23,11 @@ const SECTIONS = [
   { key: "scope", label: "Scope" },
 ] as const
 
-type LiveReply = { thinking: string; content: string }
+type LiveReply = { parts: Part[]; pendingTool: string | null }
 
 export function Campaign() {
   const { id } = useParams()
+  const nav = useNavigate()
   const campaignId = Number(id)
 
   const [campaign, setCampaign] = useState<CampaignData | null>(null)
@@ -28,6 +36,7 @@ export function Campaign() {
   const [configured, setConfigured] = useState(true)
   const [input, setInput] = useState("")
   const [pending, setPending] = useState(false)
+  const [deleting, setDeleting] = useState(false)
   const [error, setError] = useState("")
   const endRef = useRef<HTMLDivElement>(null)
 
@@ -53,7 +62,7 @@ export function Campaign() {
     setInput("")
     setError("")
     setPending(true)
-    setStream({ thinking: "", content: "" })
+    setStream({ parts: [], pendingTool: null })
 
     const optimistic: Message = {
       id: -Date.now(),
@@ -64,15 +73,47 @@ export function Campaign() {
     }
     setMessages((prev) => [...prev, optimistic])
 
+    const pushPart = (part: Part) =>
+      setStream((s) => {
+        if (!s) return s
+        const last = s.parts[s.parts.length - 1]
+
+        if (last?.type === "thinking" && part.type === "thinking") {
+          return { ...s, parts: [...s.parts.slice(0, -1), { ...last, text: last.text + part.text }] }
+        }
+        if (last?.type === "content" && part.type === "content") {
+          return { ...s, parts: [...s.parts.slice(0, -1), { ...last, text: last.text + part.text }] }
+        }
+        return { ...s, parts: [...s.parts, part] }
+      })
+
     let failure = ""
     let completed = false
 
     try {
       await api.streamMessage(campaignId, content, (event) => {
         if (event.type === "thinking") {
-          setStream((s) => (s ? { ...s, thinking: s.thinking + event.text } : s))
+          pushPart({ type: "thinking", text: event.text })
         } else if (event.type === "content") {
-          setStream((s) => (s ? { ...s, content: s.content + event.text } : s))
+          pushPart({ type: "content", text: event.text })
+        } else if (event.type === "tool_start") {
+          setStream((s) => (s ? { ...s, pendingTool: event.name } : s))
+        } else if (event.type === "tool_call") {
+          pushPart({ type: "tool", id: event.id, name: event.name, args: event.args })
+          setStream((s) => (s ? { ...s, pendingTool: null } : s))
+        } else if (event.type === "tool_result") {
+          setStream((s) =>
+            s
+              ? {
+                  ...s,
+                  parts: s.parts.map((part) =>
+                    part.type === "tool" && part.id === event.id
+                      ? { ...part, output: event.output, ok: event.ok, ms: event.ms }
+                      : part
+                  ),
+                }
+              : s
+          )
         } else if (event.type === "done") {
           completed = true
           setMessages((prev) => [
@@ -104,6 +145,21 @@ export function Campaign() {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault()
       send()
+    }
+  }
+
+  async function remove() {
+    if (!campaign) return
+    if (!confirm(`Delete "${campaign.target.split("\n")[0]}"? Messages and files are removed too.`)) return
+
+    setDeleting(true)
+    setError("")
+    try {
+      await api.deleteCampaign(campaignId)
+      nav("/")
+    } catch (e) {
+      setError((e as Error).message)
+      setDeleting(false)
     }
   }
 
@@ -144,7 +200,19 @@ export function Campaign() {
             </div>
           )}
         </div>
-        <StatusBadge status={campaign.status} />
+        <div className="flex shrink-0 items-center gap-1">
+          <StatusBadge status={campaign.status} />
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-8 text-muted-foreground hover:text-destructive"
+            title="Delete campaign"
+            disabled={deleting || pending}
+            onClick={remove}
+          >
+            <Trash2 className="size-4" />
+          </Button>
+        </div>
       </header>
 
       <div className="mt-6 grid gap-3">
@@ -172,7 +240,7 @@ export function Campaign() {
         <div className="flex-1 space-y-4 overflow-y-auto p-4">
           {messages.length === 0 && !stream && (
             <p className="text-sm text-muted-foreground">
-              Ask about this target. The agent has no tools yet.
+              Ask the agent to run something against this target.
             </p>
           )}
           {messages.map((m) =>
@@ -183,21 +251,19 @@ export function Campaign() {
                 </div>
               </div>
             ) : (
-              <div key={m.id} className="max-w-[85%]">
-                {m.reasoning && <ThinkingBlock text={m.reasoning} />}
-                <Markdown text={m.content} />
-              </div>
+              <AssistantMessage key={m.id} message={m} />
             )
           )}
           {stream && (
             <div className="max-w-[85%]">
-              {stream.thinking && <ThinkingBlock text={stream.thinking} live />}
-              {stream.content ? (
-                <Markdown text={stream.content} />
-              ) : (
-                !stream.thinking && <p className="text-sm text-muted-foreground">Thinking…</p>
-              )}
+              <Parts parts={stream.parts} live />
             </div>
+          )}
+          {pending && stream && (
+            <p className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Pulse />
+              {activity(stream)}
+            </p>
           )}
           <div ref={endRef} />
         </div>
@@ -229,13 +295,112 @@ export function Campaign() {
   )
 }
 
+function AssistantMessage({ message }: { message: Message }) {
+  return (
+    <div className="max-w-[85%]">
+      <Parts parts={partsOf(message)} />
+    </div>
+  )
+}
+
+function Parts({ parts, live }: { parts: Part[]; live?: boolean }) {
+  if (parts.length === 0) {
+    return live ? <p className="text-sm text-muted-foreground">Thinking…</p> : null
+  }
+
+  return (
+    <>
+      {parts.map((part, index) =>
+        part.type === "thinking" ? (
+          <ThinkingBlock key={index} text={part.text} live={live} />
+        ) : part.type === "tool" ? (
+          <ToolCallBlock key={part.id || index} call={part} />
+        ) : (
+          <Markdown key={index} text={part.text} />
+        )
+      )}
+    </>
+  )
+}
+
+function partsOf(message: Message): Part[] {
+  if (message.parts) {
+    try {
+      const parts = JSON.parse(message.parts) as Part[]
+      if (parts.length > 0) return parts
+    } catch {
+      // fall back to the old columns
+    }
+  }
+
+  const parts: Part[] = []
+  if (message.reasoning) parts.push({ type: "thinking", text: message.reasoning })
+  for (const call of callsOf(message)) parts.push({ type: "tool", ...call })
+  if (message.content) parts.push({ type: "content", text: message.content })
+  return parts
+}
+
+function callsOf(message: Message): ToolCall[] {
+  if (!message.tool_calls) return []
+  try {
+    return JSON.parse(message.tool_calls) as ToolCall[]
+  } catch {
+    return []
+  }
+}
+
+function activity(stream: LiveReply): string {
+  if (stream.pendingTool) return `Calling ${stream.pendingTool}`
+  const last = stream.parts[stream.parts.length - 1]
+  if (last?.type === "tool" && last.output == null) return `Running ${last.name}`
+  if (last?.type === "content") return "Writing"
+  return "Thinking"
+}
+
+function Pulse() {
+  return (
+    <span className="inline-flex h-3 shrink-0 items-end gap-0.5" aria-hidden>
+      {[0, 1, 2].map((i) => (
+        <span
+          key={i}
+          className="h-full w-0.5 origin-bottom rounded-sm bg-muted-foreground animate-[pulse-bar_1.1s_ease-in-out_infinite]"
+          style={{ animationDelay: `${i * 0.15}s` }}
+        />
+      ))}
+    </span>
+  )
+}
+
+function ToolCallBlock({ call }: { call: ToolCall }) {
+  return (
+    <details className="mb-2 overflow-hidden rounded-md border bg-muted/30 text-xs">
+      <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2">
+        {call.output == null ? (
+          <Pulse />
+        ) : (
+          <span
+            className={cn("size-1.5 shrink-0 rounded-full", call.ok ? "bg-emerald-500" : "bg-destructive")}
+          />
+        )}
+        <span className="font-mono">{call.name}</span>
+        <span className="min-w-0 flex-1 truncate text-muted-foreground">
+          {JSON.stringify(call.args)}
+        </span>
+        {call.ms != null && <span className="shrink-0 text-muted-foreground">{call.ms}ms</span>}
+      </summary>
+      <pre className="max-h-64 overflow-auto whitespace-pre-wrap border-t bg-background/60 px-3 py-2 font-mono leading-relaxed">
+        {call.output || "running…"}
+      </pre>
+    </details>
+  )
+}
+
 function ThinkingBlock({ text, live }: { text: string; live?: boolean }) {
   const box = useRef<HTMLDivElement>(null)
-  const stick = useRef(true)
 
   useEffect(() => {
     const el = box.current
-    if (el && live && stick.current) el.scrollTop = el.scrollHeight
+    if (el && live) el.scrollTop = el.scrollHeight
   }, [text, live])
 
   return (
@@ -243,11 +408,7 @@ function ThinkingBlock({ text, live }: { text: string; live?: boolean }) {
       <div className="text-xs font-medium text-muted-foreground">Thinking</div>
       <div
         ref={box}
-        onScroll={() => {
-          const el = box.current
-          if (el) stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24
-        }}
-        className="mt-1 max-h-72 overflow-y-auto whitespace-pre-wrap text-xs leading-relaxed text-muted-foreground"
+        className="mt-1 max-h-72 overflow-y-auto whitespace-pre-wrap break-words text-xs leading-relaxed text-muted-foreground"
       >
         {text}
       </div>
