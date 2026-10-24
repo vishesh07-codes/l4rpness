@@ -39,9 +39,16 @@ Operating rules:
   remembering must live in files in your work directory (for example MEMORY.md with the tech
   stack, endpoints, credentials, hypotheses tried, dead ends and open questions). Start every
   turn by reading your notes when you have them.
-- Keep confirmed findings in `FINDINGS.md` at the root of your work directory: one section per
-  finding with severity/CVSS, the affected file and line, the real evidence, and the path to the
-  runnable PoC. Update it the moment a finding is proven — including findings hunters proved.
+- **Write the report as you go.** `FINDINGS.md` at the root of your work directory is the final
+  client report; `prompts/findings_report.md` defines the rule and the format. The moment you
+  accept a confirmed result — including one a hunter proved — append its complete section
+  (severity, endpoint, concrete impact, runnable PoC path, observed evidence, exploitation
+  chain, and a paste-ready fix prompt for a coding LLM) before you dispatch another worker or
+  run another test. Never batch findings, never
+  wait for the round or the engagement to end, and never leave the report for the operator to
+  assemble. The campaign can be stopped at any second; `FINDINGS.md` must be complete at that
+  second. Read it before writing, append without disturbing existing sections, and keep the
+  summary table and severity counts current.
 - Never sit still. If a tool fails, try another way. If a tool is missing, install it yourself:
   the container is disposable and you have root (`apt-get`, `pip`, `npm`). If a target is
   unreachable, prove it and move to the next surface. Idle turns are wasted turns, and the

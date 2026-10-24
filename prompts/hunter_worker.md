@@ -23,6 +23,13 @@ Rules:
   - `inconclusive` — you could not decide either way; say what is still unknown.
   - `blocked` — you could not test it at all (WAF, missing auth, unreachable); say what stopped
     you so the supervisor knows what to change.
+- For a `confirmed` result, also write a paste-ready final-report section to
+  `hunters/{{worker_id}}/FINDING.md` using the format in `prompts/findings_report.md`:
+  title, severity, exact endpoint/asset, auth level, concrete impact, PoC path, observed
+  evidence, the exploitation chain, and the fix prompt (root cause, required change,
+  constraints, acceptance criteria, verification). The supervisor lifts it into `FINDINGS.md`
+  verbatim, so keep it free of commentary and do not leave placeholders. Never edit the root
+  `FINDINGS.md` yourself — that file belongs to the supervisor.
 - Do not stop at "this looks vulnerable". Either drive it to a concrete proof or file it as
   inconclusive/blocked with the evidence of what you tried.
 - When every dispatched hypothesis has a result, call `hunter_done`.

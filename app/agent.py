@@ -252,9 +252,12 @@ def build_prompt(
         if mode == "goal":
             sections.append(
                 "Run mode: until goal — pursue the objective stated in Instructions/Description "
-                "to a concrete, evidence-backed result, then call complete_engagement once "
-                "with a one-line summary of what was achieved and where the evidence lives. "
-                "The tool is only available in this mode; a continuous campaign never completes."
+                "to a concrete, evidence-backed result. The moment the required finding is "
+                "proven, write its complete section to FINDINGS.md first (the report rule in "
+                "prompts/findings_report.md applies before anything else), then call "
+                "complete_engagement once with a one-line summary of what was achieved and "
+                "where the evidence lives. The tool is only available in this mode; a continuous "
+                "campaign never completes."
             )
         else:
             sections.append(

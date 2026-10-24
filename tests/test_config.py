@@ -13,6 +13,7 @@ def test_defaults_when_no_file(tmp_path):
     assert settings["agent"]["instructions"] == [
         "AGENTS.md",
         "prompts/operator_policy.md",
+        "prompts/findings_report.md",
         "prompts/supervisor_policy.md",
     ]
     assert settings["agent"]["seed_history"] == "prompts/seed_history.json"

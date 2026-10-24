@@ -57,6 +57,9 @@ services:
       # values at creation; the mount only adds visibility.
       - ./.env:/app/.env
       - ./skills:/app/skills:ro
+      # prompts are instructions, not code: mount them so report-policy edits apply on
+      # container recreate without rebuilding the image
+      - ./prompts:/app/prompts:ro
       - ./AGENTS.md:/app/AGENTS.md:ro
     restart: unless-stopped
 

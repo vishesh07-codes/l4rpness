@@ -31,7 +31,8 @@ DEFAULTS = {
     "storage": {"data_dir": "data"},
     "skills": {"dirs": ["skills"]},
     "agent": {
-        "instructions": ["AGENTS.md", "prompts/operator_policy.md", "prompts/supervisor_policy.md"],
+        "instructions": ["AGENTS.md", "prompts/operator_policy.md",
+                          "prompts/findings_report.md", "prompts/supervisor_policy.md"],
         "seed_history": "prompts/seed_history.json",
     },
     "uploads": {
