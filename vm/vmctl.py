@@ -46,6 +46,21 @@ MAX_EXEC_TIMEOUT = 600
 CSI = re.compile(r"\x1b\[[0-9;?]*[a-zA-Z]")
 
 
+def _qemu_for(cfg, tag: str) -> int:
+    """Pid of a QEMU already running this campaign, if any.
+
+    Whether this process started it or not: a start racing another, or an
+    adopted guest whose keyfile went missing, must not put a second QEMU on the
+    same disk. (QEMU's own image lock would refuse the second write, but with a
+    far less useful error.)
+    """
+    marker = f"-name l4vm-{cfg.instance}-{tag}"
+    for pid, cmdline in Server._qemu_processes():
+        if marker in cmdline:
+            return pid
+    return 0
+
+
 def log(msg):
     print(f"[vmctl] {msg}", flush=True)
 
@@ -94,6 +109,9 @@ class Guest:
         self.flag = ""
         self.fail_count = 0
         self.last_fail = 0.0
+        # One VM per campaign. The supervisor's retry and the campaign's own
+        # provisioning can race, and they must not both boot one.
+        self.lifecycle = asyncio.Lock()
         self.state = "stopped"
 
     # --- paths ------------------------------------------------------------
@@ -224,6 +242,9 @@ class Guest:
         ]
 
     async def boot(self):
+        other = _qemu_for(self.cfg, self.tag)
+        if other:
+            raise RuntimeError(f"{self.tag} already has a running vm (pid {other})")
         if not self.clone.exists():
             self.clone.parent.mkdir(parents=True, exist_ok=True)
             subprocess.run(
@@ -465,30 +486,34 @@ class Guest:
             self.root_flag = bool(root_flag)
 
     async def start(self, root_access=None, root_flag=None):
-        if self.alive():
-            return
-        self.configure(root_access, root_flag)
-        await self.boot()
-        self.save("ready")
+        async with self.lifecycle:
+            if self.alive():
+                return
+            self.configure(root_access, root_flag)
+            await self.boot()
+            self.save("ready")
 
     async def restart(self, root_access=None, root_flag=None):
-        await self.kill()
-        self.configure(root_access, root_flag)
-        self.restarts += 1
-        await self.boot()
-        self.save("ready")
+        async with self.lifecycle:
+            await self.kill()
+            self.configure(root_access, root_flag)
+            self.restarts += 1
+            await self.boot()
+            self.save("ready")
 
     async def reset(self, root_access=None, root_flag=None):
-        await self.kill()
-        self.clone.unlink(missing_ok=True)
-        self.configure(root_access, root_flag)
-        self.restarts += 1
-        await self.boot()
-        self.save("ready", note="disk reset to base")
+        async with self.lifecycle:
+            await self.kill()
+            self.clone.unlink(missing_ok=True)
+            self.configure(root_access, root_flag)
+            self.restarts += 1
+            await self.boot()
+            self.save("ready", note="disk reset to base")
 
     async def shutdown(self):
-        await self.kill()
-        self.save("stopped")
+        async with self.lifecycle:
+            await self.kill()
+            self.save("stopped")
 
     def status(self):
         alive = self.alive()

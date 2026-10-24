@@ -12,9 +12,10 @@ Two things are deliberate here:
   that fails is a finding about the target, not an error in the harness.
 """
 
+import asyncio
 import logging
 
-from . import config, tools, vmctl
+from . import config, db, tools, vmctl
 
 log = logging.getLogger("l4rpness")
 
@@ -64,6 +65,37 @@ def describe(vm: dict) -> str:
     if vm.get("root_flag"):
         bits.append("flag in /root/root.txt")
     return " · ".join(bits)
+
+
+# Keeps fire-and-forget provisioning tasks alive: without a reference an
+# asyncio task can be collected mid-boot.
+_TASKS: set[asyncio.Task] = set()
+
+
+def provision_now(campaign_id: int) -> None:
+    """Start the campaign's VM as soon as the campaign does, off the request path.
+
+    The environment belongs to the campaign, not to the supervisor's first
+    chain: a campaign that is running should have its VM up whether or not the
+    agent has done anything yet. The loop's own ensure stays as the retry
+    backstop for a control plane that was not up yet.
+    """
+    async def run():
+        with db.db() as conn:
+            row = conn.execute(
+                "SELECT * FROM campaigns WHERE id = ?", (campaign_id,)
+            ).fetchone()
+        if row is None or not enabled(row):
+            return
+        try:
+            state = await ensure(campaign_id, as_root(row), with_flag(row))
+            log.info("campaign %d: vm %s", campaign_id, describe(state))
+        except vmctl.Unavailable as exc:
+            log.warning("campaign %d: vm not provisioned: %s", campaign_id, exc)
+
+    task = asyncio.create_task(run())
+    _TASKS.add(task)
+    task.add_done_callback(_TASKS.discard)
 
 
 async def status(campaign_id: int) -> dict:

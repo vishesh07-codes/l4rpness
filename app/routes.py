@@ -403,7 +403,9 @@ async def create_campaign(
             shutil.rmtree(config.UPLOAD_DIR / str(campaign_id), ignore_errors=True)
         raise HTTPException(500, "failed to store uploads")
 
-    if not supervisor.start(campaign_id):
+    if supervisor.start(campaign_id):
+        vm.provision_now(campaign_id)
+    else:
         log.warning("campaign %d created but the supervisor did not start", campaign_id)
 
     return get_campaign(campaign_id)
@@ -628,6 +630,7 @@ async def resume_campaign(campaign_id: int):
 
     if not supervisor.start(campaign_id):
         raise HTTPException(400, "the supervisor did not start; check the provider API key")
+    vm.provision_now(campaign_id)
     return {"status": "running", "campaign_id": campaign_id}
 
 

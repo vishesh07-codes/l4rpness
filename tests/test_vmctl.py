@@ -6,6 +6,7 @@ preserves, what a status means. These drive it directly with no QEMU and no
 socket: pure decisions about paths, secrets and state.
 """
 
+import asyncio
 import importlib.util
 import json
 import pathlib
@@ -221,3 +222,36 @@ def test_every_gitignored_directory_is_also_kept_out_of_the_build_context():
     # and the ones that actually carry secrets, spelled out
     for runtime in ("vm/state", "vm/serial", "vm/base", "vm/images"):
         assert runtime in uploaded, runtime
+
+
+def test_concurrent_starts_boot_one_vm(tmp_path, monkeypatch):
+    """The supervisor's retry and the campaign's own provisioning can race; the
+    lifecycle lock means only one of them boots."""
+    cfg = _config(tmp_path)
+    monkeypatch.setattr(vmctl, "_qemu_for", lambda *a: 0)
+    boots = []
+
+    async def fake_boot(self):
+        boots.append(self.tag)
+        await asyncio.sleep(0.05)
+        self.state = "ready"
+
+    monkeypatch.setattr(vmctl.Guest, "boot", fake_boot)
+    monkeypatch.setattr(vmctl.Guest, "alive", lambda self: bool(boots))
+
+    g = vmctl.Guest(cfg, 1)
+
+    async def race():
+        await asyncio.gather(g.start(), g.start(), g.start())
+
+    asyncio.run(race())
+    assert boots == ["campaign-1"], "exactly one boot, however many starts race"
+
+
+def test_a_second_vm_for_one_campaign_is_refused(tmp_path, monkeypatch):
+    """Never two QEMUs on one campaign's disk, whether or not this process
+    started the first."""
+    cfg = _config(tmp_path)
+    monkeypatch.setattr(vmctl, "_qemu_for", lambda cfg_, tag: 4242)
+    with pytest.raises(RuntimeError, match="already has a running vm"):
+        asyncio.run(vmctl.Guest(cfg, 9).boot())

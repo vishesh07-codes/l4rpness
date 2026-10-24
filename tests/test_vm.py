@@ -510,3 +510,31 @@ def test_a_wedged_control_plane_gives_up_instead_of_hanging(tmp_path, monkeypatc
             asyncio.run(vmctl.call({"action": "ping"}))
     finally:
         listener.close()
+
+
+def test_provisioning_is_tied_to_the_campaign_running(monkeypatch):
+    """The VM belongs to the campaign, not to the supervisor's first chain, so a
+    running campaign gets it whether or not the agent has done anything."""
+    ensured = []
+
+    async def fake_ensure(campaign_id, root, flag=False):
+        ensured.append((campaign_id, root, flag))
+        return {"state": "running"}
+
+    monkeypatch.setattr(vm, "ensure", fake_ensure)
+
+    _campaign(kernel=1, root=1, flag=1, cid=7)
+    asyncio.run(_provision(7))
+    assert ensured == [(7, True, True)]
+
+    # a campaign without the VM flag is left alone
+    _campaign(kernel=0, cid=8)
+    asyncio.run(_provision(8))
+    assert ensured == [(7, True, True)]
+
+
+async def _provision(cid):
+    """provision_now is fire-and-forget; await the same thing for the test."""
+    row = _row(cid)
+    if vm.enabled(row):
+        await vm.ensure(cid, vm.as_root(row), vm.with_flag(row))

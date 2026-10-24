@@ -198,12 +198,19 @@ def restore() -> int:
     A manual stop clears auto_running, so those campaigns stay stopped.
     """
     with db.db() as conn:
-        rows = conn.execute("SELECT id FROM campaigns WHERE auto_running = 1").fetchall()
+        rows = conn.execute(
+            "SELECT id, kernel_enabled FROM campaigns WHERE auto_running = 1"
+        ).fetchall()
 
     started = 0
     for row in rows:
-        if start(row["id"]):
-            started += 1
+        if not start(row["id"]):
+            continue
+        started += 1
+        if row["kernel_enabled"]:
+            from . import vm
+
+            vm.provision_now(row["id"])
     if rows:
         log.info("supervisor restore: resumed %d of %d campaigns", started, len(rows))
     return started
