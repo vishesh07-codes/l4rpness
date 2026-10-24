@@ -4,6 +4,24 @@ A local harness for black-box pentest campaigns. You point it at a target you ar
 
 Current state: dashboard, campaigns, campaign chat, and the agent can run tools. It executes shell commands and reads and writes files in a per-campaign work directory. Everything runs in Docker on your machine.
 
+## Running it
+
+    cp .env.example .env
+    # put your DeepSeek key in .env
+    docker compose up --build -d
+
+Model endpoints, effort and the runtime limits live in `config.toml` and are editable on the Settings page. Endpoint edits (name, base URL, API key env var, thinking) are written straight into the file; runtime knobs apply immediately and are written back too when the container can write to the mounted file (comments and unrelated keys are preserved), and hand edits to the file are picked up automatically. The server address and port still need an edit plus `docker compose restart`.
+
+Open http://127.0.0.1:4517
+
+To wipe all campaigns, messages and uploads:
+
+    docker compose down -v
+
+To get a shell inside the container (you land as root; add `-w /app/data/work/<id>` to land in a campaign work dir):
+
+    docker compose exec l4rpness bash
+
 ## Where this is going
 
 The end product is something you start once and leave alone. You create a campaign: target, scope, notes, and anything that helps the agent understand the app, like a HAR file from a logged in session or an OpenAPI spec. After that it works without you.
@@ -75,24 +93,6 @@ The parts around the agents are deliberately not LLM driven. A small coordinator
 
 Docker: multistage build where Node builds the frontend and Python runs the app. Runs as root inside a hardened container (see Container tools), port 4517 bound to 127.0.0.1 only, all data in a named volume.
 
-## Running it
-
-    cp .env.example .env
-    # put your DeepSeek key in .env
-    docker compose up --build -d
-
-Model endpoints, effort and the runtime limits live in `config.toml` and are editable on the Settings page. Endpoint edits (name, base URL, API key env var, thinking) are written straight into the file; runtime knobs apply immediately and are written back too when the container can write to the mounted file (comments and unrelated keys are preserved), and hand edits to the file are picked up automatically. The server address and port still need an edit plus `docker compose restart`.
-
-Open http://127.0.0.1:4517
-
-To wipe all campaigns, messages and uploads:
-
-    docker compose down -v
-
-To get a shell inside the container (you land as root; add `-w /app/data/work/<id>` to land in a campaign work dir):
-
-    docker compose exec l4rpness bash
-
 ## Container tools
 
 The image ships a small network toolkit so bash has something to work with: curl, wget, jq, dnsutils, nmap, netcat-openbsd, whois, iputils-ping and traceroute. The list lives in `tools.txt`, one line, comma separated. Edit it and rebuild:
@@ -161,7 +161,7 @@ Things worth knowing:
 - [x] dashboard, campaigns, campaign chat
 - [x] shell and file tools in the agent loop
 - [ ] http_request tool with response capture
-- [ ] campaign runner with supervisors that never stop and workers per task
+- [x] campaign runner with supervisors that never stop and workers per task
 - [ ] coverage map and the scheduler that picks work from it
 - [ ] verifier that replays findings
 - [x] skills (SKILL.md, loaded on demand, Skills page)
