@@ -7,7 +7,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.gzip import GZipMiddleware
 
-from . import agent, config, db, mcp, supervisor
+from . import agent, config, db, mcp, supervisor, vm
 from .routes import router
 
 # the app logs to "l4rpness"; without a handler only warnings+ show (python's
@@ -71,6 +71,12 @@ async def lifespan(_app):
     db.init()
     db.recover()
     await mcp.start()
+    # A campaign deleted while this was down, or whose teardown failed, must not
+    # keep a guest burning memory on the host.
+    try:
+        await vm.sweep()
+    except Exception as exc:
+        log.warning("l4rpness: vm sweep failed: %s", exc)
     # Warm provider model listings before resumed campaigns resolve context
     # windows: with a cold cache every window silently falls back to 128k,
     # which mis-sizes both the compaction trigger and the in-chain budget.

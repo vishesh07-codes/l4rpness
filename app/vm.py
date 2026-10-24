@@ -89,9 +89,19 @@ def provision_now(campaign_id: int) -> None:
             return
         try:
             state = await ensure(campaign_id, as_root(row), with_flag(row))
-            log.info("campaign %d: vm %s", campaign_id, describe(state))
         except vmctl.Unavailable as exc:
             log.warning("campaign %d: vm not provisioned: %s", campaign_id, exc)
+            return
+        # The campaign can be deleted while the guest is booting; if it was, do
+        # not leave the VM we just started behind.
+        with db.db() as conn:
+            gone = conn.execute(
+                "SELECT 1 FROM campaigns WHERE id = ?", (campaign_id,)
+            ).fetchone() is None
+        if gone:
+            await destroy(campaign_id)
+            return
+        log.info("campaign %d: vm %s", campaign_id, describe(state))
 
     task = asyncio.create_task(run())
     _TASKS.add(task)
@@ -185,6 +195,36 @@ async def lifecycle(
     if action == "reset":
         note = " (disk discarded — anything the workers had in there is gone)"
     return describe(vm) + note, True
+
+
+async def sweep() -> int:
+    """Destroy VMs whose campaign no longer exists.
+
+    Deleting a campaign takes its VM down in the same request, but that can fail
+    (control plane unreachable) or the app can die half way. This is the durable
+    half, run once at startup: a deleted campaign must not keep a guest alive.
+    """
+    try:
+        reply = await vmctl.call({"action": "list"})
+    except (vmctl.Unavailable, Exception) as exc:
+        log.warning("vm sweep skipped: %s", exc)
+        return 0
+
+    with db.db() as conn:
+        orphans = [
+            entry["campaign"]
+            for entry in reply.get("vms") or []
+            if entry.get("campaign")
+            and conn.execute(
+                "SELECT 1 FROM campaigns WHERE id = ?", (entry["campaign"],)
+            ).fetchone()
+            is None
+        ]
+    for campaign_id in orphans:
+        await destroy(campaign_id)
+    if orphans:
+        log.info("removed VMs for deleted campaigns: %s", orphans)
+    return len(orphans)
 
 
 async def destroy(campaign_id: int) -> None:

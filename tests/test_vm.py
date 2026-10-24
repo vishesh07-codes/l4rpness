@@ -538,3 +538,31 @@ async def _provision(cid):
     row = _row(cid)
     if vm.enabled(row):
         await vm.ensure(cid, vm.as_root(row), vm.with_flag(row))
+
+
+def test_sweep_removes_vms_for_campaigns_that_are_gone(monkeypatch):
+    """The durable half of "deleting a campaign removes its VM"."""
+    _campaign(kernel=1, cid=1)
+    destroyed = []
+
+    async def fake_call(req, timeout=None):
+        if req["action"] == "list":
+            return {"ok": True, "vms": [{"campaign": 1}, {"campaign": 42}, {"campaign": 0}]}
+        return {"ok": True}
+
+    async def fake_destroy(campaign_id):
+        destroyed.append(campaign_id)
+
+    monkeypatch.setattr(vmctl, "call", fake_call)
+    monkeypatch.setattr(vm, "destroy", fake_destroy)
+
+    assert asyncio.run(vm.sweep()) == 1
+    assert destroyed == [42], "only the campaign that no longer exists"
+
+
+def test_sweep_is_quiet_when_the_control_plane_is_down(monkeypatch):
+    async def down(req, timeout=None):
+        raise vmctl.Unavailable("no socket")
+
+    monkeypatch.setattr(vmctl, "call", down)
+    assert asyncio.run(vm.sweep()) == 0

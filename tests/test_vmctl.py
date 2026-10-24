@@ -255,3 +255,30 @@ def test_a_second_vm_for_one_campaign_is_refused(tmp_path, monkeypatch):
     monkeypatch.setattr(vmctl, "_qemu_for", lambda cfg_, tag: 4242)
     with pytest.raises(RuntimeError, match="already has a running vm"):
         asyncio.run(vmctl.Guest(cfg, 9).boot())
+
+
+def test_destroy_removes_everything_the_campaign_owns(tmp_path):
+    """Including the seed: it holds the flag, and a deleted campaign must not
+    leave that on disk."""
+    cfg = _config(tmp_path)
+    g = vmctl.Guest(cfg, 4)
+    g.root_flag = True
+    g.ensure_secrets()
+    for path in (g.clone, g.state_file, g.seed, g.serial_sock):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("x")
+    assert g.seed.exists()
+
+    server = vmctl.Server(cfg)
+    server.guests[4] = g
+    asyncio.run(g.kill())
+
+    async def destroy():
+        reply = await server.handle({"action": "destroy", "campaign": 4})
+        return reply
+
+    reply = asyncio.run(destroy())
+    assert reply["ok"]
+    for path in (g.clone, g.state_file, g.seed, g.serial_sock):
+        assert not path.exists(), path
+    assert 4 not in server.guests

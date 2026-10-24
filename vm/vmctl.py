@@ -711,10 +711,14 @@ class Server:
             return {"ok": True, "vm": g.status()}
 
         if action == "destroy":
+            # Everything this campaign owns host-side. The seed matters most: it
+            # holds the flag in plaintext, and a deleted campaign must not leave
+            # it lying around.
             await g.kill()
-            g.clone.unlink(missing_ok=True)
-            g.state_file.unlink(missing_ok=True)
+            for path in (g.clone, g.state_file, g.seed, g.serial_sock):
+                path.unlink(missing_ok=True)
             self.guests.pop(campaign, None)
+            log(f"{g.tag}: destroyed")
             return {"ok": True}
 
         if action == "exec":
