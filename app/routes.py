@@ -347,6 +347,7 @@ async def create_campaign(
     kernel: bool = Form(False),
     kernel_root_access: bool = Form(False),
     kernel_flag: bool = Form(False),
+    fast: bool = Form(False),
     target_files: list[UploadFile] = File(default=[]),
     info_files: list[UploadFile] = File(default=[]),
     instructions_files: list[UploadFile] = File(default=[]),
@@ -377,12 +378,12 @@ async def create_campaign(
             cur = conn.execute(
                 """
                 INSERT INTO campaigns (target, info, instructions, description, scope, model, effort, mode,
-                                       kernel_enabled, kernel_root_access, kernel_root_flag)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                       kernel_enabled, kernel_root_access, kernel_root_flag, fast_mode)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (target.strip(), info.strip(), instructions.strip(), description.strip(), scope.strip(), model, effort, mode,
                  int(bool(kernel)), int(bool(kernel) and bool(kernel_root_access)),
-                 int(bool(kernel) and bool(kernel_flag))),
+                 int(bool(kernel) and bool(kernel_flag)), int(bool(fast))),
             )
             campaign_id = cur.lastrowid
             if campaign_id is None:

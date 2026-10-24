@@ -194,6 +194,8 @@ def migrate(conn):
         conn.execute("ALTER TABLE campaigns ADD COLUMN kernel_root_access INTEGER NOT NULL DEFAULT 0")
     if "kernel_root_flag" not in _columns(conn, "campaigns"):
         conn.execute("ALTER TABLE campaigns ADD COLUMN kernel_root_flag INTEGER NOT NULL DEFAULT 0")
+    if "fast_mode" not in _columns(conn, "campaigns"):
+        conn.execute("ALTER TABLE campaigns ADD COLUMN fast_mode INTEGER NOT NULL DEFAULT 0")
     if "reasoning" not in _columns(conn, "messages"):
         conn.execute("ALTER TABLE messages ADD COLUMN reasoning TEXT NOT NULL DEFAULT ''")
     if "tool_calls" not in _columns(conn, "messages"):

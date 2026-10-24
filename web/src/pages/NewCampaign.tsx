@@ -38,6 +38,7 @@ export function NewCampaign() {
   const [kernel, setKernel] = useState(false)
   const [kernelRoot, setKernelRoot] = useState(false)
   const [kernelFlag, setKernelFlag] = useState(false)
+  const [fast, setFast] = useState(false)
   const [text, setText] = useState(EMPTY_TEXT)
   const [files, setFiles] = useState<FileMap>(NO_FILES)
   const [error, setError] = useState("")
@@ -83,6 +84,7 @@ export function NewCampaign() {
     form.set("kernel", kernel ? "true" : "false")
     form.set("kernel_root_access", kernelRoot ? "true" : "false")
     form.set("kernel_flag", kernelFlag ? "true" : "false")
+    form.set("fast", fast ? "true" : "false")
     for (const field of FIELDS) {
       form.set(field, text[field])
       for (const file of files[field]) form.append(`${field}_files`, file)
@@ -179,6 +181,22 @@ export function NewCampaign() {
               { value: "goal", label: "Until goal" },
             ]}
           />
+        </Field>
+
+        <Field
+          label="Fast mode"
+          hint="One agent does the work — no hypothesis generators, no hunter workers. Cheaper and simpler; it runs the whole campaign itself."
+        >
+          <label className="flex w-fit items-center gap-2 text-[13px]">
+            <input
+              type="checkbox"
+              checked={fast}
+              disabled={busy}
+              onChange={(event) => setFast(event.target.checked)}
+              className="size-4 accent-current"
+            />
+            Run this campaign without subagents
+          </label>
         </Field>
 
         <Field

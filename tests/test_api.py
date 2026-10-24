@@ -971,6 +971,14 @@ def test_workers_and_hunts_api(client):
     assert hunts[0]["poc_path"] == "hunters/1/poc/run.sh"
 
 
+def test_create_campaign_fast_mode(client):
+    plain = create(client, target="plain.example")
+    assert plain["fast_mode"] == 0
+
+    fast = create(client, target="fast.example", fast="true")
+    assert fast["fast_mode"] == 1
+
+
 def test_create_campaign_kernel_vm_flags(client, monkeypatch):
     plain = create(client, target="plain.example")
     assert plain["kernel_enabled"] == 0 and plain["kernel_root_access"] == 0

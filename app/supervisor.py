@@ -85,6 +85,20 @@ CONTINUE_PROMPT = (
     "any exploit yourself — hunting is the workers' job, dispatching is yours."
 )
 
+FAST_BEGIN_PROMPT = (
+    "Begin the engagement against {target}. Work with real tools, not "
+    "description: establish what the target is, inspect the codebase or "
+    "reachable surface, record concrete scope and technology facts, then form "
+    "a hypothesis, test it, and keep going."
+)
+
+FAST_CONTINUE_PROMPT = (
+    "Your turn ended, but the engagement is not finished: every software has "
+    "vulnerabilities that have not been found yet, and a clean surface only "
+    "means the coverage was shallow. Review your notes and your previous "
+    "results, form the next hypothesis, and keep testing with real tools now."
+)
+
 GOAL_BEGIN_PROMPT = (
     "Begin the engagement against {target}. Pursue the operator's stated goal "
     "to a concrete, evidence-backed result. Keep working with real tools until "
@@ -1054,6 +1068,10 @@ async def _loop(campaign_id: int) -> None:
                 break
 
             mode = campaign["mode"] or "continuous"
+            # Fast mode is the pre-hunter harness: one agent does the work.
+            # The tool layer enforces it; the loop only picks the prompt.
+            fast = tools.campaign_flag(campaign, "fast_mode")
+            tool_kind = "fast" if fast else "supervisor"
 
             if not vm_ready and vm.enabled(campaign):
                 try:
@@ -1175,15 +1193,23 @@ async def _loop(campaign_id: int) -> None:
 
             history = _history(campaign_id)
             touched = any(message.get("role") == "assistant" for message in history)
-            if touched:
+            if fast:
+                prompt = (
+                    FAST_CONTINUE_PROMPT
+                    if touched
+                    else FAST_BEGIN_PROMPT.format(target=campaign["target"].strip())
+                )
+            elif touched:
                 prompt = GOAL_CONTINUE_PROMPT if mode == "goal" else CONTINUE_PROMPT
             else:
                 begin = GOAL_BEGIN_PROMPT if mode == "goal" else BEGIN_PROMPT
                 prompt = begin.format(target=campaign["target"].strip())
 
-            backlog = _backlog_line(campaign_id)
-            if backlog:
-                prompt += "\n\n" + backlog
+            # The backlog line is delegation state; a solo agent has none.
+            if not fast:
+                backlog = _backlog_line(campaign_id)
+                if backlog:
+                    prompt += "\n\n" + backlog
 
             # Delegation backstop. The policy prompt asks for this, but a model
             # that starts hunting on its own will keep going, so the condition
@@ -1194,7 +1220,8 @@ async def _loop(campaign_id: int) -> None:
             since_start = time.monotonic() - loop_started_at
             idle = _delegation_idle_seconds(campaign_id)
             if (
-                since_start >= DELEGATION_NUDGE_SECONDS
+                not fast
+                and since_start >= DELEGATION_NUDGE_SECONDS
                 and (idle is None or idle >= DELEGATION_NUDGE_SECONDS)
                 and time.monotonic() - last_nudge_at >= DELEGATION_NUDGE_SECONDS
             ):
@@ -1239,7 +1266,7 @@ async def _loop(campaign_id: int) -> None:
                     (),
                     store_user=False,
                     keep=True,
-                    tool_kind="supervisor",
+                    tool_kind=tool_kind,
                     # brief uploads go out whole on the first chain and live on
                     # in early context; later chains get filenames only
                     include_attachments=not touched,
@@ -1326,12 +1353,12 @@ async def _loop(campaign_id: int) -> None:
                 immediate = False
                 try:
                     usable = agent.usable_context(campaign["model"])
-                    schemas = agent.measured_schema_tokens("supervisor", campaign)
+                    schemas = agent.measured_schema_tokens(tool_kind, campaign)
                     system = agent.build_prompt(
                         campaign,
                         attachments,
                         include_attachments=not touched,
-                        tool_kind="supervisor",
+                        tool_kind=tool_kind,
                     )
                     immediate = (
                         est_before

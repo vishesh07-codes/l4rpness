@@ -32,6 +32,7 @@ export type Campaign = {
   kernel_enabled?: number
   kernel_root_access?: number
   kernel_root_flag?: number
+  fast_mode?: number
 }
 
 export type CampaignVm = {

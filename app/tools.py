@@ -560,6 +560,13 @@ def schemas_for(
             schemas += [s for s in SUPERVISOR_SCHEMAS if s["function"]["name"] != "complete_engagement"]
         if campaign_flag(mode, "kernel_enabled"):
             schemas += VM_SUPERVISOR_SCHEMAS
+    elif kind == "fast":
+        # Fast mode is the pre-hunter harness: one agent does all the work, so
+        # it gets the ordinary tools and none of the delegation ones.
+        if resolved == "goal":
+            schemas += [s for s in SUPERVISOR_SCHEMAS if s["function"]["name"] == "complete_engagement"]
+        if campaign_flag(mode, "kernel_enabled"):
+            schemas += VM_SUPERVISOR_SCHEMAS + VM_HUNTER_SCHEMAS
     elif kind == "generator":
         schemas += GENERATOR_SCHEMAS
     elif kind == "hunter":
@@ -606,6 +613,15 @@ def allowed_for(
         tools = CORE_TOOLS | SUPERVISOR_TOOLS
         if resolved != "goal":
             tools -= {"complete_engagement"}
+        if kernel:
+            tools |= VM_SUPERVISOR_TOOLS | VM_HUNTER_TOOLS
+        return tools
+    if kind == "fast":
+        # Same enforcement as the schemas: no delegation, and the VM is the
+        # solo agent's to run as well as to keep alive.
+        tools = CORE_TOOLS | set(mcp.tool_names())
+        if resolved == "goal":
+            tools |= {"complete_engagement"}
         if kernel:
             tools |= VM_SUPERVISOR_TOOLS | VM_HUNTER_TOOLS
         return tools
@@ -1664,6 +1680,17 @@ async def execute(
     browser). ``worker_id`` is passed through for the worker-side handlers.
     """
     work = work or _work_dir(campaign_id)
+
+    # Fast mode has no subagents. The schemas and the allow-list already hide
+    # the spawn tools, but a manual chat turn runs with no allow-list at all,
+    # so refuse here too.
+    if name in ("spawn_hunter", "spawn_hypothesis_generator"):
+        with db.db() as conn:
+            row = conn.execute(
+                "SELECT fast_mode FROM campaigns WHERE id = ?", (campaign_id,)
+            ).fetchone()
+        if row is not None and row["fast_mode"]:
+            return "error: fast mode runs without subagents — do the work yourself", False, 0
 
     # Per-agent permission layer: a run may only call the tools it was given.
     # Schema filtering is presentation only — this check is the enforcement,

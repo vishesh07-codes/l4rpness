@@ -262,6 +262,17 @@ def build_prompt(
                 "This campaign never completes; complete_engagement does not exist here."
             )
 
+    # Fast mode runs without the supervisor policy, which is the only other
+    # place that explains the VM. Say it here so a solo agent knows it exists.
+    if tool_kind == "fast" and tools.campaign_flag(campaign, "kernel_enabled"):
+        sections.append(
+            "Kernel VM: this campaign has its own Linux VM running the host's kernel. "
+            "Run kernel work inside it with vm_exec (vm_status for its state, vm_console "
+            "for the serial console); vm_start/vm_stop/vm_restart/vm_reset manage it. "
+            "vm_status prints the root password when root access is on. Never test a "
+            "kernel exploit in the container instead."
+        )
+
     prompt = SYSTEM.substitute(
         campaign="\n\n".join(sections),
         attachments=attachments_text,

@@ -1288,6 +1288,7 @@ export function Campaign() {
                 )}
 
                 <Badge variant="secondary">
+                  {campaign.fast_mode ? "fast · " : ""}
                   {campaign.mode === "goal" ? "goal" : "24×7"}
                 </Badge>
 
