@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+{% block title %}Quillworks — documentation that keeps up{% endblock %}
+{% block bodyclass %}marketing{% endblock %}
+{% block content %}
+<section class="hero">
+  <div class="hero-copy">
+    <p class="eyebrow">Built for teams who write things down</p>
+    <h1>The handbook your team actually opens.</h1>
+    <p class="lede">Quillworks keeps every runbook, decision and half-finished thought in one
+      place — with history you can read, tags that connect the dots, and import that does not
+      copy your formatting into the bin.</p>
+    <div class="hero-actions">
+      <a class="btn btn-primary" href="{{ url_for('register') }}">Start free</a>
+      <a class="btn btn-quiet" href="{{ url_for('login') }}">Sign in to a workspace</a>
+    </div>
+    <p class="tiny muted">No card. {{ stats.teams }} workspaces already writing here.</p>
+  </div>
+  <div class="hero-art" aria-hidden="true">
+    <div class="paper">
+      <div class="paper-head"><span class="paper-dot"></span><span class="paper-dot"></span><span class="paper-dot"></span></div>
+      <h3>Migration runbook</h3>
+      <p class="meta">Atlas Handbook · edited 4m ago</p>
+      <div class="rule"></div>
+      <p class="line"><span class="num">1</span> Freeze writes on the legacy cluster</p>
+      <p class="line"><span class="num">2</span> Replay the change stream into <code>atlas-v2</code></p>
+      <p class="line"><span class="num">3</span> Verify row counts per shard</p>
+      <p class="line faint"><span class="num">4</span> Flip the read path…</p>
+      <div class="tags"><span>runbook</span><span>infra</span><span>on-call</span></div>
+    </div>
+    <div class="paper back"></div>
+  </div>
+</section>
+
+<section class="logos">
+  <span>Northwind</span><span>Halcyon</span><span>Beacon Labs</span><span>Field &amp; Co</span><span>Kite</span>
+</section>
+
+<section class="features" id="product">
+  <div class="section-head">
+    <h2>Boring where it counts.</h2>
+    <p>Writing tools should get out of the way. The useful parts are the ones you only
+      notice the day something goes wrong.</p>
+  </div>
+  <div class="feature-grid">
+    <article>
+      <h3>Version history that reads like a story</h3>
+      <p>Every save is a named revision with an author and a timestamp. Restore a version in
+        one click — the old text is never thrown away.</p>
+    </article>
+    <article>
+      <h3>Tags that build the map</h3>
+      <p>Tag a note once and Quillworks links it to everything else carrying that tag.
+        The related-notes panel is the institutional memory.</p>
+    </article>
+    <article>
+      <h3>Import without the mess</h3>
+      <p>Paste an export link from your old wiki and we pull the text straight into a draft.
+        Markdown and plain text work best; HTML gets cleaned up.</p>
+    </article>
+    <article>
+      <h3>Workspaces, not folders</h3>
+      <p>Each team gets its own space with its own members and roles. Owners handle billing,
+        editors write, viewers read.</p>
+    </article>
+    <article>
+      <h3>Comments in context</h3>
+      <p>Discuss a paragraph where the paragraph lives. Comment threads stay attached to the
+        note instead of drifting into chat.</p>
+    </article>
+    <article>
+      <h3>Yours to leave</h3>
+      <p>Everything exports as Markdown. No lock-in, no proprietary format, no support ticket
+        required to get your own writing back.</p>
+    </article>
+  </div>
+</section>
+
+<section class="workflow-band" id="workflow">
+  <div class="shell band-inner">
+    <div>
+      <p class="eyebrow">The daily loop</p>
+      <h2>Write. Tag. Find it again.</h2>
+      <ol class="steps">
+        <li><strong>Capture</strong> — a note is a title and a body. Nothing to configure.</li>
+        <li><strong>Connect</strong> — tags link notes across the workspace automatically.</li>
+        <li><strong>Review</strong> — history shows what changed, by whom, and when.</li>
+        <li><strong>Share</strong> — invite the people who need it with the role they need.</li>
+      </ol>
+    </div>
+    <div class="stat-block">
+      <div><b>{{ stats.notes }}</b><span>notes written</span></div>
+      <div><b>{{ stats.teams }}</b><span>active workspaces</span></div>
+      <div><b>4</b><span>roles, zero guesswork</span></div>
+    </div>
+  </div>
+</section>
+
+<section class="pricing" id="pricing">
+  <div class="section-head">
+    <h2>Priced per seat, not per anxiety.</h2>
+    <p>Start on your own. Move to a team workspace when the second person shows up.</p>
+  </div>
+  <div class="price-grid">
+    <article class="price"><h3>Personal</h3><p class="amount">$0</p><p class="muted">One workspace, unlimited notes, full history.</p><a class="btn btn-ghost" href="{{ url_for('register') }}">Create account</a></article>
+    <article class="price featured"><h3>Team</h3><p class="amount">$8 <small>/ seat</small></p><p class="muted">Shared workspaces, roles, comments, import.</p><a class="btn btn-primary" href="{{ url_for('register') }}">Start free trial</a></article>
+    <article class="price"><h3>Scale</h3><p class="amount">Talk to us</p><p class="muted">Audit log, SSO, and a human on the phone.</p><a class="btn btn-ghost" href="#">Contact sales</a></article>
+  </div>
+</section>
+
+<section class="cta">
+  <h2>Your future self will thank you.</h2>
+  <p>Write the runbook now, while it is still fresh.</p>
+  <a class="btn btn-primary" href="{{ url_for('register') }}">Start writing — it's free</a>
+</section>
+{% endblock %}

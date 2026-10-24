@@ -1,0 +1,8 @@
+# runtime state
+*/instance/*.db
+*/uploads/*
+!*/uploads/.gitkeep
+logs/*.log
+__pycache__/
+*.pyc
+.venv/

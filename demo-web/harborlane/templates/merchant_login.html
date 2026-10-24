@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Merchant sign in — Harbor Lane{% endblock %}
+{% block content %}
+<div class="wrap auth-layout">
+  <div class="auth-copy">
+    <p class="kicker">Merchant portal</p>
+    <h1>Run your store from one page.</h1>
+    <p class="muted">Orders, products, reviews and API access for sellers on Harbor Lane.</p>
+  </div>
+  <form method="post" class="auth-form">
+    {% if error %}<div class="alert">{{ error }}</div>{% endif %}
+    <h2>Merchant sign in</h2>
+    <label>Email<input name="email" type="email" required></label>
+    <label>Password<input name="password" type="password" required></label>
+    <button class="btn btn-primary wide" type="submit">Sign in</button>
+    <p class="tiny muted">No store yet? <a href="{{ url_for('merchant_apply') }}">Open one</a>.</p>
+    <div class="demo-box"><strong>Demo merchant</strong><p class="tiny">mira@harborlane.test · mira1234</p></div>
+  </form>
+</div>
+{% endblock %}

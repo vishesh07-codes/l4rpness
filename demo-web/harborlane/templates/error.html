@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}{{ code }} — Harbor Lane{% endblock %}
+{% block content %}
+<div class="wrap error-page">
+  <p class="error-code">{{ code }}</p>
+  <h1>{{ message }}</h1>
+  <p class="muted">The page may have moved, or the link was mistyped.</p>
+  <a class="btn btn-primary" href="{{ url_for('index') }}">Back to the storefront</a>
+</div>
+{% endblock %}

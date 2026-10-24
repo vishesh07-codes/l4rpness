@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Settings — {{ ws.name }}{% endblock %}
+{% block bodyclass %}app-body{% endblock %}
+{% block content %}
+<nav class="crumbs">
+  <a href="{{ url_for('workspace', slug=ws.slug) }}">{{ ws.name }}</a><span>/</span><span>Settings</span>
+</nav>
+<div class="page-head">
+  <div><h1>Workspace settings</h1><p class="muted">Plan, name and danger zone.</p></div>
+  <span class="chip">{{ role }}</span>
+</div>
+
+{% if not is_admin %}
+<div class="empty"><p>Only owners and admins can change workspace settings.</p></div>
+{% else %}
+<div class="split">
+  <section class="panel">
+    <h2 class="section-title">General</h2>
+    <form method="post" class="stack">
+      <label>Workspace name<input name="name" value="{{ ws.name }}" required></label>
+      <label>Workspace URL<input value="/w/{{ ws.slug }}" disabled></label>
+      <button class="btn btn-primary" type="submit">Save changes</button>
+    </form>
+  </section>
+  <aside class="side">
+    <div class="panel">
+      <h3>Plan</h3>
+      <p class="muted tiny">{{ ws.plan|capitalize }} · billed annually</p>
+      <p class="muted tiny">Seats are counted from members, not invitations.</p>
+      <a class="btn btn-ghost btn-sm" href="#">Manage billing</a>
+    </div>
+    <div class="panel danger">
+      <h3>Danger zone</h3>
+      <p class="tiny muted">Deleting a workspace removes every note and revision permanently.</p>
+      <button class="btn btn-danger btn-sm" type="button" onclick="alert('Deletion is disabled in this demo.')">Delete workspace</button>
+    </div>
+  </aside>
+</div>
+{% endif %}
+{% endblock %}

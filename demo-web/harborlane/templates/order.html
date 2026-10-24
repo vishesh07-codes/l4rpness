@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Order {{ o.ref }} — Harbor Lane{% endblock %}
+{% block content %}
+<div class="wrap order-page">
+  <div class="order-head">
+    <div><p class="kicker">Order confirmed</p><h1>Thanks, {{ o.ship_name.split()[0] }}.</h1>
+    <p class="muted">A receipt is on its way to {{ o.email }}.</p></div>
+    <div class="order-ref"><span>Reference</span><strong>{{ o.ref }}</strong></div>
+  </div>
+  <div class="order-grid">
+    <section class="order-items">
+      <h3>Items</h3>
+      {% for i in items %}
+      <div class="order-line"><span>{{ i.name }} × {{ i.qty }}</span><span>{{ i.line_total_cents|money }}</span></div>
+      {% endfor %}
+      <div class="order-line pad"><span class="muted">Subtotal</span><span>{{ o.subtotal_cents|money }}</span></div>
+      {% if o.discount_cents %}<div class="order-line pad"><span class="muted">Discount</span><span>−{{ o.discount_cents|money }}</span></div>{% endif %}
+      {% if o.gift_applied_cents %}<div class="order-line pad"><span class="muted">Gift card</span><span>−{{ o.gift_applied_cents|money }}</span></div>{% endif %}
+      <div class="order-line total"><span>Total</span><span>{{ o.total_cents|money }}</span></div>
+    </section>
+    <aside class="order-side">
+      <h3>Shipping to</h3>
+      <p>{{ o.ship_name }}<br>{{ o.address }}</p>
+      <h3>Status</h3>
+      <p><span class="status">{{ o.status }}</span></p>
+      <p class="tiny muted">Placed {{ o.created_at }}. Keep this reference for returns.</p>
+      <a class="btn btn-line btn-sm" href="{{ url_for('shop') }}">Keep shopping</a>
+    </aside>
+  </div>
+</div>
+{% endblock %}

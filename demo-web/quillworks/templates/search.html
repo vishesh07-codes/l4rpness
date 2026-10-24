@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Search — {{ ws.name }}{% endblock %}
+{% block bodyclass %}app-body{% endblock %}
+{% block content %}
+<nav class="crumbs">
+  <a href="{{ url_for('workspace', slug=ws.slug) }}">{{ ws.name }}</a><span>/</span><span>Search</span>
+</nav>
+<div class="page-head">
+  <div><h1>Search</h1><p class="muted">{% if q %}Results for “{{ q }}”{% else %}Search titles and bodies.{% endif %}</p></div>
+</div>
+<form class="inline-search big" action="{{ url_for('search', slug=ws.slug) }}" method="get">
+  <input name="q" value="{{ q }}" placeholder="Search this workspace" autofocus>
+  <button class="btn btn-primary btn-sm" type="submit">Search</button>
+</form>
+<div class="note-list">
+  {% for n in rows %}
+  <a class="note-row" href="{{ url_for('note_view', slug=ws.slug, note_id=n.id) }}">
+    <div class="note-row-main"><h3>{{ n.title }}</h3><p class="muted">{{ n.body[:160] }}{% if n.body|length > 160 %}…{% endif %}</p></div>
+    <div class="note-row-meta"><span class="muted tiny">{{ n.author }}</span><span class="muted tiny">{{ n.updated_at[:16] }}</span></div>
+  </a>
+  {% else %}
+  <div class="empty"><p>No notes matched that search.</p></div>
+  {% endfor %}
+</div>
+{% endblock %}

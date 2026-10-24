@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}Members — {{ ws.name }}{% endblock %}
+{% block bodyclass %}app-body{% endblock %}
+{% block content %}
+<nav class="crumbs">
+  <a href="{{ url_for('workspace', slug=ws.slug) }}">{{ ws.name }}</a><span>/</span><span>Members</span>
+</nav>
+<div class="page-head">
+  <div><h1>Members</h1><p class="muted">{{ members|length }} people in this workspace.</p></div>
+</div>
+
+<div class="member-table">
+  <div class="member-head"><span>Person</span><span>Email</span><span>Role</span><span>Joined</span></div>
+  {% for m in members %}
+  <div class="member-row">
+    <span class="member-id"><span class="avatar sm" style="background:{{ m.avatar }}">{{ m.name[0] }}</span>
+      <strong>{{ m.name }}</strong>{% if m.id == me.id %}<em class="tiny muted">you</em>{% endif %}</span>
+    <span class="muted">{{ m.email }}</span>
+    <span>
+      {% if role in ('owner','admin') %}
+      <select class="role-select" data-ws="{{ ws.id }}" data-uid="{{ m.id }}">
+        {% for r in ['owner','admin','editor','viewer'] %}
+        <option value="{{ r }}" {% if m.role == r %}selected{% endif %}>{{ r }}</option>
+        {% endfor %}
+      </select>
+      {% else %}
+      <span class="chip">{{ m.role }}</span>
+      {% endif %}
+    </span>
+    <span class="muted tiny">{{ m.joined_at[:10] }}</span>
+  </div>
+  {% endfor %}
+</div>
+
+<div class="invite-box">
+  <h3>Invite someone</h3>
+  <p class="tiny muted">Invitations are sent by the workspace owner. Ask them to add the person above.</p>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+document.querySelectorAll('.role-select').forEach(function (sel) {
+  sel.addEventListener('change', async function () {
+    var res = await fetch('/api/workspaces/' + sel.dataset.ws + '/members/' + sel.dataset.uid, {
+      method: 'PATCH', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({role: sel.value})
+    });
+    if (!res.ok) { alert('Could not update that role.'); location.reload(); }
+  });
+});
+</script>
+{% endblock %}

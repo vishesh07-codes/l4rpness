@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Gift card — Harbor Lane{% endblock %}
+{% block content %}
+<div class="wrap gift-page">
+  <p class="kicker">Gift card</p>
+  <h1>{{ code }}</h1>
+  {% if gc %}
+  <div class="gift-card">
+    <div class="gift-left">
+      <span class="tiny">Balance</span>
+      <strong>{{ gc.balance_cents|money }}</strong>
+      <span class="tiny muted">Originally {{ gc.initial_cents|money }}</span>
+    </div>
+    <div class="gift-right"><span class="logo-glyph big"></span><span>Harbor Lane</span></div>
+  </div>
+  <p class="muted">Use this code at checkout. Remaining balance stays on the card.</p>
+  {% else %}
+  <div class="alert">We could not find a gift card with that code.</div>
+  {% endif %}
+  <a class="btn btn-line" href="{{ url_for('shop') }}">Back to the shop</a>
+</div>
+{% endblock %}

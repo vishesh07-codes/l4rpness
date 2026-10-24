@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Sign in — Harbor Lane{% endblock %}
+{% block content %}
+<div class="wrap auth-layout">
+  <div class="auth-copy">
+    <p class="kicker">Welcome back</p>
+    <h1>The trailhead is this way.</h1>
+    <p class="muted">Sign in to see your orders, store credit and the gear you have reviewed.</p>
+    <div class="auth-quote">
+      <p>“Ordered on Tuesday, pitched on Friday. The tent did not care about the weather.”</p>
+      <span class="tiny muted">— a review we did not pay for</span>
+    </div>
+  </div>
+  <form method="post" class="auth-form">
+    {% if error %}<div class="alert">{{ error }}</div>{% endif %}
+    <input type="hidden" name="next" value="{{ request.args.get('next','') }}">
+    <h2>Sign in</h2>
+    <label>Email<input name="email" type="email" required value="{{ request.form.get('email','') }}"></label>
+    <label>Password<input name="password" type="password" required></label>
+    <button class="btn btn-primary wide" type="submit">Sign in</button>
+    <p class="tiny muted">New to Harbor Lane? <a href="{{ url_for('register') }}">Create an account</a></p>
+    <div class="demo-box"><strong>Demo account</strong><p class="tiny">demo@harborlane.test · demo1234</p></div>
+  </form>
+</div>
+{% endblock %}

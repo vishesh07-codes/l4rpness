@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block bodyclass %}merchant-body{% endblock %}
+{% block content %}
+<div class="wrap merchant-layout">
+  <aside class="merchant-nav">
+    <div class="merchant-id">
+      <span class="merchant-mark">{{ store.name[0] }}</span>
+      <div><strong>{{ store.name }}</strong><span class="tiny muted">Merchant</span></div>
+    </div>
+    <nav>
+      <a class="{% if request.endpoint == 'merchant_dashboard' %}on{% endif %}" href="{{ url_for('merchant_dashboard') }}">Overview</a>
+      <a class="{% if request.endpoint == 'merchant_orders' %}on{% endif %}" href="{{ url_for('merchant_orders') }}">Orders</a>
+      <a class="{% if request.endpoint == 'merchant_products' %}on{% endif %}" href="{{ url_for('merchant_products') }}">Products</a>
+      <a class="{% if request.endpoint == 'merchant_reviews' %}on{% endif %}" href="{{ url_for('merchant_reviews') }}">Reviews</a>
+      <a class="{% if request.endpoint == 'merchant_settings' %}on{% endif %}" href="{{ url_for('merchant_settings') }}">Settings</a>
+    </nav>
+    <a class="tiny muted back-link" href="{{ url_for('shop') }}">← Back to storefront</a>
+  </aside>
+  <div class="merchant-main">
+    {% block merchant %}{% endblock %}
+  </div>
+</div>
+{% endblock %}

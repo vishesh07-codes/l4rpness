@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Settings — Meridian{% endblock %}
+{% block content %}
+<div class="page-head"><div><h1>Settings</h1><p class="muted">Workspace-wide defaults.</p></div></div>
+<div class="two-panel">
+  <section class="card">
+    <h2>Business hours</h2>
+    <div class="stack">
+      <label>Time zone<input value="Europe/London" disabled></label>
+      <label>Weekdays<input value="09:00 – 18:00" disabled></label>
+      <label>Weekend<input value="On-call only" disabled></label>
+      <button class="btn btn-ghost btn-sm" disabled>Save</button>
+    </div>
+  </section>
+  <section class="card">
+    <h2>Integrations</h2>
+    <div class="check-row"><span class="dot ok"></span> Slack — #support</div>
+    <div class="check-row"><span class="dot ok"></span> Stripe — billing lookups</div>
+    <div class="check-row"><span class="dot ok"></span> Statuspage — incident sync</div>
+    <div class="check-row"><span class="dot"></span> Jira — two-way sync (off)</div>
+  </section>
+</div>
+<div class="card">
+  <h2>Custom settings</h2>
+  {% if rows %}
+  <table class="people-table"><thead><tr><th>Key</th><th>Value</th></tr></thead>
+    <tbody>{% for r in rows %}<tr><td class="mono">{{ r.key }}</td><td class="mono">{{ r.value }}</td></tr>{% endfor %}</tbody>
+  </table>
+  {% else %}<p class="muted">No overrides. Defaults apply.</p>{% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Account — Quillworks{% endblock %}
+{% block bodyclass %}app-body{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><h1>Your account</h1><p class="muted">Profile and sessions.</p></div>
+</div>
+<div class="split">
+  <section class="panel">
+    <h2 class="section-title">Profile</h2>
+    <div class="profile-head">
+      <span class="avatar lg" style="background:{{ user.avatar }}">{{ user.name[0] }}</span>
+      <div><strong>{{ user.name }}</strong><p class="muted tiny">{{ user.title or 'No title set' }}</p></div>
+    </div>
+    <form class="stack" onsubmit="event.preventDefault(); alert('Profile editing is read-only in this demo.');">
+      <label>Full name<input value="{{ user.name }}" disabled></label>
+      <label>Email<input value="{{ user.email }}" disabled></label>
+      <label>Title<input value="{{ user.title }}" disabled></label>
+      <button class="btn btn-ghost" type="submit">Save profile</button>
+    </form>
+  </section>
+  <aside class="side">
+    <div class="panel">
+      <h3>Workspaces</h3>
+      {% for w in my_workspaces %}
+      <div class="mini-row"><a href="{{ url_for('workspace', slug=w.slug) }}">{{ w.name }}</a><span class="chip">{{ w.role }}</span></div>
+      {% endfor %}
+    </div>
+    <div class="panel">
+      <h3>Session</h3>
+      <p class="tiny muted">Signed in as {{ user.email }}</p>
+      <a class="btn btn-ghost btn-sm" href="{{ url_for('logout') }}">Sign out</a>
+    </div>
+  </aside>
+</div>
+{% endblock %}

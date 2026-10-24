@@ -1,0 +1,28 @@
+{% extends "merchant_base.html" %}
+{% block title %}Merchant — {{ store.name }}{% endblock %}
+{% block merchant %}
+<div class="m-head"><div><p class="kicker">Overview</p><h1>Good to see you.</h1></div><a class="btn btn-line btn-sm" href="{{ url_for('shop') }}">View storefront</a></div>
+<div class="stat-grid">
+  <div class="stat"><span>Revenue</span><b>{{ stats.revenue|money }}</b></div>
+  <div class="stat"><span>Orders</span><b>{{ stats.orders }}</b></div>
+  <div class="stat"><span>Products</span><b>{{ stats.products }}</b></div>
+  <div class="stat"><span>Reviews</span><b>{{ stats.reviews }}</b></div>
+</div>
+<section class="m-panel">
+  <div class="m-panel-head"><h2>Recent orders</h2><a class="text-link" href="{{ url_for('merchant_orders') }}">All orders →</a></div>
+  <div class="order-table">
+    <div class="order-table-head"><span>Reference</span><span>Customer</span><span>Total</span><span>Status</span></div>
+    {% for o in recent %}
+    <div class="order-table-row"><span>{{ o.ref }}</span><span class="muted">{{ o.email }}</span><span>{{ o.total_cents|money }}</span><span><span class="status">{{ o.status }}</span></span></div>
+    {% endfor %}
+  </div>
+</section>
+<section class="m-panel">
+  <div class="m-panel-head"><h2>Store health</h2></div>
+  <div class="health">
+    <div><span class="dot ok"></span> Payments provider connected</div>
+    <div><span class="dot ok"></span> Webhook endpoint healthy</div>
+    <div><span class="dot ok"></span> Inventory sync active</div>
+  </div>
+</section>
+{% endblock %}

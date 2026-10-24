@@ -1,0 +1,16 @@
+{% extends "merchant_base.html" %}
+{% block title %}Orders — {{ store.name }}{% endblock %}
+{% block merchant %}
+<div class="m-head"><div><p class="kicker">Orders</p><h1>{{ orders|length }} total</h1></div></div>
+<div class="m-panel">
+  <div class="order-table">
+    <div class="order-table-head"><span>Reference</span><span>Customer</span><span>Date</span><span>Total</span><span>Status</span></div>
+    {% for o in orders %}
+    <div class="order-table-row"><span>{{ o.ref }}</span><span class="muted">{{ o.email }}</span><span class="muted tiny">{{ o.created_at[:10] }}</span><span>{{ o.total_cents|money }}</span><span><span class="status">{{ o.status }}</span></span></div>
+    {% else %}
+    <p class="muted">No orders yet.</p>
+    {% endfor %}
+  </div>
+</div>
+<p class="tiny muted">Totals include discounts and gift-card redemptions. Refunds are handled from the order detail in the full product.</p>
+{% endblock %}

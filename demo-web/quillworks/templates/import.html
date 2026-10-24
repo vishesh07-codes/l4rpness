@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Import — {{ ws.name }}{% endblock %}
+{% block bodyclass %}app-body{% endblock %}
+{% block content %}
+<nav class="crumbs">
+  <a href="{{ url_for('workspace', slug=ws.slug) }}">{{ ws.name }}</a><span>/</span><span>Import</span>
+</nav>
+<div class="page-head">
+  <div><h1>Import a document</h1>
+  <p class="muted">Paste a public export link. We fetch the text server-side so you do not have to download it first.</p></div>
+</div>
+
+<div class="split">
+  <section class="panel">
+    <form method="post" class="stack">
+      <label>Document URL
+        <input name="url" type="url" required value="{{ url }}" placeholder="https://example.com/export/runbook.md">
+      </label>
+      <p class="tiny muted">Markdown, plain text and Notion export links work best. Maximum 20 KB.</p>
+      <div class="row">
+        <button class="btn btn-primary" type="submit">Fetch document</button>
+        <a class="btn btn-quiet" href="{{ url_for('workspace', slug=ws.slug) }}">Back</a>
+      </div>
+    </form>
+    {% if error %}<div class="alert">{{ error }}</div>{% endif %}
+  </section>
+  <aside class="side">
+    <div class="panel">
+      <h3>What gets imported</h3>
+      <p class="tiny muted">Only the text. Headings, lists and links are converted to Markdown.
+        Images are kept as links. Nothing is executed.</p>
+    </div>
+  </aside>
+</div>
+
+{% if preview is not none %}
+<section class="panel preview-panel">
+  <div class="row space">
+    <h2 class="section-title">Preview</h2>
+    <span class="chip">fetched {{ preview|length }} chars</span>
+  </div>
+  <textarea class="preview" rows="18" readonly>{{ preview }}</textarea>
+  <form method="post" action="{{ url_for('note_new', slug=ws.slug) }}" class="row end">
+    <input type="hidden" name="title" value="Imported document">
+    <input type="hidden" name="body" value="{{ preview }}">
+    <button class="btn btn-primary" type="submit">Create draft from this</button>
+  </form>
+</section>
+{% endif %}
+{% endblock %}

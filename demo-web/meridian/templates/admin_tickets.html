@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}All tickets — Meridian{% endblock %}
+{% block content %}
+<div class="page-head"><div><h1>All tickets</h1><p class="muted">{{ rows|length }} tickets across every queue.</p></div>
+<a class="btn btn-ghost btn-sm" href="{{ url_for('admin_export') }}">Export CSV</a></div>
+<div class="ticket-table admin">
+  <div class="tt-head"><span>Ticket</span><span>Requester</span><span>Assignee</span><span>Priority</span><span>Status</span><span>Updated</span></div>
+  {% for t in rows %}
+  <a class="tt-row" href="{{ url_for('ticket_view', ticket_id=t.id) }}">
+    <span class="tt-subject"><strong>{{ t.subject }}</strong><span class="tiny muted">{{ t.ref }}</span></span>
+    <span class="tt-req">{{ t.requester }}</span>
+    <span class="muted">{{ t.assignee or '—' }}</span>
+    <span><span class="priority {{ t.priority }}">{{ t.priority }}</span></span>
+    <span><span class="status {{ t.status }}">{{ t.status }}</span></span>
+    <span class="muted tiny">{{ t.updated_at[:16] }}</span>
+  </a>
+  {% endfor %}
+</div>
+{% endblock %}

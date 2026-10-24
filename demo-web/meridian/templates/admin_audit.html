@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}Audit log — Meridian{% endblock %}
+{% block content %}
+<div class="page-head"><div><h1>Audit log</h1>
+<p class="muted">The last {{ count }} events. Kept for 400 days.</p></div>
+<span class="chip">read only</span></div>
+<div class="card table-card">
+  {{ table }}
+</div>
+<p class="tiny muted table-note">Times are UTC. User agent strings are stored verbatim for incident review.</p>
+{% endblock %}

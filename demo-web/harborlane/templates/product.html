@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block title %}{{ p.name }} — Harbor Lane{% endblock %}
+{% block content %}
+<div class="wrap crumbs"><a href="{{ url_for('shop') }}">Shop</a><span>/</span><span>{{ p.category }}</span><span>/</span><span>{{ p.name }}</span></div>
+
+<div class="wrap product-layout">
+  <div class="product-hero art-{{ p.id % 4 }}">
+    {% if p.image %}<img src="{{ url_for('uploaded_file', name=p.image) }}" alt="{{ p.name }}">{% endif %}
+    <span class="art-label big">{{ p.category }}</span>
+  </div>
+  <div class="product-detail">
+    <p class="kicker">{{ p.sku }}</p>
+    <h1>{{ p.name }}</h1>
+    <div class="rating">
+      {% if rating.c %}
+      <span class="stars">{% for i in range(1,6) %}{% if i <= rating.a|round(0,'floor')|int %}★{% else %}☆{% endif %}{% endfor %}</span>
+      <span class="muted">{{ '%.1f'|format(rating.a) }} · {{ rating.c }} reviews</span>
+      {% else %}<span class="muted">No reviews yet</span>{% endif %}
+    </div>
+    <p class="detail-copy">{{ p.description }}</p>
+    <div class="buy-box">
+      <div class="buy-price">{{ p.price_cents|money }} <small>incl. tax</small></div>
+      <form method="post" action="{{ url_for('cart_add') }}" class="buy-form">
+        <input type="hidden" name="sku" value="{{ p.sku }}">
+        <label class="qty">Qty
+          <input type="number" name="qty" value="1" min="1" max="99">
+        </label>
+        <button class="btn btn-primary" type="submit">Add to cart</button>
+      </form>
+      <p class="tiny muted">{{ p.stock }} in stock · ships tomorrow if ordered before 2pm</p>
+    </div>
+    <ul class="specs">
+      <li><strong>Repair policy</strong> Free repairs for the life of the product.</li>
+      <li><strong>Returns</strong> 60 days, no questions, prepaid label.</li>
+      <li><strong>Shipping</strong> Free over $75. Bristol warehouse.</li>
+    </ul>
+  </div>
+</div>
+
+<section class="wrap section" id="reviews">
+  <div class="section-top"><h2>Owner reviews</h2><span class="muted">{{ reviews|length }} total</span></div>
+  <div class="review-layout">
+    <div class="review-list">
+      {% for r in reviews %}
+      <article class="review">
+        <div class="review-head">
+          <span class="stars small">{% for i in range(1,6) %}{% if i <= r.rating %}★{% else %}☆{% endif %}{% endfor %}</span>
+          <strong>{{ r.title }}</strong>
+          <span class="muted tiny">{{ r.name }} · {{ r.created_at[:10] }}</span>
+        </div>
+        <p>{{ r.body }}</p>
+      </article>
+      {% else %}
+      <p class="muted">Be the first to review this piece of gear.</p>
+      {% endfor %}
+    </div>
+    <aside class="review-form-box">
+      <h3>Write a review</h3>
+      {% if me %}
+      <form method="post" action="{{ url_for('add_review', slug=p.slug) }}" class="stack">
+        <label>Rating
+          <select name="rating">
+            <option value="5">5 — would live in it</option>
+            <option value="4">4 — very good</option>
+            <option value="3">3 — fine</option>
+            <option value="2">2 — not for me</option>
+            <option value="1">1 — returned it</option>
+          </select>
+        </label>
+        <label>Title<input name="title" required maxlength="120" placeholder="Sum it up"></label>
+        <label>Review<textarea name="body" rows="5" required placeholder="How did it hold up?"></textarea></label>
+        <button class="btn btn-primary" type="submit">Publish review</button>
+      </form>
+      {% else %}
+      <p class="muted">Sign in to review gear you own.</p>
+      <a class="btn btn-line" href="{{ url_for('login', next=request.path) }}">Sign in</a>
+      {% endif %}
+    </aside>
+  </div>
+</section>
+{% endblock %}

@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Create an account — Quillworks{% endblock %}
+{% block bodyclass %}auth-body{% endblock %}
+{% block mainclass %}auth-shell{% endblock %}
+{% block content %}
+<div class="auth-art alt">
+  <div class="auth-quote">
+    <p class="eyebrow">Why teams switch</p>
+    <blockquote>“We stopped losing decisions the moment the notes got a home.”</blockquote>
+    <p class="muted tiny">Mira O. · Head of Operations, Atlas</p>
+  </div>
+  <div class="auth-art-lines" aria-hidden="true"></div>
+</div>
+<div class="auth-panel">
+  <h1>Create your account</h1>
+  <p class="muted">You get a personal workspace immediately.</p>
+  {% if error %}<div class="alert">{{ error }}</div>{% endif %}
+  <form method="post" class="stack">
+    <label>Full name
+      <input name="name" required value="{{ request.form.get('name','') }}" placeholder="Ada Lovelace">
+    </label>
+    <label>Work email
+      <input name="email" type="email" required value="{{ request.form.get('email','') }}" placeholder="ada@company.com">
+    </label>
+    <label>Password
+      <input name="password" type="password" minlength="8" required placeholder="At least 8 characters">
+    </label>
+    <p class="tiny muted">By creating an account you agree to the terms and the privacy policy.</p>
+    <button class="btn btn-primary wide" type="submit">Create account</button>
+  </form>
+  <p class="tiny muted center">Already have an account? <a href="{{ url_for('login') }}">Sign in</a></p>
+</div>
+{% endblock %}

@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Shop — Harbor Lane{% endblock %}
+{% block content %}
+<div class="wrap page-head">
+  <div>
+    <p class="kicker">Catalogue</p>
+    <h1>{% if cat %}{{ cat|capitalize }}{% else %}All gear{% endif %}</h1>
+  </div>
+  <div class="filter-row">
+    <a class="pill {% if not cat %}on{% endif %}" href="{{ url_for('shop') }}">Everything</a>
+    {% for c in cats %}
+    <a class="pill {% if cat == c.category %}on{% endif %}" href="{{ url_for('shop', category=c.category) }}">{{ c.category }}</a>
+    {% endfor %}
+  </div>
+</div>
+<div class="wrap">
+  <div class="product-grid wide">
+    {% for p in products %}
+    <a class="product-card" href="{{ url_for('product', slug=p.slug) }}">
+      <div class="product-art art-{{ loop.index0 % 4 }}">
+        {% if p.image %}<img src="{{ url_for('uploaded_file', name=p.image) }}" alt="{{ p.name }}">{% endif %}
+        <span class="art-label">{{ p.category }}</span>
+      </div>
+      <div class="product-info">
+        <h3>{{ p.name }}</h3>
+        <p>{{ p.description[:88] }}…</p>
+        <div class="product-foot"><span class="price">{{ p.price_cents|money }}</span><span class="stock">{{ p.stock }} in stock</span></div>
+      </div>
+    </a>
+    {% else %}
+    <p class="muted">Nothing in this category yet.</p>
+    {% endfor %}
+  </div>
+</div>
+{% endblock %}

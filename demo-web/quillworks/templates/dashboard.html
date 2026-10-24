@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}Home — Quillworks{% endblock %}
+{% block bodyclass %}app-body{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <p class="eyebrow">Overview</p>
+    <h1>Your desk</h1>
+    <p class="muted">Recent writing across every workspace you belong to.</p>
+  </div>
+  <a class="btn btn-primary" href="{{ url_for('note_new', slug=my_workspaces[0].slug) if my_workspaces else '#' }}">New note</a>
+</div>
+
+<div class="split">
+  <section>
+    <h2 class="section-title">Recently edited</h2>
+    {% if recent %}
+    <div class="note-list">
+      {% for n in recent %}
+      <a class="note-row" href="{{ url_for('note_view', slug=n.ws_slug, note_id=n.id) }}">
+        <div class="note-row-main">
+          <h3>{{ n.title }}</h3>
+          <p class="muted">{{ n.body[:140] }}{% if n.body|length > 140 %}…{% endif %}</p>
+        </div>
+        <div class="note-row-meta">
+          <span class="chip">{{ n.ws_name }}</span>
+          <span class="muted tiny">{{ n.updated_at[:16] }}</span>
+        </div>
+      </a>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="empty">
+      <p>No notes yet. Pick a workspace and write the first one.</p>
+    </div>
+    {% endif %}
+  </section>
+
+  <aside class="side">
+    <h2 class="section-title">Workspaces</h2>
+    <div class="ws-cards">
+      {% for w in my_workspaces %}
+      <a class="ws-card" href="{{ url_for('workspace', slug=w.slug) }}">
+        <span class="ws-badge" style="background: {{ ['#b4552d','#3f6f6a','#4a5b8c','#8c5a4a'][loop.index0 % 4] }}">{{ w.name[0] }}</span>
+        <div><strong>{{ w.name }}</strong><span class="tiny muted">{{ w.plan }} · {{ w.role }}</span></div>
+      </a>
+      {% endfor %}
+    </div>
+    <div class="tip">
+      <h4>Tip</h4>
+      <p class="tiny">Tag notes with the systems they touch. The related panel does the rest.</p>
+    </div>
+  </aside>
+</div>
+{% endblock %}

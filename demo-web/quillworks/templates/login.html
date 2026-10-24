@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Sign in — Quillworks{% endblock %}
+{% block bodyclass %}auth-body{% endblock %}
+{% block mainclass %}auth-shell{% endblock %}
+{% block content %}
+<div class="auth-art">
+  <div class="auth-quote">
+    <p class="eyebrow">From the archive</p>
+    <blockquote>“The runbook was three lines long. It saved us six hours.”</blockquote>
+    <p class="muted tiny">Priya R. · Support lead, Halcyon</p>
+  </div>
+  <div class="auth-art-lines" aria-hidden="true"></div>
+</div>
+<div class="auth-panel">
+  <h1>Welcome back</h1>
+  <p class="muted">Sign in to your workspaces.</p>
+  {% if error %}<div class="alert">{{ error }}</div>{% endif %}
+  <form method="post" class="stack">
+    <input type="hidden" name="next" value="{{ request.args.get('next', '') }}">
+    <label>Email
+      <input name="email" type="email" autocomplete="username" required
+             value="{{ request.form.get('email','') }}" placeholder="you@company.com">
+    </label>
+    <label>Password
+      <input name="password" type="password" autocomplete="current-password" required placeholder="••••••••">
+    </label>
+    <div class="row space">
+      <label class="check"><input type="checkbox" name="remember" checked> Keep me signed in</label>
+      <a class="tiny" href="#">Forgot password?</a>
+    </div>
+    <button class="btn btn-primary wide" type="submit">Sign in</button>
+  </form>
+  <p class="tiny muted center">New here? <a href="{{ url_for('register') }}">Create an account</a></p>
+  <div class="demo-creds">
+    <p class="tiny"><strong>Demo workspace</strong></p>
+    <p class="tiny">demo@quillworks.test · demo1234</p>
+    <p class="tiny">Editor in the Atlas Handbook and Field Notes workspaces.</p>
+  </div>
+</div>
+{% endblock %}

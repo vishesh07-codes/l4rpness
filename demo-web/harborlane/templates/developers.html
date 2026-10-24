@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}Developers — Harbor Lane{% endblock %}
+{% block content %}
+<div class="wrap dev-page">
+  <p class="kicker">Developers</p>
+  <h1>Build on Harbor Lane.</h1>
+  <p class="lede">A small HTTP API for stores and partners. JSON in, JSON out, no SDK required.</p>
+
+  <div class="dev-grid">
+    <section>
+      <h2>Authentication</h2>
+      <p>Every store gets a key. Send it as a query parameter or an <code>X-API-Key</code> header.</p>
+      <pre class="code">curl "http://127.0.0.1:8802/api/v1/customers/export?key=YOUR_KEY"</pre>
+
+      <h2>Endpoints</h2>
+      <div class="endpoint"><span class="method get">GET</span><code>/api/v1/products</code><p>Public catalogue. No key required.</p></div>
+      <div class="endpoint"><span class="method get">GET</span><code>/api/v1/customers/export</code><p>CSV of every order with customer name, email and address. Store-scoped.</p></div>
+      <div class="endpoint"><span class="method post">POST</span><code>/api/v1/returns</code><p>Request a return for an order item. Refunds land in store credit.</p></div>
+      <div class="endpoint"><span class="method post">POST</span><code>/api/v1/webhooks/test</code><p>Deliver a sample event to a URL and return the response.</p></div>
+      <div class="endpoint"><span class="method post">POST</span><code>/api/v1/cart/items</code><p>Add a SKU to the current cart. Body: <code>{"sku": "...", "qty": 1}</code>.</p></div>
+
+      <h2>Playground</h2>
+      <p class="tiny muted">The demo store key is preloaded so you can try the public catalogue from this page.</p>
+      <div class="console">
+        <div class="console-bar"><span>GET /api/v1/products</span><button class="btn btn-line btn-sm" id="run">Send</button></div>
+        <pre id="console-out">Press Send to call the API.</pre>
+      </div>
+    </section>
+
+    <aside class="dev-side">
+      <div class="mini-panel">
+        <h3>Rate limits</h3>
+        <p class="tiny muted">120 requests per minute per key. Contact us for a higher ceiling.</p>
+      </div>
+      <div class="mini-panel">
+        <h3>Webhooks</h3>
+        <p class="tiny muted"><code>order.created</code>, <code>order.paid</code>, <code>return.approved</code>.
+          Retries for 24 hours with exponential backoff.</p>
+      </div>
+      <div class="mini-panel">
+        <h3>Status</h3>
+        <p class="tiny muted"><span class="dot ok"></span> All systems operational</p>
+      </div>
+    </aside>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='js/storefront.js') }}"></script>{% endblock %}

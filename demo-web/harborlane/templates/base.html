@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Harbor Lane{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%230f2433'/><path d='M7 21c4 2 7 2 9 0s5-2 9 0' stroke='%23e8a33d' stroke-width='2.4' fill='none' stroke-linecap='round'/><path d='M16 7v9' stroke='%23f4efe6' stroke-width='2' stroke-linecap='round'/></svg>">
+</head>
+<body class="{% block bodyclass %}{% endblock %}">
+<div class="ticker">Free shipping over $75 · 60-day returns · Gear that gets repaired, not replaced</div>
+<header class="site-head">
+  <div class="wrap head-inner">
+    <a class="logo" href="{{ url_for('index') }}">
+      <span class="logo-glyph" aria-hidden="true"></span>
+      <span>Harbor&nbsp;Lane</span>
+    </a>
+    <nav class="primary">
+      <a href="{{ url_for('shop') }}">Shop</a>
+      <a href="{{ url_for('shop', category='shelter') }}">Shelter</a>
+      <a href="{{ url_for('shop', category='packs') }}">Packs</a>
+      <a href="{{ url_for('developers') }}">Developers</a>
+    </nav>
+    <div class="head-tools">
+      <form class="search" action="{{ url_for('shop') }}" method="get">
+        <input name="q" placeholder="Search gear" aria-label="Search">
+      </form>
+      {% if me %}
+        <a class="tool" href="{{ url_for('account') }}">{{ me.name.split()[0] }}</a>
+      {% else %}
+        <a class="tool" href="{{ url_for('login') }}">Sign in</a>
+      {% endif %}
+      <a class="tool cart-tool" href="{{ url_for('cart') }}">Cart <span class="cart-badge">{{ cart_count }}</span></a>
+    </div>
+  </div>
+</header>
+
+<main>
+  {% block content %}{% endblock %}
+</main>
+
+<footer class="site-foot">
+  <div class="wrap foot-grid">
+    <div>
+      <a class="logo light" href="{{ url_for('index') }}"><span class="logo-glyph"></span><span>Harbor&nbsp;Lane</span></a>
+      <p class="foot-note">Small-batch outdoor gear, tested on the coast and repaired in the workshop.</p>
+    </div>
+    <div><h4>Shop</h4><a href="{{ url_for('shop') }}">All gear</a><a href="{{ url_for('shop', category='shelter') }}">Shelter</a><a href="{{ url_for('shop', category='sleep') }}">Sleep</a></div>
+    <div><h4>Help</h4><a href="{{ url_for('gift', code='HL-GIFT-50') }}">Gift cards</a><a href="#">Shipping</a><a href="#">Returns</a></div>
+    <div><h4>Merchants</h4><a href="{{ url_for('merchant_login') }}">Merchant portal</a><a href="{{ url_for('merchant_apply') }}">Open a store</a><a href="{{ url_for('developers') }}">API docs</a></div>
+  </div>
+  <div class="wrap foot-bottom">© {{ year }} Harbor Lane Supply Co. · A demo storefront.</div>
+</footer>
+{% block scripts %}{% endblock %}
+</body>
+</html>

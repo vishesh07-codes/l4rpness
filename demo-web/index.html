@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Demo Web Lab</title>
+<style>
+  :root { --bg:#0e1116; --panel:#151a21; --line:#242c37; --ink:#e7ecf3; --muted:#8d98a8; --a:#7c9cff; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:radial-gradient(circle at 20% -10%, #1b2433, transparent 55%), var(--bg); color:var(--ink);
+    font-family: ui-sans-serif, -apple-system, "Segoe UI", Inter, Roboto, Arial, sans-serif; min-height:100vh; }
+  .wrap { max-width: 1000px; margin: 0 auto; padding: 70px 26px; }
+  .eyebrow { font-size:.72rem; letter-spacing:.16em; text-transform:uppercase; color:var(--a); font-weight:700; }
+  h1 { font-size: 2.9rem; letter-spacing:-.03em; margin:.25em 0 .2em; line-height:1.05; }
+  .lede { color:var(--muted); max-width:56ch; font-size:1.03rem; }
+  .grid { display:grid; grid-template-columns:repeat(3,1fr); gap:18px; margin-top:44px; }
+  .card { display:block; background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:24px; color:var(--ink);
+    text-decoration:none; transition: transform .12s ease, border-color .12s ease; }
+  .card:hover { transform:translateY(-3px); border-color:#3a4a66; }
+  .glyph { width:42px; height:42px; border-radius:10px; display:flex; align-items:center; justify-content:center;
+    font-weight:800; font-size:1.1rem; margin-bottom:18px; }
+  .c1 .glyph { background:#3a2418; color:#e8a33d; }
+  .c2 .glyph { background:#14282f; color:#67c3b5; }
+  .c3 .glyph { background:#211f3a; color:#93a5f0; }
+  .card h2 { margin:0 0 .3em; font-size:1.18rem; letter-spacing:-.01em; }
+  .card p { margin:0; color:var(--muted); font-size:.88rem; line-height:1.55; }
+  .meta { display:flex; gap:12px; margin-top:18px; font-size:.72rem; color:#6d7888; font-family:ui-monospace, Menlo, monospace; }
+  .meta span { border:1px solid var(--line); border-radius:5px; padding:2px 7px; }
+  footer { margin-top:56px; border-top:1px solid var(--line); padding-top:20px; color:#6d7888; font-size:.8rem; }
+  code { font-family:ui-monospace, Menlo, monospace; background:#1b222c; border:1px solid var(--line); border-radius:4px; padding:1px 5px; font-size:.85em; }
+  @media (max-width: 820px) { .grid { grid-template-columns:1fr; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <p class="eyebrow">Local lab</p>
+  <h1>Demo Web</h1>
+  <p class="lede">Three self-contained applications for black-box practice. Each one has its own database,
+    accounts and admin surface. Start the stack with <code>python3 serve.py</code> from the
+    <code>demo-web/</code> folder and browse the ports below.</p>
+
+  <div class="grid">
+    <a class="card c1" href="http://127.0.0.1:8801/">
+      <div class="glyph">Q</div>
+      <h2>Quillworks</h2>
+      <p>A collaborative documentation tool: workspaces, notes, revisions, tags, comments and imports.</p>
+      <div class="meta"><span>:8801</span><span>Flask</span><span>SQLite</span></div>
+    </a>
+    <a class="card c2" href="http://127.0.0.1:8802/">
+      <div class="glyph">H</div>
+      <h2>Harbor Lane</h2>
+      <p>A small outdoor-gear storefront with a merchant portal, gift cards, returns and a public API.</p>
+      <div class="meta"><span>:8802</span><span>Flask</span><span>SQLite</span></div>
+    </a>
+    <a class="card c3" href="http://127.0.0.1:8803/">
+      <div class="glyph">M</div>
+      <h2>Meridian Support</h2>
+      <p>A customer support desk with ticket threads, internal notes, SLAs, attachments and an audit log.</p>
+      <div class="meta"><span>:8803</span><span>Flask</span><span>SQLite</span></div>
+    </a>
+  </div>
+
+  <footer>
+    Test accounts and setup notes live in <code>README.md</code>. Findings and worked exploits are in
+    <code>SOLUTIONS.md</code> — do not read that file before you have had a go.
+  </footer>
+</div>
+</body>
+</html>

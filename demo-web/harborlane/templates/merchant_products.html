@@ -1,0 +1,38 @@
+{% extends "merchant_base.html" %}
+{% block title %}Products — {{ store.name }}{% endblock %}
+{% block merchant %}
+<div class="m-head"><div><p class="kicker">Catalogue</p><h1>{{ products|length }} products</h1></div></div>
+<div class="m-panel">
+  <div class="product-admin">
+    <div class="product-admin-head"><span></span><span>Product</span><span>SKU</span><span>Price</span><span>Stock</span></div>
+    {% for p in products %}
+    <div class="product-admin-row">
+      <span class="tiny-thumb art-{{ loop.index0 % 4 }}">{% if p.image %}<img src="{{ url_for('uploaded_file', name=p.image) }}" alt="">{% endif %}</span>
+      <span><strong>{{ p.name }}</strong><br><span class="tiny muted">{{ p.category }}</span></span>
+      <span class="muted mono">{{ p.sku }}</span>
+      <span>{{ p.price_cents|money }}</span>
+      <span>{{ p.stock }}</span>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+
+<section class="m-panel">
+  <div class="m-panel-head"><h2>Add a product</h2></div>
+  <form method="post" enctype="multipart/form-data" class="product-form">
+    <div class="two-col">
+      <label>Name<input name="name" required placeholder="Coastal Wind Anorak"></label>
+      <label>SKU<input name="sku" placeholder="HL-ANU-1"></label>
+    </div>
+    <div class="two-col">
+      <label>Price (USD)<input name="price" type="number" step="0.01" min="0" placeholder="129.00"></label>
+      <label>Stock<input name="stock" type="number" min="0" value="10"></label>
+    </div>
+    <label>Category<input name="category" placeholder="apparel"></label>
+    <label>Description<textarea name="description" rows="3" placeholder="What it is, why it exists."></textarea></label>
+    <label>Product image<input name="image" type="file" accept="image/*,.svg"></label>
+    <p class="tiny muted">PNG, JPG, WEBP, GIF or SVG. Square images look best. Max 4 MB.</p>
+    <button class="btn btn-primary" type="submit">Add product</button>
+  </form>
+</section>
+{% endblock %}

@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Sign in — Meridian Support{% endblock %}
+{% block auth %}
+<div class="login-wrap">
+  <div class="login-side">
+    <a class="brand light" href="{{ url_for('login') }}"><span class="brand-mark"></span><span>Meridian</span></a>
+    <div class="login-pitch">
+      <h1>Support that remembers the last conversation.</h1>
+      <p class="muted">Every ticket, internal note and customer reply in one thread. Built for teams that
+        hate repeating themselves.</p>
+      <div class="login-metrics">
+        <div><b>2m</b><span>first response</span></div>
+        <div><b>96%</b><span>satisfaction</span></div>
+        <div><b>14k</b><span>tickets solved</span></div>
+      </div>
+    </div>
+    <p class="tiny muted">© {{ year }} Meridian Software Ltd.</p>
+  </div>
+  <div class="login-panel">
+    <form method="post" class="login-form">
+      {% if error %}<div class="alert">{{ error }}</div>{% endif %}
+      <h2>Sign in</h2>
+      <p class="muted tiny">Use your work email to reach the support desk.</p>
+      <label>Email<input name="email" type="email" required value="{{ request.form.get('email','') }}" placeholder="you@company.com"></label>
+      <label>Password<input name="password" type="password" required placeholder="••••••••"></label>
+      <div class="row">
+        <label class="check"><input type="checkbox" name="remember" checked> Remember this device</label>
+        <a class="tiny" href="#">Forgot password?</a>
+      </div>
+      <button class="btn btn-primary wide" type="submit">Sign in</button>
+      <div class="demo-creds">
+        <p class="tiny"><strong>Demo customer</strong> — demo@meridian.test / demo1234</p>
+        <p class="tiny"><strong>Demo agent</strong> — dev@meridian.test / dev1234</p>
+        <p class="tiny"><strong>Demo admin</strong> — sofia@meridian.test / sofia1234</p>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

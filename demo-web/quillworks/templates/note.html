@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% block title %}{{ note.title }} — {{ ws.name }}{% endblock %}
+{% block bodyclass %}app-body{% endblock %}
+{% block content %}
+<nav class="crumbs">
+  <a href="{{ url_for('workspace', slug=ws.slug) }}">{{ ws.name }}</a>
+  <span>/</span>
+  <span>{{ note.title }}</span>
+</nav>
+
+<div class="doc-layout">
+  <article class="doc">
+    <header class="doc-head">
+      <h1>{{ note.title }}</h1>
+      <div class="doc-meta">
+        <span class="avatar sm" style="background:{{ author.avatar }}">{{ author.name[0] }}</span>
+        <span>{{ author.name }}</span>
+        <span class="dot">·</span>
+        <span class="muted">{{ note.updated_at[:16] }}</span>
+        <span class="dot">·</span>
+        <span class="muted">rev {{ versions|length }}</span>
+        <span class="grow"></span>
+        <a class="btn btn-ghost btn-sm" href="{{ url_for('note_edit', slug=ws.slug, note_id=note.id) }}">Edit</a>
+      </div>
+      {% if tags %}
+      <div class="tags">
+        {% for t in tags %}<a class="tag" href="{{ url_for('search', slug=ws.slug, q=t) }}">{{ t }}</a>{% endfor %}
+      </div>
+      {% endif %}
+    </header>
+
+    <div class="prose">
+      {{ body_html|safe }}
+    </div>
+  </article>
+
+  <aside class="doc-side">
+    <section class="side-box">
+      <h3>Related notes</h3>
+      {% if related %}
+        {% for r in related %}
+        <a class="related" href="{{ url_for('note_view', slug=r.ws_slug, note_id=r.id) }}">{{ r.title }}</a>
+        {% endfor %}
+      {% else %}
+        <p class="muted tiny">Add a tag to see what else in the workspace covers this ground.</p>
+      {% endif %}
+    </section>
+
+    <section class="side-box">
+      <h3>History <span class="count">{{ versions|length }}</span></h3>
+      <div id="versions">
+        {% for v in versions %}
+        <div class="version">
+          <div>
+            <strong class="tiny">{{ v.title }}</strong>
+            <span class="tiny muted">{{ v.name }} · {{ v.created_at[:16] }}</span>
+          </div>
+          {% if loop.index0 != 0 %}
+          <button class="linkish" data-note="{{ note.id }}" data-version="{{ v.id }}">restore</button>
+          {% endif %}
+        </div>
+        {% endfor %}
+      </div>
+    </section>
+  </aside>
+</div>
+
+<section class="comments" id="comments">
+  <h2>Comments <span class="count">{{ comments|length }}</span></h2>
+  <div class="comment-list">
+    {% for c in comments %}
+    <div class="comment">
+      <span class="avatar sm" style="background:{{ c.avatar }}">{{ c.name[0] }}</span>
+      <div>
+        <div class="comment-head"><strong>{{ c.name }}</strong><span class="muted tiny">{{ c.created_at[:16] }}</span></div>
+        <div class="comment-body">{{ c.body|md|safe }}</div>
+      </div>
+    </div>
+    {% else %}
+    <p class="muted">No comments yet.</p>
+    {% endfor %}
+  </div>
+  <form method="post" action="{{ url_for('add_comment', slug=ws.slug, note_id=note.id) }}" class="comment-form">
+    <textarea name="body" rows="3" placeholder="Add context, ask a question, or leave a note for the next person." required></textarea>
+    <div class="row space">
+      <span class="tiny muted">Markdown: **bold**, `code`, [link](url), ![image](url)</span>
+      <button class="btn btn-primary btn-sm" type="submit">Comment</button>
+    </div>
+  </form>
+</section>
+
+<div class="toast" id="toast" hidden></div>
+{% endblock %}
+{% block scripts %}
+<script>
+document.querySelectorAll('[data-version]').forEach(function (btn) {
+  btn.addEventListener('click', async function () {
+    var res = await fetch('/api/notes/' + btn.dataset.note + '/versions/' + btn.dataset.version + '/restore', {method: 'POST'});
+    var toast = document.getElementById('toast');
+    toast.hidden = false;
+    if (res.ok) { toast.textContent = 'Version restored.'; setTimeout(function(){ location.reload(); }, 500); }
+    else { toast.textContent = 'Could not restore that version.'; }
+  });
+});
+</script>
+{% endblock %}

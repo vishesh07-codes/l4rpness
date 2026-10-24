@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Checkout — Harbor Lane{% endblock %}
+{% block content %}
+<div class="wrap page-head"><div><p class="kicker">Checkout</p><h1>Almost outside.</h1></div></div>
+<div class="wrap checkout-layout">
+  <form method="post" class="checkout-form">
+    {% if error %}<div class="alert">{{ error }}</div>{% endif %}
+    <h3>Contact</h3>
+    <label>Email<input name="email" type="email" required value="{{ user.email }}"></label>
+    <h3>Shipping</h3>
+    <label>Full name<input name="ship_name" required value="{{ user.name }}"></label>
+    <label>Address<textarea name="address" rows="3" required placeholder="Street, city, postcode, country"></textarea></label>
+    <h3>Payment</h3>
+    <div class="pay-note">
+      <strong>Test mode</strong>
+      <p class="tiny">No card is charged. Orders over your store credit are marked paid for this demo.</p>
+    </div>
+    <div class="two-col">
+      <label>Gift card<input name="gift_card" placeholder="HL-GIFT-XXXX"></label>
+      <label>Discount code<input name="coupon" placeholder="WELCOME10" value="{{ coupon_hint }}"></label>
+    </div>
+    <button class="btn btn-primary wide" type="submit">Place order</button>
+    <p class="tiny muted">By placing the order you agree to the terms of sale and the repair policy.</p>
+  </form>
+  <aside class="summary">
+    <h3>Order</h3>
+    {% for r in rows %}
+    <div class="sum-row"><span>{{ r.product.name }} × {{ r.qty }}</span><span>{{ r.line|money }}</span></div>
+    {% endfor %}
+    <div class="sum-row total"><span>Due today</span><span>{{ subtotal|money }}</span></div>
+    <p class="tiny muted">Store credit available: {{ user.credit_cents|money }}</p>
+  </aside>
+</div>
+{% endblock %}

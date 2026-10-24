@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+{% block title %}{{ t.subject }} — Meridian Support{% endblock %}
+{% block content %}
+<nav class="crumbs"><a href="{{ url_for('tickets') }}">Tickets</a><span>/</span><span class="mono">{{ t.ref }}</span></nav>
+
+<div class="ticket-layout">
+  <div class="ticket-main">
+    <header class="ticket-head">
+      <div>
+        <h1>{{ t.subject }}</h1>
+        <p class="muted tiny">Opened by {{ requester.name }} · {{ t.created_at }} · {{ t.channel }}</p>
+      </div>
+      <div class="row">
+        <span class="priority {{ t.priority }}">{{ t.priority }}</span>
+        <span class="status {{ t.status }}">{{ t.status }}</span>
+      </div>
+    </header>
+
+    <div class="thread">
+      {% for m in messages %}
+      <article class="msg {% if m.is_internal %}internal{% endif %}">
+        <div class="msg-side">
+          <span class="avatar" style="background:{{ m.avatar }}">{{ m.name[0] }}</span>
+        </div>
+        <div class="msg-body">
+          <div class="msg-head">
+            <strong>{{ m.name }}</strong>
+            <span class="role-tag {{ m.role }}">{{ m.role }}</span>
+            {% if m.is_internal %}<span class="internal-tag">internal note</span>{% endif %}
+            <span class="muted tiny">{{ m.created_at[:16] }}</span>
+          </div>
+          <div class="msg-text">{{ m.body }}</div>
+        </div>
+      </article>
+      {% endfor %}
+    </div>
+
+    {% if attachments %}
+    <section class="attachments">
+      <h3>Attachments</h3>
+      {% for a in attachments %}
+      <a class="attachment" href="{{ url_for('attachment_download', attachment_id=a.id, filename=a.filename) }}">
+        <span class="paperclip">⌑</span> {{ a.filename }}
+        <span class="muted tiny">{{ a.created_at[:10] }}</span>
+      </a>
+      {% endfor %}
+    </section>
+    {% endif %}
+
+    <section class="reply-box">
+      <h3>Reply to {{ requester.name.split()[0] }}</h3>
+      <form method="post" action="{{ url_for('ticket_reply', ticket_id=t.id) }}" class="stack">
+        <textarea name="body" rows="4" required placeholder="Write a reply. The customer will receive it by email."></textarea>
+        <div class="row space">
+          <span class="tiny muted">Replies reopen the ticket.</span>
+          <button class="btn btn-primary" type="submit">Send reply</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="upload-box">
+      <form method="post" action="{{ url_for('ticket_upload', ticket_id=t.id) }}" enctype="multipart/form-data" class="row">
+        <input type="file" name="file" required>
+        <button class="btn btn-ghost btn-sm" type="submit">Attach file</button>
+        <span class="tiny muted">Max 8 MB. Screenshots help.</span>
+      </form>
+    </section>
+
+    {% if staff %}
+    <section class="note-box">
+      <h3>Internal note <span class="tiny muted">visible to the team only</span></h3>
+      <form method="post" action="{{ url_for('ticket_note', ticket_id=t.id) }}" class="stack">
+        <textarea name="body" rows="3" required placeholder="Context for the next agent. Never shown to the customer."></textarea>
+        <div class="row end"><button class="btn btn-dark btn-sm" type="submit">Add note</button></div>
+      </form>
+    </section>
+    {% endif %}
+  </div>
+
+  <aside class="ticket-side">
+    <section class="prop">
+      <h4>Requester</h4>
+      <div class="person"><span class="avatar sm" style="background:{{ requester.avatar }}">{{ requester.name[0] }}</span>
+        <div><strong>{{ requester.name }}</strong><span class="tiny muted">{{ requester.email }}</span></div></div>
+    </section>
+    <section class="prop">
+      <h4>Properties</h4>
+      <dl class="props">
+        <dt>Status</dt><dd><span class="status {{ t.status }}">{{ t.status }}</span></dd>
+        <dt>Priority</dt><dd><span class="priority {{ t.priority }}">{{ t.priority }}</span></dd>
+        <dt>Assignee</dt><dd>{{ assignee.name if assignee else 'Unassigned' }}</dd>
+        <dt>SLA due</dt><dd class="mono tiny">{{ t.sla_due[:16] if t.sla_due else '—' }}</dd>
+        <dt>Channel</dt><dd>{{ t.channel }}</dd>
+        <dt>Reference</dt><dd class="mono">{{ t.ref }}</dd>
+      </dl>
+    </section>
+    <section class="prop">
+      <h4>Tags</h4>
+      <div class="tag-row"><span class="tag">billing</span><span class="tag">priority-customer</span></div>
+    </section>
+    <section class="prop">
+      <h4>API</h4>
+      <p class="tiny muted">This ticket is available as JSON.</p>
+      <code class="tiny">GET /api/tickets/{{ t.id }}</code>
+    </section>
+  </aside>
+</div>
+{% endblock %}

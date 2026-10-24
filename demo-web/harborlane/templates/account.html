@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Your account — Harbor Lane{% endblock %}
+{% block content %}
+<div class="wrap page-head">
+  <div><p class="kicker">Account</p><h1>{{ me.name }}</h1><p class="muted">{{ me.email }}</p></div>
+  <div class="credit-card"><span>Store credit</span><strong>{{ me.credit_cents|money }}</strong></div>
+</div>
+<div class="wrap account-grid">
+  <section>
+    <div class="section-top"><h2>Orders</h2></div>
+    <div class="order-table">
+      <div class="order-table-head"><span>Reference</span><span>Date</span><span>Total</span><span>Status</span></div>
+      {% for o in orders %}
+      <a class="order-table-row" href="{{ url_for('order', ref=o.ref) }}">
+        <span>{{ o.ref }}</span><span class="muted">{{ o.created_at[:10] }}</span>
+        <span>{{ o.total_cents|money }}</span><span><span class="status">{{ o.status }}</span></span>
+      </a>
+      {% else %}
+      <div class="empty"><p>No orders yet.</p><a class="btn btn-line btn-sm" href="{{ url_for('shop') }}">Shop the range</a></div>
+      {% endfor %}
+    </div>
+  </section>
+  <aside class="side-boxes">
+    <div class="mini-panel">
+      <h3>Gift cards</h3>
+      <p class="tiny muted">Check a balance before checkout.</p>
+      <form action="{{ url_for('index') }}" onsubmit="event.preventDefault(); window.location='/gift/'+encodeURIComponent(this.code.value);">
+        <input name="code" placeholder="HL-GIFT-50">
+        <button class="btn btn-line btn-sm" type="submit">Check</button>
+      </form>
+    </div>
+    <div class="mini-panel">
+      <h3>Merchant?</h3>
+      <p class="tiny muted">Sell your own gear alongside the Harbor Lane catalogue.</p>
+      <a class="btn btn-line btn-sm" href="{{ url_for('merchant_apply') }}">Open a store</a>
+    </div>
+  </aside>
+</div>
+{% endblock %}

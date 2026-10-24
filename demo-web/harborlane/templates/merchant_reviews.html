@@ -1,0 +1,18 @@
+{% extends "merchant_base.html" %}
+{% block title %}Reviews — {{ store.name }}{% endblock %}
+{% block merchant %}
+<div class="m-head"><div><p class="kicker">Reviews</p><h1>What owners say</h1></div></div>
+{% for r in reviews %}
+<article class="m-review">
+  <div class="m-review-head">
+    <span class="stars small">{% for i in range(1,6) %}{% if i <= r.rating %}★{% else %}☆{% endif %}{% endfor %}</span>
+    <strong>{{ r.title }}</strong>
+    <span class="muted tiny">{{ r.name }} on {{ r.pname }} · {{ r.created_at[:10] }}</span>
+  </div>
+  <div class="m-review-body">{{ r.body|safe }}</div>
+  <div class="m-review-foot"><button class="btn btn-line btn-sm" type="button">Reply privately</button><button class="linkish muted" type="button">Report</button></div>
+</article>
+{% else %}
+<p class="muted">No reviews yet.</p>
+{% endfor %}
+{% endblock %}

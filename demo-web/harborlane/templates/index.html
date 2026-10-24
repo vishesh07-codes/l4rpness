@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block title %}Harbor Lane — gear for the early trailhead{% endblock %}
+{% block content %}
+<section class="hero">
+  <div class="wrap hero-grid">
+    <div class="hero-copy">
+      <p class="kicker">Field-tested since 2014</p>
+      <h1>Leave earlier.<br>Carry less.</h1>
+      <p class="sub">A tight catalogue of shelter, sleep and kitchen gear for people who would rather
+        be on the trail than comparing specifications. Everything here has been rained on.</p>
+      <div class="cta-row">
+        <a class="btn btn-primary" href="{{ url_for('shop') }}">Shop the range</a>
+        <a class="btn btn-line" href="{{ url_for('product', slug='ridgeline-2p-tent') }}">Meet the Ridgeline</a>
+      </div>
+      <div class="hero-badges">
+        <span>Repairable by design</span><span>Carbon-neutral shipping</span><span>60-day returns</span>
+      </div>
+    </div>
+    <div class="hero-visual" aria-hidden="true">
+      <div class="topo"></div>
+      <div class="hero-card">
+        <span class="tag">Best seller</span>
+        <h3>Ridgeline 2P</h3>
+        <p>2.1 kg · 3-season · pitches in 4 minutes</p>
+        <div class="hero-price">$329</div>
+      </div>
+      <div class="hero-stamp">HL<br><small>est. 2014</small></div>
+    </div>
+  </div>
+</section>
+
+<section class="marquee"><div class="wrap marquee-inner">
+  <span>Free repair kit with every shelter</span><span>·</span><span>Ships from Bristol in 24h</span><span>·</span><span>Reviewed by real owners</span>
+</div></section>
+
+<section class="wrap section">
+  <div class="section-top">
+    <h2>Start here</h2>
+    <a class="text-link" href="{{ url_for('shop') }}">All gear →</a>
+  </div>
+  <div class="product-grid">
+    {% for p in products %}
+    <a class="product-card" href="{{ url_for('product', slug=p.slug) }}">
+      <div class="product-art art-{{ loop.index0 % 4 }}">
+        {% if p.image %}<img src="{{ url_for('uploaded_file', name=p.image) }}" alt="{{ p.name }}">{% endif %}
+        <span class="art-label">{{ p.category }}</span>
+      </div>
+      <div class="product-info">
+        <h3>{{ p.name }}</h3>
+        <p>{{ p.description[:84] }}…</p>
+        <div class="product-foot"><span class="price">{{ p.price_cents|money }}</span><span class="stock">in stock</span></div>
+      </div>
+    </a>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="band">
+  <div class="wrap band-grid">
+    <div>
+      <p class="kicker light">The workshop</p>
+      <h2>We would rather fix it than sell you another one.</h2>
+      <p>Every seam is taped by hand in the Bristol workshop. When something wears out, send it back
+        and we repair it — or tell you honestly that it is done.</p>
+      <a class="btn btn-light" href="{{ url_for('shop') }}">Browse the catalogue</a>
+    </div>
+    <div class="band-stats">
+      <div><b>11</b><span>years repairing</span></div>
+      <div><b>3,400</b><span>repairs completed</span></div>
+      <div><b>0</b><span>landfill returns</span></div>
+    </div>
+  </div>
+</section>
+
+<section class="wrap section">
+  <div class="section-top"><h2>From the workshop journal</h2><a class="text-link" href="#">All entries →</a></div>
+  <div class="journal-grid">
+    <article><span class="journal-tag">Repair</span><h3>Re-taping a fly sheet in the kitchen</h3><p>What you need, what you do not, and why the iron is the most important tool.</p></article>
+    <article><span class="journal-tag">Tested</span><h3>Forty nights in the Ridgeline</h3><p>Condensation, wind, and the one stake we keep replacing.</p></article>
+    <article><span class="journal-tag">Design</span><h3>Why the Drift has no laptop sleeve</h3><p>A pack should carry the walk, not the office.</p></article>
+  </div>
+</section>
+{% endblock %}

@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}{{ ws.name }} — Quillworks{% endblock %}
+{% block bodyclass %}app-body{% endblock %}
+{% block content %}
+<div class="ws-head">
+  <div>
+    <p class="eyebrow">Workspace · {{ ws.plan }}</p>
+    <h1>{{ ws.name }}</h1>
+  </div>
+  <div class="row">
+    <a class="btn btn-ghost" href="{{ url_for('members', slug=ws.slug) }}">Members</a>
+    {% if role in ('owner','admin') %}<a class="btn btn-ghost" href="{{ url_for('settings', slug=ws.slug) }}">Settings</a>{% endif %}
+    <a class="btn btn-primary" href="{{ url_for('note_new', slug=ws.slug) }}">New note</a>
+  </div>
+</div>
+
+<div class="toolbar">
+  <form class="inline-search" action="{{ url_for('search', slug=ws.slug) }}" method="get">
+    <input name="q" placeholder="Filter notes in this workspace" value="{{ request.args.get('q','') }}">
+  </form>
+  <div class="tag-filter">
+    {% for t in tags %}<a class="tag" href="{{ url_for('search', slug=ws.slug, q=t.name) }}">{{ t.name }} <em>{{ t.c }}</em></a>{% endfor %}
+  </div>
+</div>
+
+<div class="note-table">
+  <div class="note-table-head"><span>Note</span><span>Author</span><span>Updated</span></div>
+  {% for n in notes %}
+  <a class="note-table-row" href="{{ url_for('note_view', slug=ws.slug, note_id=n.id) }}">
+    <span class="nt-title">{{ n.title }}</span>
+    <span class="muted">{{ n.author }}</span>
+    <span class="muted tiny">{{ n.updated_at[:16] }}</span>
+  </a>
+  {% else %}
+  <div class="empty"><p>This workspace is empty. Start with a note.</p></div>
+  {% endfor %}
+</div>
+{% endblock %}

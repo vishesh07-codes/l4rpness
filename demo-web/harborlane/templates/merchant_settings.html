@@ -1,0 +1,57 @@
+{% extends "merchant_base.html" %}
+{% block title %}Settings — {{ store.name }}{% endblock %}
+{% block merchant %}
+<div class="m-head"><div><p class="kicker">Settings</p><h1>Store configuration</h1></div></div>
+
+<section class="m-panel">
+  <h2>Store profile</h2>
+  <div class="two-col">
+    <label>Store name<input value="{{ store.name }}" disabled></label>
+    <label>Storefront URL<input value="/store/{{ store.slug }}" disabled></label>
+  </div>
+  <label>Tagline<input value="{{ store.tagline }}" disabled></label>
+</section>
+
+<section class="m-panel">
+  <h2>API access</h2>
+  <p class="muted tiny">Use this key to read orders, export customers, and fire test webhooks.
+    Treat it like a password; it is scoped to your store.</p>
+  <div class="key-row">
+    <code id="apikey">{{ store.api_key }}</code>
+    <button class="btn btn-line btn-sm" type="button" onclick="navigator.clipboard.writeText(document.getElementById('apikey').textContent); this.textContent='Copied'">Copy</button>
+  </div>
+  <p class="tiny muted">Base URL: <code>http://127.0.0.1:8802/api/v1</code> · <a href="{{ url_for('developers') }}">API documentation</a></p>
+</section>
+
+<section class="m-panel">
+  <h2>Webhook tester</h2>
+  <p class="muted tiny">Send a sample <code>order.created</code> event to an endpoint and inspect the response.</p>
+  <form id="wh-form" class="two-col">
+    <label>Endpoint URL<input id="wh-url" placeholder="https://example.com/hooks/harbor"></label>
+    <div class="align-end"><button class="btn btn-primary" type="submit">Send test</button></div>
+  </form>
+  <pre class="wh-out" id="wh-out" hidden></pre>
+  {% if attempts %}
+  <div class="attempts">
+    <h3>Recent attempts</h3>
+    {% for a in attempts %}
+    <div class="attempt"><span class="mono tiny">{{ a.url }}</span><span class="status {{ 'ok' if a.status and a.status < 400 else 'bad' }}">{{ a.status }}</span><span class="tiny muted">{{ a.created_at[:16] }}</span></div>
+    {% endfor %}
+  </div>
+  {% endif %}
+</section>
+{% endblock %}
+{% block scripts %}
+<script>
+document.getElementById('wh-form').addEventListener('submit', async function (e) {
+  e.preventDefault();
+  var out = document.getElementById('wh-out');
+  out.hidden = false; out.textContent = 'Sending…';
+  var res = await fetch('/api/v1/webhooks/test?key=' + encodeURIComponent('{{ store.api_key }}'), {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({url: document.getElementById('wh-url').value})
+  });
+  out.textContent = JSON.stringify(await res.json(), null, 2);
+});
+</script>
+{% endblock %}

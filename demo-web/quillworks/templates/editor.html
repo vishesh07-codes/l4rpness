@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Edit — ' + note.title if note else 'New note' }} — {{ ws.name }}{% endblock %}
+{% block bodyclass %}app-body{% endblock %}
+{% block content %}
+<nav class="crumbs">
+  <a href="{{ url_for('workspace', slug=ws.slug) }}">{{ ws.name }}</a>
+  <span>/</span>
+  <span>{{ 'Editing' if note else 'New note' }}</span>
+</nav>
+
+<form method="post" class="editor">
+  <div class="editor-main">
+    <input class="title-input" name="title" placeholder="Untitled note" required
+           value="{{ note.title if note else '' }}">
+    <textarea class="body-input" name="body" rows="20" placeholder="Start writing. Markdown works: ## heading, **bold**, `code`, [link](url), ![image](url)">{{ note.body if note else '' }}</textarea>
+    <div class="row space">
+      <a class="btn btn-quiet" href="{{ url_for('note_view', slug=ws.slug, note_id=note.id) if note else url_for('workspace', slug=ws.slug) }}">Cancel</a>
+      <button class="btn btn-primary" type="submit">{{ 'Save changes' if note else 'Publish note' }}</button>
+    </div>
+  </div>
+  <aside class="editor-side">
+    <section class="side-box">
+      <h3>Tags</h3>
+      <textarea name="tags" rows="3" placeholder="runbook&#10;infra&#10;on-call">{{ tag_str }}</textarea>
+      <p class="tiny muted">One tag per line. Up to eight. Tags connect notes to each other.</p>
+    </section>
+    <section class="side-box">
+      <h3>Import</h3>
+      <p class="tiny muted">Bring a document in from elsewhere and keep writing here.</p>
+      <a class="btn btn-ghost btn-sm" href="{{ url_for('import_doc', slug=ws.slug) }}">Import from URL</a>
+    </section>
+    {% if note %}
+    <section class="side-box">
+      <h3>History</h3>
+      <p class="tiny muted">Saving creates a new revision. Older ones stay restorable.</p>
+    </section>
+    {% endif %}
+  </aside>
+</form>
+{% endblock %}

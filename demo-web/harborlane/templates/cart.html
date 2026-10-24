@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Cart — Harbor Lane{% endblock %}
+{% block content %}
+<div class="wrap page-head"><div><p class="kicker">Your cart</p><h1>{{ rows|length }} item{{ '' if rows|length == 1 else 's' }}</h1></div></div>
+<div class="wrap cart-layout">
+  <div class="cart-lines">
+    {% for r in rows %}
+    <div class="cart-line">
+      <div class="cart-thumb art-{{ loop.index0 % 4 }}"></div>
+      <div class="cart-info">
+        <a class="cart-name" href="{{ url_for('product', slug=r.product.slug) }}">{{ r.product.name }}</a>
+        <span class="muted tiny">{{ r.product.sku }} · {{ r.product.price_cents|money }} each</span>
+        <div class="cart-controls">
+          <form method="post" action="{{ url_for('cart_update') }}" class="qty-form">
+            <input type="hidden" name="sku" value="{{ r.product.sku }}">
+            <input type="number" name="qty" value="{{ r.qty }}" min="1" max="99">
+            <button class="linkish" type="submit">Update</button>
+          </form>
+          <form method="post" action="{{ url_for('cart_update') }}">
+            <input type="hidden" name="sku" value="{{ r.product.sku }}">
+            <input type="hidden" name="action" value="remove">
+            <button class="linkish muted" type="submit">Remove</button>
+          </form>
+        </div>
+      </div>
+      <div class="cart-line-total">{{ r.line|money }}</div>
+    </div>
+    {% else %}
+    <div class="empty"><p>Your cart is empty.</p><a class="btn btn-line" href="{{ url_for('shop') }}">Find something</a></div>
+    {% endfor %}
+  </div>
+  <aside class="summary">
+    <h3>Summary</h3>
+    <div class="sum-row"><span>Subtotal</span><span>{{ subtotal|money }}</span></div>
+    <div class="sum-row"><span>Shipping</span><span>{{ 'Free' if subtotal >= 7500 else '$6.00' }}</span></div>
+    <div class="sum-row total"><span>Total</span><span>{{ subtotal|money }}</span></div>
+    {% if rows %}<a class="btn btn-primary wide" href="{{ url_for('checkout') }}">Checkout</a>{% endif %}
+    <p class="tiny muted">Gift cards and discount codes are applied at checkout.</p>
+  </aside>
+</div>
+{% endblock %}

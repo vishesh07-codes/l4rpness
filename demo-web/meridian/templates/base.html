@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Meridian Support{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23222b3d'/><path d='M8 22V10l8 7 8-7v12' stroke='%2393a5f0' stroke-width='2.2' fill='none' stroke-linejoin='round' stroke-linecap='round'/></svg>">
+</head>
+<body class="{% block bodyclass %}{% endblock %}">
+{% if me and request.endpoint not in ('login',) %}
+<div class="app">
+  <aside class="rail">
+    <a class="brand" href="{{ url_for('tickets') }}">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span>Meridian</span>
+    </a>
+    <nav>
+      <a class="{% if request.endpoint in ('tickets','ticket_view') %}on{% endif %}" href="{{ url_for('tickets') }}">
+        <span class="ico">◧</span> Tickets
+      </a>
+      <a class="{% if request.endpoint == 'ticket_new' %}on{% endif %}" href="{{ url_for('ticket_new') }}">
+        <span class="ico">＋</span> New ticket
+      </a>
+      {% if me.role in ('agent','admin') %}
+      <div class="rail-label">Workspace</div>
+      <a class="{% if request.endpoint == 'tickets' and request.args.get('filter') %}on{% endif %}" href="{{ url_for('tickets', filter='assignee:me status:open') }}">
+        <span class="ico">◎</span> Assigned to me
+      </a>
+      <a href="{{ url_for('tickets', filter='priority:urgent') }}"><span class="ico">▲</span> Urgent</a>
+      {% endif %}
+      {% if me.role == 'admin' %}
+      <div class="rail-label">Admin</div>
+      <a class="{% if request.endpoint == 'admin_dashboard' %}on{% endif %}" href="{{ url_for('admin_dashboard') }}"><span class="ico">▦</span> Overview</a>
+      <a class="{% if request.endpoint == 'admin_tickets' %}on{% endif %}" href="{{ url_for('admin_tickets') }}"><span class="ico">☰</span> All tickets</a>
+      <a class="{% if request.endpoint == 'admin_audit' %}on{% endif %}" href="{{ url_for('admin_audit') }}"><span class="ico">⌾</span> Audit log</a>
+      <a class="{% if request.endpoint == 'admin_users' %}on{% endif %}" href="{{ url_for('admin_users') }}"><span class="ico">◉</span> People</a>
+      <a class="{% if request.endpoint == 'admin_settings' %}on{% endif %}" href="{{ url_for('admin_settings') }}"><span class="ico">⚙</span> Settings</a>
+      {% endif %}
+    </nav>
+    <div class="rail-foot">
+      <a class="who" href="{{ url_for('logout') }}">
+        <span class="avatar" style="background:{{ me.avatar }}">{{ me.name[0] }}</span>
+        <span><strong>{{ me.name }}</strong><em>{{ me.role }}</em></span>
+      </a>
+    </div>
+  </aside>
+  <div class="app-main">
+    <header class="app-bar">
+      <form class="global-search" action="{{ url_for('tickets') }}" method="get">
+        <input name="filter" placeholder="Filter: status:open priority:high assignee:me" value="{{ request.args.get('filter','') }}">
+        <kbd>↵</kbd>
+      </form>
+      <div class="app-bar-right">
+        {% if me.role in ('agent','admin') %}<span class="shift">Desk hours · 09:00–18:00</span>{% endif %}
+        <a class="btn btn-primary btn-sm" href="{{ url_for('ticket_new') }}">New ticket</a>
+      </div>
+    </header>
+    <main class="content">
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+</div>
+{% else %}
+<main class="auth-main">{% block auth %}{% endblock %}</main>
+{% endif %}
+</body>
+</html>

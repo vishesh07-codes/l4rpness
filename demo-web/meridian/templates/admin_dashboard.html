@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Admin overview — Meridian{% endblock %}
+{% block content %}
+<div class="page-head"><div><h1>Overview</h1><p class="muted">Queue health and staffing at a glance.</p></div>
+<a class="btn btn-ghost btn-sm" href="{{ url_for('admin_export') }}">Export tickets (CSV)</a></div>
+
+<div class="stat-grid">
+  <div class="stat"><span>Open</span><b>{{ stats.open }}</b><em>tickets in queue</em></div>
+  <div class="stat"><span>Urgent</span><b class="red">{{ stats.urgent }}</b><em>need attention</em></div>
+  <div class="stat"><span>Customers</span><b>{{ stats.customers }}</b><em>active accounts</em></div>
+  <div class="stat"><span>Team</span><b>{{ stats.agents }}</b><em>agents and admins</em></div>
+</div>
+
+<div class="two-panel">
+  <section class="card">
+    <h2>By priority</h2>
+    {% for p in by_priority %}
+    <div class="bar-row"><span class="tiny">{{ p.priority }}</span>
+      <div class="bar"><i style="width: {{ (p.c * 12) if p.c * 12 < 100 else 100 }}%"></i></div>
+      <span class="tiny muted">{{ p.c }}</span></div>
+    {% endfor %}
+  </section>
+  <section class="card">
+    <h2>Automation</h2>
+    <div class="check-row"><span class="dot ok"></span> SLA reminders enabled</div>
+    <div class="check-row"><span class="dot ok"></span> Customer satisfaction survey</div>
+    <div class="check-row"><span class="dot ok"></span> Daily digest to #support</div>
+    <div class="check-row"><span class="dot"></span> Round-robin assignment (off)</div>
+  </section>
+</div>
+{% endblock %}
